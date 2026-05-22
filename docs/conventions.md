@@ -90,6 +90,7 @@ Per methodology §24:
 - Executor prompts: kept in chat; if filed locally, `executor_prompt_T-NNNN.md`
 - Execution reports: stay in chat, NOT in repo (methodology §24.2)
 - Test drivers under `tests/`, named for behavior not chronology (methodology §24.3): `tests/ping-roundtrip.test.ts`, not `tests/phase4-test1.test.ts`
+- Test files live in `packages/<pkg>/tests/`, one `.test.ts` file per source file (e.g. `src/config.ts` ↔ `tests/config.test.ts`). Source files without runtime (pure interfaces or type-only modules) don't need a companion test. Test files are NOT included in the package's `tsconfig.json`; vitest handles them via vite-node.
 
 ## Cross-cutting concerns
 

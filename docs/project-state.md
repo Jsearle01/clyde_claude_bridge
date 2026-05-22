@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0002.5 CONFIRMED; T-0003 in progress (first source file — Config schema).
+**Status:** T-0003 CONFIRMED; T-0004 in progress (remaining shared contracts).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0003 — Config schema in @claude-bridge/shared (build plan §2.1, §2.2 first slice)
+- T-0004 — Remaining shared contracts: audit, ipc, tools (build plan §2.2)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0004 — packages/shared remaining contracts: audit, ipc, tools (build plan §2.2)
 - T-0005 — packages/daemon logger (build plan §3.2)
 - T-0006 — packages/daemon config layer + token generation; closes Q002 (build plan §3.3)
 - T-0007 — packages/daemon audit log; closes Q003 (build plan §3.4)
@@ -42,6 +41,14 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0003** — Config schema in @claude-bridge/shared (CONFIRMED 2026-05-21; commit 74b853e)
+  - All 13 gate-blocking AC passed; first impl: commit on the project
+  - `packages/shared/src/config.ts` (ConfigSchema with .strict() at trust boundary) + index.ts re-export
+  - Five-case test suite (happy, defaults, missing required, malformed token, strict rejection)
+  - ESLint flat config wired (eslint v10, typescript-eslint v8, recommendedTypeChecked); Q001 CLOSED
+  - Vitest defaults sufficient for NodeNext-ESM (no config file needed)
+  - Reactive fixes: zod resolved to v4 (works as-spec); `allowDefaultProject` glob narrowed from `**` to `*.test.ts` per typescript-eslint v8 perf rule
+  - Patterns `node-esm-imports.md` and `zod-schema-validation.md` promoted draft → active
 - **T-0002.5** — Line-ending hygiene + T-0002 closure docs (CONFIRMED 2026-05-21; commit 6490ed7)
   - `.gitattributes` created at repo root; `* text=auto eol=lf` + per-extension explicits + binary list
   - `git add --renormalize .` confirmed index never held CRLF (bug was prospective)
@@ -84,8 +91,8 @@ Project-specific patterns in `patterns/project/`. Status as of last conversation
 
 | Pattern | Status | First-use target | Notes |
 |---------|--------|------------------|-------|
-| `node-esm-imports.md` | draft | T-0002 (first per-package config); T-0003 (first source file) | Rules informed T-0001's package.json + tsconfig.base.json choices but were not exercised at import sites |
-| `zod-schema-validation.md` | draft | T-0003 (Config schema) | |
+| `node-esm-imports.md` | **active** | promoted at T-0003 | Rules exercised in shared's src + tests; build/lint/test clean |
+| `zod-schema-validation.md` | **active** | promoted at T-0003 | ConfigSchema implements .strict() at trust boundary; test suite verifies pattern application |
 | `constant-time-compare.md` | draft | T-0006 (config layer token comparison) or T-0010 (MCP auth) | |
 
 Promotion from `draft` to `active` happens at orchestrator review after first real use.
@@ -127,8 +134,11 @@ Findings from completed tasks that inform future task design:
 - Watched item, not yet codified: if a doc drifts between prompt-authoring and prompt-execution, an Edit-tool delta would fail on a missing `old_string`. Mitigation that worked: executor reads target files before applying edits. Promote to methodology rule only if this bites us empirically.
 - "Prospective vs retroactive" framing for warnings: distinguish between "the bad thing already happened" (retroactive) vs "the bad thing will happen later if you don't intervene" (prospective). T-0002.5's LF/CRLF warnings were prospective. Useful diagnostic frame when interpreting any verification warning.
 
+**From T-0003:**
+- Anticipatory risk flagging continues to work. Prompt named zod v3/v4 drift, vitest config sufficiency, and typescript-eslint version sensitivity as likely-failure-modes; two hit (zod v4, typescript-eslint glob), both fixed in one iteration each because the failure modes were named in advance.
+- Orchestrator-side error caught by executor: the prompt's eslint.config.js template used the same `**` glob in both `files:` (ESLint matcher, allowed) and `allowDefaultProject:` (parserOption, disallowed). Lesson: when a prompt template includes config shared across tool boundaries, check that the same patterns are valid in every place they appear. Adding to orchestrator checklist for config-heavy prompts.
+- Verbatim source-file reporting at the right cadence. Verbatim config.ts, index.ts, config.test.ts, eslint.config.js; summarized everything else. Verification was complete from the report alone; no round-tripping needed.
+
 ## Handoff notes
 
-T-0002.5 committed (6490ed7). T-0003 (Config schema, first source file) in progress. After T-0003 closes, T-0004 picks up the remaining shared contracts (audit, ipc, tools) using the now-active patterns and the now-configured ESLint/vitest setup.
-
-Working pattern: orchestrator produces one prompt file per dispatch; doc edits live as delta instructions inside the prompt; executor edits in place.
+T-0003 committed (74b853e). T-0004 (remaining shared contracts: audit, ipc, tools) in progress. After T-0004 closes, `packages/shared` is feature-complete for P0; T-0005 starts daemon code consuming these contracts.
