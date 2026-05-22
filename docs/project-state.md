@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0010 CONFIRMED; T-0011 in progress (tool dispatch + ping; closes AC-3 and AC-5; completes build plan §4.1).
+**Status:** T-0011 CONFIRMED; T-0012 in progress (tunnel manager; closes AC-6).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0011 — Tool dispatch + ping tool + pattern-doc creation (build plan §4.1 third slice; completes §4.1)
+- T-0012 — Tunnel manager (cloudflared subprocess + respawn policy; closes AC-6)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0012 — packages/daemon tunnel manager (build plan §5)
 - T-0013 — packages/daemon main wiring + pidfile + state (build plan §6)
 - T-0014 — packages/cli ipc-client (build plan §7.2)
 - T-0015 — packages/cli start command (build plan §7.2)
@@ -34,6 +33,20 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0011** — Tool dispatch + ping + AC-3, AC-5 closure (CONFIRMED 2026-05-22; commit bcdbc22)
+  - All 25 gate-blocking AC passed
+  - AC-3 IMPLEMENTED (integration test 17.b via SDK Client → tools/call)
+  - AC-5 IMPLEMENTED (integration test 17.c verifies audit entry on successful ping)
+  - Build plan §4.1 complete (server + auth + dispatch + ping = full MCP surface)
+  - `packages/daemon/src/state.ts`: minimal DaemonState (extends at T-0013)
+  - `packages/daemon/src/mcp/dispatch.ts`: ToolRegistry centralizes audit-write across success/handler-exception/validation-failure paths; three typed errors
+  - `packages/daemon/src/mcp/tools/ping.ts`: first registered tool; imports PingInputSchema from shared (zod-schema-validation rule 1)
+  - AsyncLocalStorage for per-request context plumbing (request_id, remote_addr) through SDK handlers
+  - Two design adjustments: zod-to-json-schema → z.toJSONSchema() (zod v4 built-in); stateless → stateful transport (SDK v1.29 bug)
+  - patterns/project/safe-narrow-of-unknown-shape.md created at draft (no second instance yet)
+  - 6 reactive lint fixes (all justified at config or fix-site)
+  - 24 new daemon tests; 122 cases total across 15 test files (passing) + 4 platform-skipped
+  - 8th consecutive zero-fire on async-discipline rules for production code
 - **T-0010** — MCP auth middleware (CONFIRMED 2026-05-22; commit 4a13e06)
   - AC-4 IMPLEMENTED (verification at T-0019 end-to-end)
   - `packages/daemon/src/mcp/auth.ts`: pure authenticate() with discriminated AuthResult (missing_header / malformed_header / invalid_token)
@@ -155,6 +168,7 @@ Project-specific patterns in `patterns/project/`. Status as of last conversation
 | `test-token-fixtures.md` | **active** | created at T-0005 (codifies pattern observed in T-0003 + T-0004) | Inert conforming strings for token-format test fixtures; CC-4 corollary |
 | `async-sink-queue.md` | **active** | created at T-0007 (codifies pattern observed in T-0005 logger + T-0007 audit log) | Queue + lazy handle + idempotent close shape; departure point is whether per-call API returns void or flushed Promise |
 | `safe-narrow-of-unknown-shape.md` | draft (created at T-0011) | Codifies T-0010's Array.isArray pitfall; awaiting second instance for promotion to active | Promote to active if T-0011 produces a second instance (it did not; stays draft) |
+| `line-buffered-stream-reader.md` | **active** | created at T-0012 (codifies pattern observed in T-0008 IPC server + T-0012 cloudflared stdout/stderr) | Accumulate-and-split shape; two confirmed instances at promotion |
 
 Promotion from `draft` to `active` happens at orchestrator review after first real use.
 
@@ -247,8 +261,18 @@ Findings from completed tasks that inform future task design:
 - Array.isArray pitfall codified: under `recommendedTypeChecked`, `Array.isArray`'s built-in predicate `arg is any[]` collapses narrowing to any. Workaround pattern (unknown + typeof + re-narrow) is recorded in `safe-narrow-of-unknown-shape.md` at status draft.
 - Audit-on-rejection-only is the right scope decision. T-0010's 15.j cleanly verifies that successful requests produce no `<auth>` entry; T-0011 layers per-tool audit on top. Two audit layers compose naturally without schema stress on AuditEntry.
 
+**From T-0011:**
+- AC-3 AND AC-5 close at the implementation layer; build plan §4.1 complete. MCP server slice is feature-complete for P0.
+- Pre-add-dep verification discipline: verify capabilities aren't already in installed deps before adding. Codified in conventions.md at T-0012.
+- SDK behavior verified via SDK's own integration tests can still surprise in client interop (stateless transport's bug at v1.29). Documentation-first reduces risk but doesn't eliminate it.
+- `recommendedTypeChecked` continues earning across both value streams: 8 consecutive zero-fires on production async-discipline; 6 reactive fires on type/style rules catching real concerns.
+- request_id format inconsistency between auth (`req_<8hex>`) and dispatch (UUID). Track for future cleanup pass; not actioning now.
+- "Sync handlers satisfying Promise-returning interfaces use Promise.resolve, not async" — three instances in T-0011 (pingTool, echoTool, explodeTool); codified in conventions.md at T-0012.
+
 ## Handoff notes
 
-T-0010 committed (4a13e06). T-0011 (tool dispatch + ping; closes AC-3 and AC-5; completes build plan §4.1) in progress. After T-0011 closes, T-0012 begins tunnel manager (cloudflared subprocess + respawn policy; closes AC-6). T-0011 also creates `safe-narrow-of-unknown-shape.md` at status draft.
+T-0011 committed (bcdbc22). T-0012 (tunnel manager; closes AC-6) in progress. After T-0012 closes, T-0013 begins daemon main wiring + pidfile + DaemonState wiring — first task where `node packages/daemon/dist/main.js` produces a runnable daemon.
 
-Four scope decisions carried from planning notes: (a) minimal DaemonState (T-0013 extends); (b) full ToolRegistry per build plan, not inline shortcut; (c) centralized audit-write in ToolRegistry.invoke; (d) documentation-first verification of SDK tool-handler API.
+Four scope decisions carried from planning notes: direct spawn (no npm wrapper); cloudflared-strict URL regex (ngrok deferred); sliding-window restart policy; start() resolves on first URL with 15s timeout.
+
+Two convention additions carried from T-0011 verdict: pre-add-dep verification; sync-handler Promise.resolve pattern.

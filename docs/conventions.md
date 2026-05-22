@@ -208,3 +208,25 @@ For any moderate advisory, the executor's REASONING (and the orchestrator's veri
 | ID | Chain | Severity | Reachability | Accepted | Revisit trigger |
 |----|-------|----------|--------------|----------|-----------------|
 | GHSA-67mh-4wv8-2f99 | esbuild → vite → vite-node → vitest | Moderate | Dev-only (vite dev-server CORS issue; production daemon never invokes vite, vite-node, or the affected esbuild dev-server code paths) | 2026-05-21 (T-0001) | Vite ships fixed esbuild AND `npm update` clears chain; OR P0→P1 gate transition (whichever first) |
+
+### Pre-add-dep verification
+
+Before adding any runtime or dev dependency, verify the capability isn't
+already available in an existing dependency at the installed version.
+Example: T-0011 planned to add `zod-to-json-schema` for JSON-Schema
+conversion; zod v4 (already installed since T-0003) ships
+`z.toJSONSchema()` as a built-in, making the dep redundant. Five-minute
+check before installation; saves supply-chain surface and rework.
+
+### Sync handlers satisfying Promise-returning interfaces
+
+Don't write `async function` for a handler whose body has no `await`.
+`recommendedTypeChecked`'s `require-await` rule fires on no-op-async
+patterns; the workaround is to write a non-async function returning
+`Promise.resolve(...)` (or `Promise.reject(...)` for failure cases).
+
+The function signature still satisfies a `Promise<T>` return contract;
+the rule only fires on the `async` keyword being decorative.
+
+Examples in T-0011: pingTool's handler, echoTool/explodeTool test
+fixtures, all returned resolved/rejected Promises explicitly.
