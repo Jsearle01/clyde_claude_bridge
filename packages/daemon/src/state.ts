@@ -1,23 +1,30 @@
 // Daemon-wide state shared with tool handlers via ToolContext.
 //
-// Deliberately minimal for T-0011 — only what ping needs plus the tunnel
-// placeholder. T-0013 (main wiring) will extend with the Config, the
-// TunnelManager handle, and anything else `01-p0-bus.md` requires.
+// Extended at T-0013 to carry the loaded Config (needed by main.ts shutdown
+// and by future tool handlers that read config values). The version field
+// is read from this package's own package.json so it stays in sync with
+// what npm shows.
+
+import { createRequire } from "node:module";
+import type { Config } from "@claude-bridge/shared";
+
+const localRequire = createRequire(import.meta.url);
+const pkg = localRequire("../package.json") as { version: string };
 
 export interface DaemonState {
   version: string;
   startedAt: number;
-  // Tunnel state — populated by T-0012's TunnelManager. For T-0011, the
-  // tunnel doesn't exist yet, so the initial state honestly reports "down".
   tunnelStatus: "up" | "degraded" | "down";
   tunnelUrl: string | null;
+  config: Config;
 }
 
-export function makeInitialState(version: string): DaemonState {
+export function makeInitialState(config: Config): DaemonState {
   return {
-    version,
+    version: pkg.version,
     startedAt: Date.now(),
     tunnelStatus: "down",
     tunnelUrl: null,
+    config,
   };
 }

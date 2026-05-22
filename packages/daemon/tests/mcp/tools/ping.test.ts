@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PingOutput } from "@claude-bridge/shared";
+import type { Config, PingOutput } from "@claude-bridge/shared";
 import { ToolRegistry, ToolInputError, type ToolContext } from "../../../src/mcp/dispatch.js";
 import { pingTool } from "../../../src/mcp/tools/ping.js";
 import { AuditLog } from "../../../src/audit/log.js";
@@ -30,6 +30,19 @@ function makeCtx(opts: {
   };
 }
 
+const stubConfig: Config = {
+  version: 1,
+  daemon: {
+    bind_host: "127.0.0.1",
+    bind_port: 7423,
+    ipc_socket: "/tmp/test.sock",
+  },
+  auth: { token: "cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+  tunnel: { provider: "cloudflared", binary: "cloudflared", args_extra: [] },
+  audit: { path: "/tmp/audit.jsonl", retention_days: 30 },
+  log: { path: "/tmp/daemon.log", level: "info" },
+};
+
 function makeState(opts: {
   version?: string;
   startedAt?: number;
@@ -40,6 +53,7 @@ function makeState(opts: {
     startedAt: opts.startedAt ?? Date.now(),
     tunnelStatus: opts.tunnelStatus ?? "down",
     tunnelUrl: null,
+    config: stubConfig,
   };
 }
 

@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0011 CONFIRMED; T-0012 in progress (tunnel manager; closes AC-6).
+**Status:** T-0012 CONFIRMED; T-0013 in progress (daemon main wiring + pidfile). **Calibration phase closes at T-0013** — steady-state operating mode begins after this task.
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0012 — Tunnel manager (cloudflared subprocess + respawn policy; closes AC-6)
+- T-0013 — Daemon main wiring + pidfile + DaemonState extension (build plan §6)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0013 — packages/daemon main wiring + pidfile + state (build plan §6)
 - T-0014 — packages/cli ipc-client (build plan §7.2)
 - T-0015 — packages/cli start command (build plan §7.2)
 - T-0016 — packages/cli stop/status/tail-log (build plan §7.2)
@@ -33,6 +32,17 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0012** — Tunnel manager + AC-6 closure (CONFIRMED 2026-05-22; commit 55644db)
+  - All 23 gate-blocking AC passed
+  - AC-6 IMPLEMENTED (exit-handler triggers respawn; emits url_change; manager.test.ts 15.c/15.d verify; T-0019 end-to-end with real cloudflared)
+  - `packages/daemon/src/tunnel/cloudflared.ts`: typed-EventEmitter subprocess wrapper; SIGTERM + 5s SIGKILL watchdog; line-buffered stdout/stderr
+  - `packages/daemon/src/tunnel/manager.ts`: sliding-window restart policy (5-in-5min → degraded); 15s start timeout; processFactory + clock injection
+  - `patterns/project/line-buffered-stream-reader.md` created at status active (two confirmed instances: T-0008 IPC + T-0012 cloudflared)
+  - Two convention additions carried from T-0011: pre-add-dep verification; sync-handler Promise.resolve discipline
+  - 3 reactive lint fixes + 1 reactive test fix (microtask flush via setImmediate)
+  - 10 new daemon tests; 132 cases total across 16 test files (passing) + 4 platform-skipped
+  - 9th consecutive zero-fire on async-discipline rules for production
+  - Build plan §5 complete
 - **T-0011** — Tool dispatch + ping + AC-3, AC-5 closure (CONFIRMED 2026-05-22; commit bcdbc22)
   - All 25 gate-blocking AC passed
   - AC-3 IMPLEMENTED (integration test 17.b via SDK Client → tools/call)
@@ -269,10 +279,18 @@ Findings from completed tasks that inform future task design:
 - request_id format inconsistency between auth (`req_<8hex>`) and dispatch (UUID). Track for future cleanup pass; not actioning now.
 - "Sync handlers satisfying Promise-returning interfaces use Promise.resolve, not async" — three instances in T-0011 (pingTool, echoTool, explodeTool); codified in conventions.md at T-0012.
 
+**From T-0012:**
+- AC-6 IMPLEMENTED. Build plan §5 complete. The tunnel manager's sliding-window restart policy + 15s start timeout cover both the AC-6 respawn semantic and the user-facing "cloudflared not installed / can't reach network" failure mode.
+- Line-buffered-stream-reader codified at two instances. The candidate pattern from T-0008 reached its second instance in T-0012; pattern doc created at status active.
+- FakeProcess subclass pattern for testing subprocess wrappers worked cleanly. EventEmitter typed-override pattern composable across CloudflaredProcess and TunnelManager. The `listener as never` cast for super calls is the right knob; no recommendedTypeChecked friction.
+- Microtask-flush test technique (`await new Promise(r => setImmediate(r))`) needed once for the restart-in-non-degraded-state case. Worth flagging if it recurs in T-0013's main.test.ts.
+
+## Calibration phase closure
+
+Calibration phase closes at T-0013 per methodology §25.3. The first 13 tasks (T-0001 through T-0013) ran with full prompt detail, comprehensive verbatim reporting, and per-task human-gate confirmations. The toolchain (TypeScript, ESLint with recommendedTypeChecked, vitest, conventions, patterns) is settled. Steady-state operating mode starts after T-0013: lighter prompts, paragraph verdicts, summary reports except for safety-relevant files explicitly named.
+
 ## Handoff notes
 
-T-0011 committed (bcdbc22). T-0012 (tunnel manager; closes AC-6) in progress. After T-0012 closes, T-0013 begins daemon main wiring + pidfile + DaemonState wiring — first task where `node packages/daemon/dist/main.js` produces a runnable daemon.
+T-0012 committed (55644db). T-0013 (daemon main wiring + pidfile + DaemonState extension) in progress. After T-0013 closes, the daemon is runnable end-to-end (`node packages/daemon/dist/main.js` produces a working daemon with ready signal + URL + token output).
 
-Four scope decisions carried from planning notes: direct spawn (no npm wrapper); cloudflared-strict URL regex (ngrok deferred); sliding-window restart policy; start() resolves on first URL with 15s timeout.
-
-Two convention additions carried from T-0011 verdict: pre-add-dep verification; sync-handler Promise.resolve pattern.
+Three scope decisions confirmed: shutdown ordering = reverse-instantiation (IPC → MCP → tunnel → audit → logger); PID file at `~/.claude-bridge/daemon.pid`; `ready` signal = one literal line on stdout.

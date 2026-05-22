@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { AuditEntry, PingOutput } from "@claude-bridge/shared";
+import type { AuditEntry, Config, PingOutput } from "@claude-bridge/shared";
 import { McpServer, McpBindError } from "../../src/mcp/server.js";
 import { AuditLog } from "../../src/audit/log.js";
 import { ToolRegistry } from "../../src/mcp/dispatch.js";
@@ -15,6 +15,19 @@ import type { Logger } from "../../src/log/logger.js";
 
 const INERT_TOKEN = "cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const INERT_WRONG_TOKEN = "cb_live_WRONGWRONGWRONGWRONGWRONGWRONGWR";
+
+const stubConfig: Config = {
+  version: 1,
+  daemon: {
+    bind_host: "127.0.0.1",
+    bind_port: 7423,
+    ipc_socket: "/tmp/test.sock",
+  },
+  auth: { token: INERT_TOKEN },
+  tunnel: { provider: "cloudflared", binary: "cloudflared", args_extra: [] },
+  audit: { path: "/tmp/audit.jsonl", retention_days: 30 },
+  log: { path: "/tmp/daemon.log", level: "info" },
+};
 
 const silentLogger: Logger = {
   debug: () => undefined,
@@ -90,7 +103,7 @@ describe("McpServer", () => {
     if (opts.withPing !== false) {
       registry.register(pingTool);
     }
-    const state = makeInitialState("0.1.0");
+    const state = makeInitialState(stubConfig);
     const server = new McpServer({
       bindHost: opts.bindHost ?? "127.0.0.1",
       bindPort: opts.bindPort ?? 0,

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import type { AuditEntry } from "@claude-bridge/shared";
+import type { AuditEntry, Config } from "@claude-bridge/shared";
 import {
   ToolRegistry,
   ToolNotFoundError,
@@ -15,6 +15,19 @@ import {
 import { AuditLog } from "../../src/audit/log.js";
 import type { Logger } from "../../src/log/logger.js";
 import { makeInitialState } from "../../src/state.js";
+
+const stubConfig: Config = {
+  version: 1,
+  daemon: {
+    bind_host: "127.0.0.1",
+    bind_port: 7423,
+    ipc_socket: "/tmp/test.sock",
+  },
+  auth: { token: "cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+  tunnel: { provider: "cloudflared", binary: "cloudflared", args_extra: [] },
+  audit: { path: "/tmp/audit.jsonl", retention_days: 30 },
+  log: { path: "/tmp/daemon.log", level: "info" },
+};
 
 const silentLogger: Logger = {
   debug: () => undefined,
@@ -64,7 +77,7 @@ describe("ToolRegistry", () => {
       remote_addr: "127.0.0.1",
       auditLog,
       logger: silentLogger,
-      state: makeInitialState("0.1.0"),
+      state: makeInitialState(stubConfig),
     };
   });
 
