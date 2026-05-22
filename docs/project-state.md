@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0001 CONFIRMED; T-0002 queued for dispatch.
+**Status:** T-0002 CONFIRMED; T-0002.5 queued (line-ending hygiene).
 
 ## Gate status
 
@@ -20,7 +20,7 @@
 ## Task queue
 
 ### In progress
-- T-0002 — Package skeletons (build plan §1.2)
+- T-0002.5 — .gitattributes + line-ending renormalization (out-of-sequence; corrects T-0001 oversight)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
 - T-0003 — packages/shared deps + Config schema; closes Q001 (linter) (build plan §2.1, §2.2)
@@ -43,14 +43,21 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
-- **T-0001** — Initialize workspace root (CONFIRMED 2026-05-21)
+- **T-0002** — Package skeletons (CONFIRMED 2026-05-21; commit e0bf6c9)
+  - All 9 gate-blocking AC passed
+  - Three workspace packages (`@claude-bridge/{shared,daemon,cli}`) with TS project references
+  - Reactive design: empty-input form switched from `include: []` to `files: []` after the former triggered TS18003 — both were valid in the prompt
+  - cli references shared only (NOT daemon) — runtime spawn dep ≠ TS project reference; design held
+  - npm install: +3 packages (workspace symlinks); audit unchanged at 4 moderate
+  - `node-esm-imports.md` stays at `draft`; promotes at T-0003 first-import use
+- **T-0001** — Initialize workspace root (CONFIRMED 2026-05-21; commit 9fffba0)
   - All 8 gate-blocking AC passed
   - Files produced: `package.json`, `tsconfig.base.json`, `.gitignore`, `.editorconfig`, `.nvmrc`, `README.md`
   - Verified: `npm install` clean (126 packages, 4 moderate dev-only advisories below threshold); Node v24.10.0 ≥ v20.10.0 floor
   - Deviations from AC minimum (all reasoned and accepted): `engines` field added; 4 extra `.gitignore` entries (coverage/, *.log, .env*); 4 extra `tsconfig.base.json` options (lib, forceConsistentCasingInFileNames, resolveJsonModule, declaration triplet)
   - Q006 closed inline (vitest ^1.4.0)
   - Standing advisory registered in `conventions.md` §Dev-dependency audit policy
-  - Commit hash: TBD
+- **Day-zero** — Methodology infrastructure (committed 2026-05-21; commit fff652e)
 
 ### Failed / awaiting resolution
 (none)
@@ -97,8 +104,20 @@ Findings from completed tasks that inform future task design:
 - "Executor extends slightly beyond AC minimum, with reasoning" is acceptable when each addition is small, defensive, and explicitly justified in REASONING. Track whether this scales — if it grows, tighten scope statements.
 - Dev-dependency audit advisories will surface again on `npm install` and at every dep-adding task. Codified handling in `conventions.md` §Dev-dependency audit policy.
 
+**From T-0002:**
+- Anticipatory risk flagging works. The prompt named TS18003 as a known risk with valid alternative forms upfront; executor hit it, used the documented alternative, zero revision rounds. **Pattern for future prompts:** when multiple valid forms exist for a config choice, the prompt names them all rather than picking one — converts a likely revision into one-shot success.
+- Verbatim-tsconfig + summarized-package.json reporting cadence works. Continue for source-class config files.
+- Executor self-throttled on new pattern candidate (proposed lightweight form, deferred call to orchestrator). Good restraint to preserve.
+
+**From T-0002 closure (post-commit, surfaced during git add):**
+- `.editorconfig` without `.gitattributes` is a real cross-platform bug on Windows hosts. T-0001's prompt scope and AC both missed it. Two methodology lessons:
+  - When conventions span tool boundaries (editorconfig governs editors; gitattributes governs git), AC for either tool alone is insufficient. Verification must touch the boundary: e.g., "`git add <file>` produces no LF/CRLF warning."
+  - CC-2 (cross-platform concerns) extends to line endings, not just paths. Conventions doc updated at T-0002.5.
+- Out-of-sequence task numbering: T-0002.5 used. Mid-decimal IDs reserved for "inserted between" semantics; T-NNNN integer IDs stay aligned to build plan sections. No methodology revision needed; this convention is self-explanatory.
+- Process refinement: the orchestrator was producing full new doc files each task. Switched to delta instructions in the executor prompt — the executor edits in place, one new file per dispatch (the prompt itself).
+
 ## Handoff notes
 
-Day-zero infrastructure committed. T-0001 committed. T-0002 prompt drafted and ready for human gate review. After approval, dispatch to executor (Claude Code), receive report, orchestrator verifies, human gate confirms before commit.
+T-0002 committed (e0bf6c9). T-0002.5 (out-of-sequence) addresses line-ending hygiene discovered at commit time. After T-0002.5 closes, T-0003 is next: Config schema in `packages/shared/src/config.ts`, Q001 closure (ESLint), `node-esm-imports.md` and `zod-schema-validation.md` first real-use → promotion candidates.
 
-Calibration phase remains in effect: human gate reviews every task before integration (methodology §25.1).
+Working pattern note: orchestrator now produces only the executor prompt per dispatch; doc edits live as delta instructions inside the prompt. Executor edits docs in place rather than receiving full replacement files.

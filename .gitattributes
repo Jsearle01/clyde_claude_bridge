@@ -1,0 +1,13 @@
+# Normalize line endings to LF on commit; checkout LF on all platforms.
+# Companion to .editorconfig (`end_of_line = lf`). .editorconfig governs editors;
+# .gitattributes governs git. Both are required on Windows-host projects because
+# core.autocrlf=true (Windows default) overrides editor behavior at checkout.
+
+* text=auto eol=lf
+
+# Explicit LF on source and config (defensive; `text=auto` already handles most).
+*.{ts,js,mjs,cjs,json,jsonc,md,yml,yaml} text eol=lf
+*.sh text eol=lf
+
+# Binary file types — git should not touch line endings or attempt diff/merge as text.
+*.{png,jpg,jpeg,gif,ico,pdf} binary

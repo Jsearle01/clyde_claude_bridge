@@ -37,6 +37,12 @@ This conventions doc does not duplicate that content. It captures only what's pr
 
 Per-package structure: see `p0-build-plan.md` §1.2 and §2–§7.
 
+### Skeleton composite packages
+
+When a TypeScript composite package exists but has no source files yet (`composite: true` with empty input), use `"files": []` in its `tsconfig.json`. Do NOT use `"include": []` — TypeScript 5.4.x emits `TS18003: No inputs were found` for the latter. Transition the package to `"include": ["src/**/*"]` when it gains its first source file.
+
+(Discovered at T-0002 during package-skeleton scaffolding. Self-resolves once each package gains real source; this convention applies during the brief skeleton phase per package.)
+
 ## Commit message convention
 
 Per methodology §22.1:
@@ -101,6 +107,7 @@ Two OS targets (Unix-like, Windows). Two IPC primitives (Unix domain socket, Win
 - Config dir resolution lives in `packages/daemon/src/config/paths.ts` — single source of truth
 - IPC socket path resolved through config; abstraction layer hides OS difference
 - Test on both Unix and Windows before declaring IPC work done
+- Line endings: enforce LF project-wide via `.gitattributes` at repo root with `* text=auto eol=lf` and explicit `eol=lf` on source extensions. `.editorconfig` configures editors; `.gitattributes` configures git. Both are required on Windows-host projects — `.editorconfig` alone is insufficient because `core.autocrlf=true` (Windows default) overrides editor behavior at checkout. Introduced at T-0002.5 after T-0001 shipped `.editorconfig` without the corresponding `.gitattributes`.
 
 ### CC-3: File permissions
 
