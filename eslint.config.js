@@ -24,4 +24,14 @@ export default tseslint.config(
       },
     },
   },
+  {
+    // Test files: assertions on vi.fn() mocks legitimately pass method
+    // references without invoking them. The unbound-method rule's premise
+    // (avoiding accidental `this`-detached calls) doesn't apply to mock
+    // assertions, which never invoke the reference.
+    files: ["packages/*/tests/**/*.test.ts"],
+    rules: {
+      "@typescript-eslint/unbound-method": "off",
+    },
+  },
 );

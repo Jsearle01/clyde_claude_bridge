@@ -41,11 +41,18 @@ Numbered Q-items with lifecycle OPEN / TRIED / CLOSED / DEFERRED per methodology
 
 ## Q005 — Windows named pipe collision detection
 
-**State:** OPEN
-**Context:** Build plan §3.5 uses `\\.\pipe\claude-bridge` for Windows IPC. Need to confirm (a) Node's `net.createServer` accepts this exact form, (b) a stale pipe handle from a crashed daemon doesn't block a fresh start, (c) two intended daemons on one host can't both bind successfully.
-**Tried:** (none)
-**Tentative resolution:** The PID-file + stale-PID check (CC-5 in conventions.md) provides the protection regardless of pipe semantics — if another daemon is alive, we refuse to start; if it's not, we proceed and Node either succeeds or fails clearly. If the pipe form needs adjustment, document in conventions.md.
-**Closure target:** T-0008 (IPC server) — verified on Windows.
+**State:** CLOSED (2026-05-22)
+**Context:** Build plan §3.5 uses `\\.\pipe\claude-bridge` for Windows IPC. Needed to confirm (a) Node's `net.createServer` accepts this exact form, (b) a stale pipe handle from a crashed daemon doesn't block a fresh start, (c) two intended daemons on one host can't both bind successfully.
+**Tried:** Implemented in T-0008. Verified on both Unix (domain socket) and Windows (named pipe) paths:
+- Unix: stale-socket detection via connect-first probe before unlink; succeeds for stale file, throws `IpcSocketBusyError` if connection succeeds.
+- Windows: named-pipe collision surfaces as EADDRINUSE on `listen`; throw `IpcSocketBusyError` from `start()`'s error handler.
+- Both: caller layer (daemon main, T-0013) also enforces PID-file check; the two mechanisms together provide layered collision protection.
+**Resolution:** **Layered: PID-file check (CC-5, lands at T-0013) + connect-first stale-socket detection on Unix (T-0008) + EADDRINUSE detection on Windows (T-0008).** The Q-item's original concern was specifically Windows-pipe semantics; verified that Node's `net.createServer` handles `\\.\pipe\name` paths cleanly with `EADDRINUSE` on collision and clean teardown on `server.close`.
+**Implementation pointers:**
+- `packages/daemon/src/ipc/server.ts` `start()` — both platform paths
+- `packages/daemon/src/ipc/server.ts` `IpcSocketBusyError` — thrown on collision (both platforms)
+- Tests 11.j (Unix-only stale-socket cleanup), 11.k (Unix-only concurrent refused), 11.l (Windows-only concurrent refused)
+**Why not just rely on the PID file:** the PID file solves "another daemon is alive"; the socket-level checks add a defense-in-depth layer for cases where the PID file is missing (stale, deleted, race-during-init) or stale-in-the-wrong-way (PID got reused by an unrelated process). Two cheap checks beat one.
 
 ## Q006 — Vitest vs Node's built-in test runner
 

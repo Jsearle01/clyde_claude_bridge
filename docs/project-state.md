@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0006 CONFIRMED; T-0007 in progress (audit log; closes Q003).
+**Status:** T-0007 CONFIRMED; T-0008 in progress (IPC server; closes Q005).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0007 — Daemon audit log + Q003 closure + sink-queue pattern promotion (build plan §3.4)
+- T-0008 — Daemon IPC server + Q005 closure (build plan §3.5)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0008 — packages/daemon IPC server; closes Q005 (build plan §3.5)
 - T-0009 — packages/daemon MCP server skeleton + HTTP transport (build plan §4.1)
 - T-0010 — packages/daemon MCP auth middleware (build plan §4.1)
 - T-0011 — packages/daemon tool dispatch + ping (build plan §4.1)
@@ -38,6 +37,17 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0007** — Daemon audit log + Q003 closure + sink-queue pattern (CONFIRMED 2026-05-22; commit 17b30d4)
+  - All 16 gate-blocking AC passed; zero reactive deviations
+  - `packages/daemon/src/audit/{hash,log}.ts`: hashInput with recursive canonicalization; AuditLog with queued writes, hybrid midnight-timer + per-append-guardrail rotation, idempotent stop()
+  - `append()` returns flushed Promise (departure from logger's void return)
+  - Per-append date check inside queue handler (race fix documented as anti-example in new pattern doc)
+  - `patterns/project/async-sink-queue.md` created at status `active` (codifies logger + audit-log shared shape)
+  - Q003 CLOSED via hybrid resolution
+  - conventions.md: ESLint glob maintenance note + temp-file test pattern
+  - milestones.md: AC-9 → IMPLEMENTED (Unix runtime verification pending)
+  - 16 new daemon tests; 66 total passing
+  - `recommendedTypeChecked` 4th consecutive zero-fire on async code — rule set declared validated
 - **T-0006** — Daemon config layer (paths, load, init, token) (CONFIRMED 2026-05-21; commit ca6ae92)
   - All 19 gate-blocking AC passed
   - `packages/daemon/src/config/{paths,token,load,init}.ts` — full surface for T-0013 wiring and T-0015 CLI start
@@ -182,6 +192,17 @@ Findings from completed tasks that inform future task design:
 - `recommendedTypeChecked` second affirmative on real async code (config layer's loadConfig/initConfig). Third data point at T-0007.
 - ESLint `allowDefaultProject` glob is a maintenance lever as test-tree structure evolves. Documented as a maintenance pattern in conventions.md to remove the surprise next time it surfaces.
 
+**From T-0007:**
+- `recommendedTypeChecked` validated: 4 consecutive zero-fire runs on real async code, including this task's deferred-resolve Promise machinery and IIFE-wrapped setTimeout callbacks. T-0008+ uses the rule set without further evaluation.
+- Pattern doc creation from real implementation experience: `async-sink-queue.md` was created at status `active` AND includes an anti-example drawn from a race the executor caught and fixed during T-0007 itself. The methodology working as intended: docs absorb real lessons.
+- Reporting cadence calibration: the executor summarized the ~200-line `log.ts` rather than pasting verbatim. Acceptable for T-0007 because REASONING covered the load-bearing choices, but tightening for T-0008: server.ts is safety-relevant (request dispatch, error envelope), so verbatim required.
+- Q003 closure validates the "tentative resolution becomes implementation" lifecycle: Q-item opened with tentative resolution → became implementation at T-0007 with no surprises. The Q lifecycle is working.
+
+**Orchestrator self-correction (2026-05-22):**
+- The orchestrator was using a fixed date (2026-05-21) on dated entries in project-state, Q-item closures, and pattern docs starting from T-0001 closure onward. The actual current date drifted past 5/21 to 5/22 mid-execution but the dates didn't update — confirmation bias on a value already present in project files.
+- **Correction going forward:** every dated entry uses today's actual date as read from the orchestrator's environment context. Existing entries in committed files stay as-is (methodology §22.6 forbids amending pushed commits, and the historical record is part of the audit trail even when wrong by one day).
+- Not a methodology defect; an orchestrator-discipline drift. The lesson generalizes: any value the orchestrator can re-read fresh from environment context (date, time, available tools, system state) should be re-read each turn, not anchored to a previously-observed value.
+
 ## Handoff notes
 
-T-0006 committed (ca6ae92). T-0007 (audit log; closes Q003; second instance of "async sink queue discipline" pattern candidate) in progress. After T-0007 closes, T-0008 begins IPC server (build plan §3.5; closes Q005).
+T-0007 committed (17b30d4). T-0008 (IPC server; closes Q005) in progress. After T-0008 closes, T-0009 begins MCP server skeleton + HTTP transport (build plan §4.1 first slice). Note: the IPC stop/status path is a prerequisite for AC-2 and AC-7 verification at the acceptance test stage (T-0019).

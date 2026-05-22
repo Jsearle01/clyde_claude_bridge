@@ -42,3 +42,11 @@ Derived from the 10 P0 acceptance criteria in `01-p0-bus.md`. When the last bloc
 ## Phase-to-task mapping
 
 P0 work decomposes into T-0001 through T-0020. See `project-state.md` task queue. The task list is the operational unit; this milestone doc is the index.
+
+## Cross-AC infrastructure dependencies
+
+Some AC closures depend on infrastructure landed in non-AC-closing tasks. Tracking explicitly so AC verification at T-0019 has a paper trail:
+
+- AC-2 (`claude-bridge status` reports daemon up) — depends on T-0008 (IPC server, status handler shape) and T-0013 (daemon main wires the actual status payload). Verification at T-0019.
+- AC-7 (`claude-bridge stop` cleanly shuts down) — depends on T-0008 (IPC stop handler) and T-0013 (daemon main shutdown sequencing). Verification at T-0019.
+- AC-9 (daemon refuses on loose perms) — **IMPLEMENTED at T-0006**; final Unix-host verification required before P0 gate close.

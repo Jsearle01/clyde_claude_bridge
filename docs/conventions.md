@@ -125,6 +125,7 @@ Two OS targets (Unix-like, Windows). Two IPC primitives (Unix domain socket, Win
 - IPC socket path resolved through config; abstraction layer hides OS difference
 - Test on both Unix and Windows before declaring IPC work done
 - Line endings: enforce LF project-wide via `.gitattributes` at repo root with `* text=auto eol=lf` and explicit `eol=lf` on source extensions. `.editorconfig` configures editors; `.gitattributes` configures git. Both are required on Windows-host projects — `.editorconfig` alone is insufficient because `core.autocrlf=true` (Windows default) overrides editor behavior at checkout. Introduced at T-0002.5 after T-0001 shipped `.editorconfig` without the corresponding `.gitattributes`.
+- IPC transport: Unix domain socket at `config.daemon.ipc_socket`; Windows named pipe at `\\.\pipe\claude-bridge`. The address transform lives in `packages/daemon/src/ipc/server.ts`'s `addressFor()` helper; never duplicate the platform branching elsewhere. Stale-socket detection on Unix uses connect-first probe before unlink (T-0008 / Q005 resolution). The single-pipe-name on Windows means tests must inject a unique override via the `IpcServer` constructor to avoid parallel-run collisions.
 
 ### CC-3: File permissions
 
