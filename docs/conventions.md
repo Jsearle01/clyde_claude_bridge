@@ -43,6 +43,21 @@ When a TypeScript composite package exists but has no source files yet (`composi
 
 (Discovered at T-0002 during package-skeleton scaffolding. Self-resolves once each package gains real source; this convention applies during the brief skeleton phase per package.)
 
+### ESLint `allowDefaultProject` glob maintenance
+
+The `eslint.config.js` `allowDefaultProject` glob enumerates patterns where test files live. Each glob represents one directory depth under `packages/*/tests/`. When new tests are added at a depth not yet covered (e.g. `packages/<pkg>/tests/<subdir>/*.test.ts` when only top-level `tests/*.test.ts` was previously covered), the lint run will fail with "test file not in any tsconfig project."
+
+The fix is one line: add the new depth's glob to the `allowDefaultProject` array. Current entries:
+
+```
+allowDefaultProject: [
+  "packages/*/tests/*.test.ts",            // top-level tests (T-0003 onward)
+  "packages/*/tests/*/*.test.ts",          // one-subdir-deep tests (T-0006 onward)
+]
+```
+
+typescript-eslint v8 disallows `**` in `allowDefaultProject` (performance footgun: every match gets its own default project). So one glob per depth is the canonical form. Add as needed.
+
 ## Commit message convention
 
 Per methodology §22.1:
@@ -91,6 +106,7 @@ Per methodology §24:
 - Execution reports: stay in chat, NOT in repo (methodology §24.2)
 - Test drivers under `tests/`, named for behavior not chronology (methodology §24.3): `tests/ping-roundtrip.test.ts`, not `tests/phase4-test1.test.ts`
 - Test files live in `packages/<pkg>/tests/`, one `.test.ts` file per source file (e.g. `src/config.ts` ↔ `tests/config.test.ts`). Source files without runtime (pure interfaces or type-only modules) don't need a companion test. Test files are NOT included in the package's `tsconfig.json`; vitest handles them via vite-node.
+- Tests that touch the filesystem use `mkdtemp(join(tmpdir(), "claude-bridge-<feature>-"))` in `beforeEach` and `rm(tempDir, { recursive: true, force: true })` in `afterEach`. Each test gets a fresh, isolated tempdir; the `force` flag makes cleanup tolerant of partial state if a test failed mid-write. Pattern established at T-0005, reused in T-0006 and T-0007.
 
 ## Cross-cutting concerns
 

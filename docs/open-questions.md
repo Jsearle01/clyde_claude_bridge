@@ -23,11 +23,13 @@ Numbered Q-items with lifecycle OPEN / TRIED / CLOSED / DEFERRED per methodology
 
 ## Q003 — Audit log rotation timing strategy
 
-**State:** OPEN
-**Context:** Build plan §3.4 specifies `startMidnightTimer` that schedules rotate+prune at next midnight UTC. A pure timer loses correctness if the host sleeps through midnight (laptop suspend, system standby). Alternative: check date on every append (cheap, always correct, but per-write overhead).
-**Tried:** (none)
-**Tentative resolution:** Hybrid — timer for the common case, plus a cheap date-compare on every append as guardrail. Test by writing during day-N and day-N+1 with simulated clock advance.
-**Closure target:** T-0007 (audit log).
+**State:** CLOSED (2026-05-21)
+**Context:** Build plan §3.4 specified `startMidnightTimer` that schedules rotate+prune at next midnight UTC. A pure timer loses correctness if the host sleeps through midnight (laptop suspend, system standby). Alternative: check date on every append (cheap, always correct, but per-write overhead).
+**Tried:** Implemented the hybrid resolution proposed in the tentative — both the midnight timer AND a cheap per-append date check. The per-append check compares `new Date().toISOString().slice(0, 10)` against the tracked date for the currently-open file; if they differ, `rotate()` runs inline before the write.
+**Resolution:** **Hybrid: timer + per-append guardrail.** The timer handles the common case (daemon awake at midnight). The per-append check is the safety net for sleep-through-midnight scenarios. Cost per append is one Date construction and one string slice + comparison — negligible compared to the file write itself.
+**Implementation pointer:** `packages/daemon/src/audit/log.ts` `startMidnightTimer()` schedules `rotate() + pruneOld()` at next UTC midnight; `append(entry)` checks `currentDate !== today` and calls `rotate()` inline before the write if true (the check runs inside the queue chain so it can't race with concurrent appends).
+**Why not timer-only:** loses correctness if host sleeps through midnight (laptop standby, system suspend, VM pause). The daemon could be silent during sleep and still need to rotate when it wakes up — the next append should land in a fresh file with the new date.
+**Why not per-append-only:** the timer is the more efficient path when the daemon is awake and continuously serving. The per-append check is genuinely a guardrail, not the primary mechanism.
 
 ## Q004 — Token rotation UX
 

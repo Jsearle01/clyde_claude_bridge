@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0005 CONFIRMED; T-0006 in progress (daemon config layer; closes Q002).
+**Status:** T-0006 CONFIRMED; T-0007 in progress (audit log; closes Q003).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0006 — Daemon config layer: paths, load, init, token generation (build plan §3.3); closes Q002
+- T-0007 — Daemon audit log + Q003 closure + sink-queue pattern promotion (build plan §3.4)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0007 — packages/daemon audit log; closes Q003 (build plan §3.4)
 - T-0008 — packages/daemon IPC server; closes Q005 (build plan §3.5)
 - T-0009 — packages/daemon MCP server skeleton + HTTP transport (build plan §4.1)
 - T-0010 — packages/daemon MCP auth middleware (build plan §4.1)
@@ -39,6 +38,15 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0006** — Daemon config layer (paths, load, init, token) (CONFIRMED 2026-05-21; commit ca6ae92)
+  - All 19 gate-blocking AC passed
+  - `packages/daemon/src/config/{paths,token,load,init}.ts` — full surface for T-0013 wiring and T-0015 CLI start
+  - `loadConfig` implements **AC-9** from `01-p0-bus.md` (mode-0600 enforcement on Unix) — first P0 acceptance criterion implemented
+  - Q002 CLOSED via hand-rolled RFC 4648 base32 encoder (~25 lines, no dep, no modulo bias)
+  - `constant-time-compare.md` promoted draft → active
+  - `ConfigAlreadyExistsError` introduced for T-0015's first-run vs already-initialized distinction
+  - 22 new daemon tests (20 run + 2 platform-skipped on Windows)
+  - One reactive: ESLint allowDefaultProject glob widened by one level for `tests/<subdir>/*.test.ts`
 - **T-0005** — Daemon logger + carried fixes + pattern promotion (CONFIRMED 2026-05-21; commit 4e74331)
   - All 14 gate-blocking AC passed; second consecutive zero-deviation task
   - `packages/daemon/src/log/logger.ts`: Promise-chain queue (CC-1), lazy file-handle open, idempotent close()
@@ -111,6 +119,7 @@ Project-specific patterns in `patterns/project/`. Status as of last conversation
 | `zod-schema-validation.md` | **active** | promoted at T-0003 | ConfigSchema implements .strict() at trust boundary; test suite verifies pattern application |
 | `constant-time-compare.md` | **active** | promoted at T-0006 | Used by `packages/daemon/src/config/token.ts` `constantTimeEqual` |
 | `test-token-fixtures.md` | **active** | created at T-0005 (codifies pattern observed in T-0003 + T-0004) | Inert conforming strings for token-format test fixtures; CC-4 corollary |
+| `async-sink-queue.md` | **active** | created at T-0007 (codifies pattern observed in T-0005 logger + T-0007 audit log) | Queue + lazy handle + idempotent close shape; departure point is whether per-call API returns void or flushed Promise |
 
 Promotion from `draft` to `active` happens at orchestrator review after first real use.
 
@@ -167,6 +176,12 @@ Findings from completed tasks that inform future task design:
 - Pattern promotion threshold (two confirmed instances) worked for `test-token-fixtures.md` — created at status `active` rather than going through a `draft` phase since the prior use already validated the rule. Methodology's "promotion happens after first confirmed use" generalizes to "creation at `active` is fine when use already precedes the doc."
 - Two new pattern candidates flagged: "Async sink queue discipline" (await T-0007's audit log for second instance) and "Temp file lifecycle in tests" (await T-0006/T-0007 for second/third instances; promote to conventions.md note if it recurs).
 
+**From T-0006:**
+- First P0 acceptance criterion implemented: AC-9 mode-0600 enforcement lives in `loadConfig`. Implementation verifiable; verification platform-specific (Unix-only). Added to INT-1 blocker list as "verified-on-Unix-CI" pending.
+- Three consecutive zero-deviation source tasks (T-0004, T-0005, T-0006). The one reactive deviation in T-0006 was tooling config (ESLint glob), not source.
+- `recommendedTypeChecked` second affirmative on real async code (config layer's loadConfig/initConfig). Third data point at T-0007.
+- ESLint `allowDefaultProject` glob is a maintenance lever as test-tree structure evolves. Documented as a maintenance pattern in conventions.md to remove the surprise next time it surfaces.
+
 ## Handoff notes
 
-T-0005 committed (4e74331). T-0006 (daemon config layer; closes Q002) in progress. After T-0006 closes, T-0007 begins audit log (build plan §3.4; closes Q003; second instance for the "Async sink queue discipline" pattern candidate).
+T-0006 committed (ca6ae92). T-0007 (audit log; closes Q003; second instance of "async sink queue discipline" pattern candidate) in progress. After T-0007 closes, T-0008 begins IPC server (build plan §3.5; closes Q005).

@@ -36,7 +36,7 @@ Derived from the 10 P0 acceptance criteria in `01-p0-bus.md`. When the last bloc
 | AC-6 | Killing cloudflared respawns within 30s with new URL; status reflects new URL | OPEN | — | Acceptance test §6 |
 | AC-7 | `claude-bridge stop` cleanly shuts down both processes, removes PID file, flushes audit log | OPEN | — | Acceptance test §7 |
 | AC-8 | `claude-bridge token rotate` generates new token, invalidates old (verified 401), prints new | OPEN | — | Acceptance test §8 |
-| AC-9 | Daemon refuses to start if `config.json` permissions are looser than 0600 on Unix | OPEN | — | Acceptance test §9 |
+| AC-9 | Daemon refuses to start if `config.json` permissions are looser than 0600 on Unix | IMPLEMENTED (Unix runtime verification pending) | T-0006 (`loadConfig`) | Acceptance test §9; unit test 13.f covers; final verification requires Unix host (skipped on Windows dev host) |
 | AC-10 | Audit log rotates at midnight UTC; previous day's file renamed `audit-YYYY-MM-DD.jsonl` | OPEN | — | Acceptance test §10 — manual verification acceptable for v1 |
 
 ## Phase-to-task mapping
