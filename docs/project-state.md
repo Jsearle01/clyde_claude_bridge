@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0007 CONFIRMED; T-0008 in progress (IPC server; closes Q005).
+**Status:** T-0008 CONFIRMED; T-0009 in progress (MCP server skeleton + HTTP transport; first slice of build plan §4.1).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0008 — Daemon IPC server + Q005 closure (build plan §3.5)
+- T-0009 — MCP server skeleton + HTTP transport + promise utility (build plan §4.1 first slice)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0009 — packages/daemon MCP server skeleton + HTTP transport (build plan §4.1)
 - T-0010 — packages/daemon MCP auth middleware (build plan §4.1)
 - T-0011 — packages/daemon tool dispatch + ping (build plan §4.1)
 - T-0012 — packages/daemon tunnel manager (build plan §5)
@@ -37,6 +36,14 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0008** — Daemon IPC server + Q005 closure (CONFIRMED 2026-05-22; commit 9bee9c5)
+  - All 18 gate-blocking AC passed; one reactive ESLint test-file override for unbound-method (mock-matcher edge case)
+  - `packages/daemon/src/ipc/{protocol,server}.ts`: newline-delimited JSON IPC; cross-platform Unix socket / Windows named pipe; stale-socket cleanup via connect-probe; EADDRINUSE → IpcSocketBusyError
+  - Q005 CLOSED via layered protection (PID file at T-0013 + Unix connect-probe + Windows EADDRINUSE)
+  - 12 new daemon cases; Windows-side Q005 first-hand verified (11.l ran on this host); Unix-side deferred to Unix CI
+  - 5th consecutive zero-fire on `recommendedTypeChecked` for production code
+  - `packages/daemon/src/audit/hash.ts` header extended with JSON-native assumption note (carried from T-0007)
+  - 80 cases total across 10 test files (76 passing + 4 platform-skipped)
 - **T-0007** — Daemon audit log + Q003 closure + sink-queue pattern (CONFIRMED 2026-05-22; commit 17b30d4)
   - All 16 gate-blocking AC passed; zero reactive deviations
   - `packages/daemon/src/audit/{hash,log}.ts`: hashInput with recursive canonicalization; AuditLog with queued writes, hybrid midnight-timer + per-append-guardrail rotation, idempotent stop()
@@ -203,6 +210,14 @@ Findings from completed tasks that inform future task design:
 - **Correction going forward:** every dated entry uses today's actual date as read from the orchestrator's environment context. Existing entries in committed files stay as-is (methodology §22.6 forbids amending pushed commits, and the historical record is part of the audit trail even when wrong by one day).
 - Not a methodology defect; an orchestrator-discipline drift. The lesson generalizes: any value the orchestrator can re-read fresh from environment context (date, time, available tools, system state) should be re-read each turn, not anchored to a previously-observed value.
 
+**From T-0008:**
+- 5 consecutive zero-fire `recommendedTypeChecked` runs on production code. Single fire in T-0008 was test-only (vitest matcher passing method reference to `expect(...).toHaveBeenCalledOnce()`); resolved at config level with sound justification.
+- Tooling-config reactive deviations are the new normal as the test surface grows. Two now (T-0006 glob widening, T-0008 test-file rule override). Both config-level, both justified. Source code itself stays at zero deviations for four consecutive tasks (T-0005, T-0007, T-0008, plus T-0004).
+- Verbatim discipline for safety-relevant source files validated: server.ts paste-verbatim allowed direct verification of event-handler discipline. Continue for T-0009 mcp/server.ts.
+- Deferred-resolve Promise shape now at five instances across two tasks. Decision: extract to a small `util/promises.ts` utility (T-0009 deliverable) for new code; do NOT refactor existing sites. Refactor-for-refactor's-sake violates the methodology's "do exactly what was asked" disposition.
+
 ## Handoff notes
 
-T-0007 committed (17b30d4). T-0008 (IPC server; closes Q005) in progress. After T-0008 closes, T-0009 begins MCP server skeleton + HTTP transport (build plan §4.1 first slice). Note: the IPC stop/status path is a prerequisite for AC-2 and AC-7 verification at the acceptance test stage (T-0019).
+T-0008 committed (9bee9c5). T-0009 (MCP server skeleton + HTTP transport, first slice of §4.1) in progress. After T-0009 closes, T-0010 (auth middleware — closes AC-4) and T-0011 (tool dispatch + ping — closes AC-3 and AC-5) complete the §4.1 surface.
+
+Note: T-0009 has no AC closures from `01-p0-bus.md`. AC-4 closes at T-0010, AC-3/AC-5 at T-0011. T-0009 is infrastructure for those.

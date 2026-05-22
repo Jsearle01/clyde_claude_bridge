@@ -12,7 +12,8 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@claude-bridge/shared": "*"
+    "@claude-bridge/shared": "*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0"
