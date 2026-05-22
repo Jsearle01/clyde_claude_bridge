@@ -1,0 +1,16 @@
+{
+  "name": "@claude-bridge/cli",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@claude-bridge/shared": "*",
+    "@claude-bridge/daemon": "*"
+  }
+}
