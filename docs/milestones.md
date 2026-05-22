@@ -31,7 +31,7 @@ Derived from the 10 P0 acceptance criteria in `01-p0-bus.md`. When the last bloc
 | AC-1 | `claude-bridge start` brings up daemon + tunnel <10s, prints URL and token | OPEN | — | Verified by acceptance test §1 |
 | AC-2 | `claude-bridge status` reports `Daemon: up` and `Tunnel: up` | OPEN | — | Acceptance test §2 |
 | AC-3 | Claude.ai project calls `ping(message='hello')` and receives correct response | OPEN | — | **Visual gate; human verifies.** Acceptance test §3 |
-| AC-4 | Wrong bearer token returns 401 + audit log entry `allowed:false, reason:"invalid_token"` | OPEN | — | Acceptance test §4 |
+| AC-4 | Wrong bearer token returns 401 + audit log entry `allowed:false, reason:"invalid_token"` | IMPLEMENTED | T-0010 (`mcp/auth.ts`, `mcp/server.ts` integration) | Acceptance test §4; unit tests 12.a–12.i + integration tests 15.g/15.h verify; end-to-end verification via curl against running daemon at T-0019 |
 | AC-5 | Successful ping produces audit log entry `allowed:true, tool:"ping"` with non-zero duration_ms | OPEN | — | Acceptance test §5 |
 | AC-6 | Killing cloudflared respawns within 30s with new URL; status reflects new URL | OPEN | — | Acceptance test §6 |
 | AC-7 | `claude-bridge stop` cleanly shuts down both processes, removes PID file, flushes audit log | OPEN | — | Acceptance test §7 |

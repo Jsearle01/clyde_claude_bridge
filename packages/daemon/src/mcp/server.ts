@@ -1,13 +1,14 @@
-// MCP server skeleton + HTTP transport (build plan §4.1 first slice).
-// Bound to 127.0.0.1 by default; the tunnel (T-0012) routes external traffic
-// here. This slice ships NO auth (T-0010) and NO tools (T-0011). The server
-// announces the `tools` capability but registers zero tools.
+// MCP server skeleton + HTTP transport + bearer-token auth (build plan §4.1,
+// first two slices). Bound to 127.0.0.1 by default; the tunnel (T-0012)
+// routes external traffic here. This slice ships auth (T-0010 / AC-4) but
+// no tools (T-0011 — closes AC-3, AC-5). The server announces the `tools`
+// capability but registers zero tools.
 //
 // Documentation-first: this implementation targets `@modelcontextprotocol/sdk`
 // v1.29, which exposes `Server` from `server/index.js` and
 // `StreamableHTTPServerTransport` from `server/streamableHttp.js`. The
 // transport's `handleRequest(req, res)` is what the HTTP listener calls
-// per-request.
+// per-request after authentication.
 
 import {
   createServer as createHttpServer,
@@ -16,15 +17,14 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createRequire } from "node:module";
+import { randomBytes } from "node:crypto";
 import { Server as McpSdkServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Logger } from "../log/logger.js";
+import type { AuditLog } from "../audit/log.js";
+import { authenticate, type AuthFailureReason } from "./auth.js";
 import { onceOrError, promisifyCallback } from "../util/promises.js";
 
-// Daemon version from this package's own package.json. createRequire is
-// used instead of an ESM JSON import to keep the relative path lookup
-// stable across dev (src/) vs built (dist/) layouts — both resolve to the
-// same package.json one level up from this file's package boundary.
 const localRequire = createRequire(import.meta.url);
 const pkg = localRequire("../../package.json") as { version: string };
 
@@ -35,10 +35,18 @@ function isErrnoCode(err: unknown, code: string): boolean {
   );
 }
 
+function generateRequestId(): string {
+  return "req_" + randomBytes(4).toString("hex");
+}
+
 export interface McpServerOpts {
   bindHost: string;
   bindPort: number;
   logger: Logger;
+  // Thunk for the expected token — read fresh on every request so token
+  // rotation (T-0017) takes effect without recreating the server.
+  getExpectedToken: () => string;
+  auditLog: AuditLog;
 }
 
 export class McpBindError extends Error {
@@ -68,23 +76,16 @@ export class McpServer {
       { capabilities: { tools: {} } },
     );
 
-    // Stateless mode — no per-client session tracking in P0. Each request
-    // is independent. T-0011's tool dispatch and T-0010's auth middleware
-    // build on top of this.
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
-
     await mcp.connect(transport);
 
     const httpServer = createHttpServer(
       (req: IncomingMessage, res: ServerResponse) => {
-        void transport.handleRequest(req, res);
+        this.handleHttpRequest(req, res, transport);
       },
     );
-
-    // Persistent error listener — fires for runtime errors after listen
-    // succeeds (the listen-phase error is captured by onceOrError below).
     httpServer.on("error", (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.opts.logger.warn("mcp http server error", { error: msg });
@@ -95,7 +96,6 @@ export class McpServer {
     try {
       await listenSettled;
     } catch (err) {
-      // Roll back the SDK-side setup if listen failed.
       await mcp.close().catch(() => undefined);
       if (isErrnoCode(err, "EADDRINUSE")) {
         throw new McpBindError(this.opts.bindHost, this.opts.bindPort);
@@ -112,6 +112,77 @@ export class McpServer {
       host: bound?.host ?? this.opts.bindHost,
       port: bound?.port ?? this.opts.bindPort,
     });
+  }
+
+  private handleHttpRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    transport: StreamableHTTPServerTransport,
+  ): void {
+    const requestId = generateRequestId();
+    const remoteAddr = req.socket.remoteAddress ?? "unknown";
+    const startMs = Date.now();
+
+    const authResult = authenticate(req, this.opts.getExpectedToken());
+    if (!authResult.ok) {
+      // Per AC-9 / 01-p0-bus.md §Auth: 401 with no body, no
+      // WWW-Authenticate header (defensive against scheme advertisement).
+      res.writeHead(401);
+      res.end();
+      const durationMs = Date.now() - startMs;
+      void this.auditAuthFailure({
+        reason: authResult.reason,
+        requestId,
+        remoteAddr,
+        durationMs,
+      });
+      return;
+    }
+
+    // Authenticated — delegate to the MCP transport. Per-tool audit lands at
+    // T-0011 (closes AC-5).
+    void transport.handleRequest(req, res).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.opts.logger.warn("mcp transport.handleRequest failed", {
+        error: msg,
+        request_id: requestId,
+      });
+    });
+  }
+
+  private async auditAuthFailure(args: {
+    reason: AuthFailureReason;
+    requestId: string;
+    remoteAddr: string;
+    durationMs: number;
+  }): Promise<void> {
+    try {
+      await this.opts.auditLog.append({
+        ts: new Date().toISOString(),
+        // Sentinel for pre-dispatch failures; angle brackets keep these
+        // grep-distinguishable from real tool entries (T-0011).
+        tool: "<auth>",
+        // CC-4: never hash the presented token (a hash would be a side
+        // channel testable against guessed tokens). The literal "sha256:n/a"
+        // keeps the AuditEntry shape valid while signaling no hashable input.
+        input_hash: "sha256:n/a",
+        allowed: false,
+        reason: args.reason,
+        duration_ms: args.durationMs,
+        result_bytes: 0,
+        request_id: args.requestId,
+        remote_addr: args.remoteAddr,
+      });
+    } catch (err) {
+      // AuditLog already surfaces internal write failures to stderr via the
+      // queue's catch. This catch keeps the void-discarded caller from
+      // producing an unhandled rejection if the per-write Promise rejects.
+      const msg = err instanceof Error ? err.message : String(err);
+      this.opts.logger.warn("audit-write failed for auth rejection", {
+        error: msg,
+        request_id: args.requestId,
+      });
+    }
   }
 
   address(): { host: string; port: number } | null {

@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0008 CONFIRMED; T-0009 in progress (MCP server skeleton + HTTP transport; first slice of build plan §4.1).
+**Status:** T-0009 CONFIRMED; T-0010 in progress (MCP auth middleware; closes AC-4).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0009 — MCP server skeleton + HTTP transport + promise utility (build plan §4.1 first slice)
+- T-0010 — MCP auth middleware + AC-4 closure (build plan §4.1 second slice)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0010 — packages/daemon MCP auth middleware (build plan §4.1)
 - T-0011 — packages/daemon tool dispatch + ping (build plan §4.1)
 - T-0012 — packages/daemon tunnel manager (build plan §5)
 - T-0013 — packages/daemon main wiring + pidfile + state (build plan §6)
@@ -36,6 +35,16 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0009** — MCP server skeleton + HTTP transport + promise utility (CONFIRMED 2026-05-22; commit 7d78f91)
+  - All 19 gate-blocking AC passed; two reactive fixes (production-source `no-base-to-string`; tooling `maximumDefaultProjectFileMatchCount` raised to 50)
+  - `packages/daemon/src/util/promises.ts`: promisifyCallback + onceOrError (infrastructure for new code; existing T-0007/T-0008 sites unchanged)
+  - `packages/daemon/src/mcp/server.ts`: McpServer skeleton against @modelcontextprotocol/sdk v1.29; StreamableHTTPServerTransport in stateless mode; capabilities `tools: {}` (empty)
+  - 127.0.0.1 local bind by design; no auth (T-0010) or tools (T-0011) yet
+  - npm install: 0 new advisories from SDK chain (84 packages added)
+  - 13 new daemon tests (7 promises + 6 mcp server)
+  - 6th consecutive zero-fire on `no-floating-promises` / `no-misused-promises` for production code
+  - 93 cases total across 12 test files (89 passing + 4 platform-skipped)
+  - Deferred decision recorded: at P0 gate close, evaluate `tsconfig.test.json` refactor to retire the file-count-cap workaround
 - **T-0008** — Daemon IPC server + Q005 closure (CONFIRMED 2026-05-22; commit 9bee9c5)
   - All 18 gate-blocking AC passed; one reactive ESLint test-file override for unbound-method (mock-matcher edge case)
   - `packages/daemon/src/ipc/{protocol,server}.ts`: newline-delimited JSON IPC; cross-platform Unix socket / Windows named pipe; stale-socket cleanup via connect-probe; EADDRINUSE → IpcSocketBusyError
@@ -216,8 +225,15 @@ Findings from completed tasks that inform future task design:
 - Verbatim discipline for safety-relevant source files validated: server.ts paste-verbatim allowed direct verification of event-handler discipline. Continue for T-0009 mcp/server.ts.
 - Deferred-resolve Promise shape now at five instances across two tasks. Decision: extract to a small `util/promises.ts` utility (T-0009 deliverable) for new code; do NOT refactor existing sites. Refactor-for-refactor's-sake violates the methodology's "do exactly what was asked" disposition.
 
+**From T-0009:**
+- `recommendedTypeChecked` continues earning, in a new way: 6 consecutive tasks without `no-floating-promises` / `no-misused-promises` fires on production code; T-0009 fired on `no-base-to-string` which caught a real diagnostic-quality concern (`String(unknown)` producing `[object Object]`). Rule pack's value isn't single-shaped — catches bug patterns AND quality patterns.
+- Tooling-config reactive deviations normalized: three now (T-0006 glob; T-0008 test override; T-0009 file-count cap). All config-level, all justified. The growing-test-surface causing config evolution is predictable, not regressive.
+- Documentation-first triggers worked for MCP SDK: executor verified the SDK API surface against installed types before writing code. Build plan sketch matched closely; no large deviations. The discipline succeeded preventively.
+- Promise utility extracted cleanly: first consumers (start/stop in mcp/server.ts) used both helpers naturally. The deferred-resolve family captured infrastructure-side; no pattern doc needed.
+- Deferred decision recorded: at P0 → P1 transition, evaluate splitting tests into their own tsconfig to retire the file-count-cap workaround. Not actioning now.
+
 ## Handoff notes
 
-T-0008 committed (9bee9c5). T-0009 (MCP server skeleton + HTTP transport, first slice of §4.1) in progress. After T-0009 closes, T-0010 (auth middleware — closes AC-4) and T-0011 (tool dispatch + ping — closes AC-3 and AC-5) complete the §4.1 surface.
+T-0009 committed (7d78f91). T-0010 (MCP auth middleware; closes AC-4) in progress. T-0010 is the second slice of build plan §4.1: pure auth function + integration into the HTTP listener, with audit log entries for rejections. AC-4 closes here. After T-0010, T-0011 (tool dispatch + ping) closes AC-3 and AC-5, completing §4.1.
 
-Note: T-0009 has no AC closures from `01-p0-bus.md`. AC-4 closes at T-0010, AC-3/AC-5 at T-0011. T-0009 is infrastructure for those.
+Two scope decisions carried into T-0010 from orchestrator planning notes: (a) `mcp/auth.ts` is a pure function and `mcp/server.ts` wires it; (b) audit entries written only on rejection (T-0011 handles per-tool audit on success).
