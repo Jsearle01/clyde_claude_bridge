@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0004 CONFIRMED; T-0005 in progress (daemon logger — first daemon source).
+**Status:** T-0005 CONFIRMED; T-0006 in progress (daemon config layer; closes Q002).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0005 — Daemon logger (build plan §3.2)
+- T-0006 — Daemon config layer: paths, load, init, token generation (build plan §3.3); closes Q002
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0006 — packages/daemon config layer + token generation; closes Q002 (build plan §3.3)
 - T-0007 — packages/daemon audit log; closes Q003 (build plan §3.4)
 - T-0008 — packages/daemon IPC server; closes Q005 (build plan §3.5)
 - T-0009 — packages/daemon MCP server skeleton + HTTP transport (build plan §4.1)
@@ -40,6 +39,15 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0005** — Daemon logger + carried fixes + pattern promotion (CONFIRMED 2026-05-21; commit 4e74331)
+  - All 14 gate-blocking AC passed; second consecutive zero-deviation task
+  - `packages/daemon/src/log/logger.ts`: Promise-chain queue (CC-1), lazy file-handle open, idempotent close()
+  - `packages/daemon/tests/logger.test.ts`: 6 cases (4.a–4.f)
+  - Daemon tsconfig transition (second instance of lifecycle pattern)
+  - `packages/shared/src/ipc.ts`: `daemon_uptime_s` tightened to `.int().nonnegative()` (carried from T-0004 verdict)
+  - `patterns/project/test-token-fixtures.md` created at status `active` (two prior instances + one anticipated)
+  - `recommendedTypeChecked` ran clean on first real async code — calibration signal validated
+  - 30 tests total across 4 files
 - **T-0004** — Remaining shared contracts: audit, ipc, tools (CONFIRMED 2026-05-21; commit 2a516f7)
   - All 11 gate-blocking AC passed; **zero reactive deviations** (first such task)
   - `packages/shared/src/audit.ts` (AuditEntry interface — no trust boundary)
@@ -101,7 +109,7 @@ Project-specific patterns in `patterns/project/`. Status as of last conversation
 |---------|--------|------------------|-------|
 | `node-esm-imports.md` | **active** | promoted at T-0003 | Rules exercised in shared's src + tests; build/lint/test clean |
 | `zod-schema-validation.md` | **active** | promoted at T-0003 | ConfigSchema implements .strict() at trust boundary; test suite verifies pattern application |
-| `constant-time-compare.md` | draft | T-0006 (config layer token comparison) or T-0010 (MCP auth) | |
+| `constant-time-compare.md` | **active** | promoted at T-0006 | Used by `packages/daemon/src/config/token.ts` `constantTimeEqual` |
 | `test-token-fixtures.md` | **active** | created at T-0005 (codifies pattern observed in T-0003 + T-0004) | Inert conforming strings for token-format test fixtures; CC-4 corollary |
 
 Promotion from `draft` to `active` happens at orchestrator review after first real use.
@@ -153,6 +161,12 @@ Findings from completed tasks that inform future task design:
 - `recommendedTypeChecked` lint rules caught nothing for the second consecutive task — expected at the contract layer (no async, no unsafe patterns). Watch signal for T-0005 onward: first async code will be the real test of whether the rule set earns its cost or whether we're paying for unused enforcement.
 - Pattern promotion threshold validated: "inert conforming token strings" reached two confirmed instances (T-0003 + T-0004) — promoted to a proper pattern doc at T-0005 (with status `active`, not `draft`, because two instances already exist).
 
+**From T-0005:**
+- Two consecutive zero-deviation tasks (T-0004, T-0005). As patterns become active and the toolchain settles, the compounding effect makes well-bounded tasks one-shot.
+- `recommendedTypeChecked` validated on first real async code: zero fires, zero noise, queue/catch/void-method discipline all caught preventively. Continue with confidence; watch T-0006 onward for the second affirmative data point.
+- Pattern promotion threshold (two confirmed instances) worked for `test-token-fixtures.md` — created at status `active` rather than going through a `draft` phase since the prior use already validated the rule. Methodology's "promotion happens after first confirmed use" generalizes to "creation at `active` is fine when use already precedes the doc."
+- Two new pattern candidates flagged: "Async sink queue discipline" (await T-0007's audit log for second instance) and "Temp file lifecycle in tests" (await T-0006/T-0007 for second/third instances; promote to conventions.md note if it recurs).
+
 ## Handoff notes
 
-T-0004 committed. T-0005 (daemon logger — first daemon source file) in progress. Carries the `daemon_uptime_s` schema tighten and the `test-token-fixtures.md` pattern promotion bundled in. After T-0005 closes, T-0006 begins config layer (config dir resolution, config file load/init, token generation — closes Q002).
+T-0005 committed (4e74331). T-0006 (daemon config layer; closes Q002) in progress. After T-0006 closes, T-0007 begins audit log (build plan §3.4; closes Q003; second instance for the "Async sink queue discipline" pattern candidate).

@@ -102,7 +102,8 @@ if (!constantTimeEqual(presented, expected)) {
 - `01-p0-bus.md` §Auth — "constant-time compare against the canonical token in config"
 
 ## Status
-draft (pre-populated 2026-05-21; promotes to active on first confirmed use in T-0006 / T-0010)
+active (promoted 2026-05-21 at T-0006 closure — `constantTimeEqual` implementation in `packages/daemon/src/config/token.ts` follows the pattern's example verbatim; tests 11.d, 11.e, 11.f, 11.g verify behavior)
 
 ## History
 - 2026-05-21: pre-populated during day-zero setup, based on `p0-build-plan.md` §3.3 auth requirements and `01-p0-bus.md` §Auth.
+- 2026-05-21: promoted from draft to active at T-0006 closure. First real use in `packages/daemon/src/config/token.ts`'s `constantTimeEqual`. Token-comparison call site (MCP auth) lands at T-0010.

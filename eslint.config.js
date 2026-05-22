@@ -15,7 +15,10 @@ export default tseslint.config(
         // per the AC-5 design choice) get a default project so type-aware
         // rules still apply to them.
         projectService: {
-          allowDefaultProject: ["packages/*/tests/*.test.ts"],
+          allowDefaultProject: [
+            "packages/*/tests/*.test.ts",
+            "packages/*/tests/*/*.test.ts",
+          ],
         },
         tsconfigRootDir: import.meta.dirname,
       },

@@ -13,11 +13,13 @@ Numbered Q-items with lifecycle OPEN / TRIED / CLOSED / DEFERRED per methodology
 
 ## Q002 — base32 implementation source
 
-**State:** OPEN
-**Context:** Token generation needs RFC 4648 base32 encoding. Build plan §3.3 suggests either `base32-encode` package or a hand-rolled ~30-line implementation. Hand-roll has zero-dep advantage and the algorithm is simple; package is more standard.
-**Tried:** (none)
-**Tentative resolution:** Hand-roll. Single use site, ~30 lines, well-specified algorithm. A dep for this isn't worth the supply-chain surface.
-**Closure target:** T-0006 (config layer / token generation).
+**State:** CLOSED (2026-05-21)
+**Context:** Token generation needs RFC 4648 base32 encoding. Build plan §3.3 suggested either `base32-encode` package or a hand-rolled ~30-line implementation. Hand-roll has zero-dep advantage and the algorithm is simple; package is more standard.
+**Tried:** (none — fast decision)
+**Resolution:** **Hand-rolled.** The encoder is a private function inside `packages/daemon/src/config/token.ts`, ~25 lines. RFC 4648 alphabet (A–Z + 2–7), 5-bits-at-a-time over 20-byte random input → 32 char output, no padding required (20 bytes = 160 bits is an exact multiple of 5). Tested via 11.a/11.b/11.c: format match, entropy sanity, alphabet conformance.
+**Implementation pointer:** `packages/daemon/src/config/token.ts` (T-0006 commit).
+**Why not the package:** single use site, ~25 lines including comments, well-specified algorithm, dep adds supply-chain surface for trivial gain.
+**Why not the build plan's modulo-bias version:** the build plan flagged it explicitly as wrong ("Don't ship the modulo bias version"). Real base32 uses 5-bit reads, not `byte % 32`, which would produce a non-uniform distribution over the alphabet.
 
 ## Q003 — Audit log rotation timing strategy
 
