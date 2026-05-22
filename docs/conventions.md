@@ -31,7 +31,7 @@ This conventions doc does not duplicate that content. It captures only what's pr
 | Module system | ESM (NodeNext) |
 | Build | TypeScript project references; `npm run build` from repo root |
 | Test framework | Vitest (Q006 CLOSED 2026-05-21) |
-| Lint | ESLint flat config (see Q001 — closure target T-0003) |
+| Lint | ESLint flat config (`typescript-eslint`, `recommendedTypeChecked`); see `eslint.config.js` |
 | Strict mode | on |
 | `noUncheckedIndexedAccess` | true |
 

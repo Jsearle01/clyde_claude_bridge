@@ -4,11 +4,12 @@ Numbered Q-items with lifecycle OPEN / TRIED / CLOSED / DEFERRED per methodology
 
 ## Q001 — Linter choice
 
-**State:** OPEN
-**Context:** Build plan §1.1 references `npm run lint --workspaces` but doesn't pick a linter. ESLint flat config is the modern default; Biome is the alternative (faster, all-in-one, but newer and may lag on TS coverage).
-**Tried:** (none — closure target moved from T-0001/T-0002 to T-0003 because there are no source files to lint until T-0003 adds Config schema)
-**Tentative resolution:** ESLint with `@typescript-eslint/parser` and the `recommended-type-checked` ruleset. Flat config (`eslint.config.js`) at repo root.
-**Closure target:** T-0003 (first source file lands).
+**State:** CLOSED (2026-05-21)
+**Context:** Build plan §1.1 referenced `npm run lint --workspaces` but didn't pick a linter. ESLint flat config is the modern default; Biome was the alternative (faster, all-in-one, but newer and may lag on TS coverage).
+**Tried:** Deferred from T-0001 → T-0002 → T-0003 because there was no source code to lint until T-0003 introduced `packages/shared/src/config.ts`. Adding lint earlier would have been busywork.
+**Resolution:** **ESLint flat config** with `typescript-eslint` (v8+ meta-package, flat-config-native), using `eslint.configs.recommended` + `tseslint.configs.recommendedTypeChecked`. `projectService: true` for monorepo tsconfig auto-discovery. `eslint.config.js` lives at repo root; per-workspace `lint` scripts invoke `eslint src tests`.
+**Rationale for type-checked rules:** the type-aware rules (especially `no-floating-promises`, `no-misused-promises`) directly enforce CC-1 (async error handling). Lint runs slightly slower; for project size this is invisible.
+**Implementation pointer:** `eslint.config.js` (T-0003 commit), root `package.json` devDeps (`eslint`, `typescript-eslint`, `@eslint/js`), `packages/shared/package.json` script `"lint": "eslint src tests"`.
 
 ## Q002 — base32 implementation source
 

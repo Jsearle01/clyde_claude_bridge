@@ -108,7 +108,8 @@ const IpcRequestSchema = z.object({ kind: z.string() });  // anything-goes
 - Zod docs: https://zod.dev
 
 ## Status
-draft (pre-populated 2026-05-21; promotes to active on first confirmed use in T-0003)
+active (promoted 2026-05-21 at T-0003 closure — `ConfigSchema` in `packages/shared/src/config.ts` implements the pattern; `.strict()` addition catches typos in user config; test suite verifies happy-path, defaults, missing-required, bad-format, and strict-rejection cases)
 
 ## History
 - 2026-05-21: pre-populated during day-zero setup, based on `p0-build-plan.md` §2.2 and §4 schemas.
+- 2026-05-21: promoted from draft to active at T-0003 closure. `ConfigSchema` uses `.strict()` at top level per the pattern's trust-boundary rule. Five-case test suite (`tests/config.test.ts`) verifies pattern application: happy path, defaults, missing required field, invalid token regex, extra-key rejection.

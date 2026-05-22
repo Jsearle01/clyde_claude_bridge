@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0002 CONFIRMED; T-0002.5 queued (line-ending hygiene).
+**Status:** T-0002.5 CONFIRMED; T-0003 in progress (first source file — Config schema).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0002.5 — .gitattributes + line-ending renormalization (out-of-sequence; corrects T-0001 oversight)
+- T-0003 — Config schema in @claude-bridge/shared (build plan §2.1, §2.2 first slice)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0003 — packages/shared deps + Config schema; closes Q001 (linter) (build plan §2.1, §2.2)
 - T-0004 — packages/shared remaining contracts: audit, ipc, tools (build plan §2.2)
 - T-0005 — packages/daemon logger (build plan §3.2)
 - T-0006 — packages/daemon config layer + token generation; closes Q002 (build plan §3.3)
@@ -43,6 +42,12 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0002.5** — Line-ending hygiene + T-0002 closure docs (CONFIRMED 2026-05-21; commit 6490ed7)
+  - `.gitattributes` created at repo root; `* text=auto eol=lf` + per-extension explicits + binary list
+  - `git add --renormalize .` confirmed index never held CRLF (bug was prospective)
+  - Boundary test (re-stage T-0001-era file) produces zero LF/CRLF warning — load-bearing AC passed
+  - Three doc edits applied per spec; open-questions.md confirmed no-change needed
+  - First task using doc-edit-delta dispatch protocol — worked cleanly
 - **T-0002** — Package skeletons (CONFIRMED 2026-05-21; commit e0bf6c9)
   - All 9 gate-blocking AC passed
   - Three workspace packages (`@claude-bridge/{shared,daemon,cli}`) with TS project references
@@ -90,6 +95,7 @@ Promotion from `draft` to `active` happens at orchestrator review after first re
 See `open-questions.md`.
 
 Recent activity (this conversation):
+- **Q001 CLOSED** — ESLint flat config with typescript-eslint v8+ and `recommendedTypeChecked` ruleset; `eslint.config.js` at repo root; `projectService: true` for monorepo discovery (closed at T-0003).
 - **Q006 CLOSED** — vitest ^1.4.0 with standing-advisory tracking (decided 2026-05-21).
 - **Q001 OPEN** — closure target moved from "T-0001 or T-0002" → T-0003 (no source files to lint until then; adding ESLint to scaffolding-only tasks is busywork).
 - Q002, Q003, Q004, Q005 unchanged.
@@ -116,8 +122,13 @@ Findings from completed tasks that inform future task design:
 - Out-of-sequence task numbering: T-0002.5 used. Mid-decimal IDs reserved for "inserted between" semantics; T-NNNN integer IDs stay aligned to build plan sections. No methodology revision needed; this convention is self-explanatory.
 - Process refinement: the orchestrator was producing full new doc files each task. Switched to delta instructions in the executor prompt — the executor edits in place, one new file per dispatch (the prompt itself).
 
+**From T-0002.5:**
+- Doc-edit-delta dispatch protocol works. Verbatim before/after strings in the prompt made the Edit-tool operations mechanical. Explicit "no edits expected here" sections (AC-7 for open-questions.md) prevent drift-by-omission.
+- Watched item, not yet codified: if a doc drifts between prompt-authoring and prompt-execution, an Edit-tool delta would fail on a missing `old_string`. Mitigation that worked: executor reads target files before applying edits. Promote to methodology rule only if this bites us empirically.
+- "Prospective vs retroactive" framing for warnings: distinguish between "the bad thing already happened" (retroactive) vs "the bad thing will happen later if you don't intervene" (prospective). T-0002.5's LF/CRLF warnings were prospective. Useful diagnostic frame when interpreting any verification warning.
+
 ## Handoff notes
 
-T-0002 committed (e0bf6c9). T-0002.5 (out-of-sequence) addresses line-ending hygiene discovered at commit time. After T-0002.5 closes, T-0003 is next: Config schema in `packages/shared/src/config.ts`, Q001 closure (ESLint), `node-esm-imports.md` and `zod-schema-validation.md` first real-use → promotion candidates.
+T-0002.5 committed (6490ed7). T-0003 (Config schema, first source file) in progress. After T-0003 closes, T-0004 picks up the remaining shared contracts (audit, ipc, tools) using the now-active patterns and the now-configured ESLint/vitest setup.
 
-Working pattern note: orchestrator now produces only the executor prompt per dispatch; doc edits live as delta instructions inside the prompt. Executor edits docs in place rather than receiving full replacement files.
+Working pattern: orchestrator produces one prompt file per dispatch; doc edits live as delta instructions inside the prompt; executor edits in place.

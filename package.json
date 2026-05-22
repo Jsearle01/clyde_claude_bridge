@@ -14,8 +14,11 @@
     "lint": "npm run lint --workspaces --if-present"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^20.11.0",
+    "eslint": "^10.4.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.4.0",
-    "@types/node": "^20.11.0"
+    "typescript-eslint": "^8.59.4",
+    "vitest": "^1.4.0"
   }
 }

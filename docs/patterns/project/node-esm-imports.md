@@ -74,7 +74,8 @@ import zod from "zod";  // when the package's main export is named
 - TS NodeNext docs: https://www.typescriptlang.org/docs/handbook/modules/reference.html#node16-nodenext
 
 ## Status
-draft (pre-populated 2026-05-21; promotes to active on first confirmed use in T-0001)
+active (promoted 2026-05-21 at T-0003 closure — rules exercised in `packages/shared/src/{config.ts,index.ts}` and tests; build + lint + test all clean)
 
 ## History
 - 2026-05-21: pre-populated during day-zero setup, based on `p0-build-plan.md` §1.1 tsconfig requirements.
+- 2026-05-21: promoted from draft to active at T-0003 closure. First real exercise of the `.js` extension rule (in `src/index.ts`'s `export * from "./config.js"`) and the `node:` prefix discipline (in `src/config.ts`'s import of `zod` — not a builtin so no `node:` needed, but the test file's imports demonstrate the discipline). Build clean, lint clean, test clean.
