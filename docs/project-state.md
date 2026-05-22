@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0009 CONFIRMED; T-0010 in progress (MCP auth middleware; closes AC-4).
+**Status:** T-0010 CONFIRMED; T-0011 in progress (tool dispatch + ping; closes AC-3 and AC-5; completes build plan §4.1).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0010 — MCP auth middleware + AC-4 closure (build plan §4.1 second slice)
+- T-0011 — Tool dispatch + ping tool + pattern-doc creation (build plan §4.1 third slice; completes §4.1)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0011 — packages/daemon tool dispatch + ping (build plan §4.1)
 - T-0012 — packages/daemon tunnel manager (build plan §5)
 - T-0013 — packages/daemon main wiring + pidfile + state (build plan §6)
 - T-0014 — packages/cli ipc-client (build plan §7.2)
@@ -35,6 +34,15 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0010** — MCP auth middleware (CONFIRMED 2026-05-22; commit 4a13e06)
+  - AC-4 IMPLEMENTED (verification at T-0019 end-to-end)
+  - `packages/daemon/src/mcp/auth.ts`: pure authenticate() with discriminated AuthResult (missing_header / malformed_header / invalid_token)
+  - `packages/daemon/src/mcp/server.ts`: 401-no-body on failure + tool:"<auth>" sentinel audit entry with input_hash:"sha256:n/a"
+  - constant-time-compare.md FIRST AC-blocking exercise
+  - getExpectedToken thunk shape supports future T-0017 token rotation
+  - 1 reactive lint fix: Array.isArray's any-cascade under recommendedTypeChecked → unknown+typeof helper pattern (carried to T-0011 as new pattern doc)
+  - 13 new daemon tests; 102 cases total across 13 test files
+  - 7th consecutive zero-fire on async-discipline rules; type-safety rules continue earning
 - **T-0009** — MCP server skeleton + HTTP transport + promise utility (CONFIRMED 2026-05-22; commit 7d78f91)
   - All 19 gate-blocking AC passed; two reactive fixes (production-source `no-base-to-string`; tooling `maximumDefaultProjectFileMatchCount` raised to 50)
   - `packages/daemon/src/util/promises.ts`: promisifyCallback + onceOrError (infrastructure for new code; existing T-0007/T-0008 sites unchanged)
@@ -146,6 +154,7 @@ Project-specific patterns in `patterns/project/`. Status as of last conversation
 | `constant-time-compare.md` | **active** | promoted at T-0006 | Used by `packages/daemon/src/config/token.ts` `constantTimeEqual` |
 | `test-token-fixtures.md` | **active** | created at T-0005 (codifies pattern observed in T-0003 + T-0004) | Inert conforming strings for token-format test fixtures; CC-4 corollary |
 | `async-sink-queue.md` | **active** | created at T-0007 (codifies pattern observed in T-0005 logger + T-0007 audit log) | Queue + lazy handle + idempotent close shape; departure point is whether per-call API returns void or flushed Promise |
+| `safe-narrow-of-unknown-shape.md` | draft (created at T-0011) | Codifies T-0010's Array.isArray pitfall; awaiting second instance for promotion to active | Promote to active if T-0011 produces a second instance (it did not; stays draft) |
 
 Promotion from `draft` to `active` happens at orchestrator review after first real use.
 
@@ -232,8 +241,14 @@ Findings from completed tasks that inform future task design:
 - Promise utility extracted cleanly: first consumers (start/stop in mcp/server.ts) used both helpers naturally. The deferred-resolve family captured infrastructure-side; no pattern doc needed.
 - Deferred decision recorded: at P0 → P1 transition, evaluate splitting tests into their own tsconfig to retire the file-count-cap workaround. Not actioning now.
 
+**From T-0010:**
+- AC-4 IMPLEMENTED. `constant-time-compare.md` earns its first AC-blocking exercise — four-task gap between pattern pre-population (T-0001) and first AC-binding use (T-0010) validates the pre-populate-then-discover rhythm: the pattern was ready when the security boundary needed it.
+- `recommendedTypeChecked` delivers TWO distinct value streams. Async discipline rules deliver preventively (code design naturally avoids those bugs across 7 tasks); type-safety rules deliver reactively (catches no-base-to-string, unbound-method, no-unsafe-*-cascade). Rule pack value is not single-shaped.
+- Array.isArray pitfall codified: under `recommendedTypeChecked`, `Array.isArray`'s built-in predicate `arg is any[]` collapses narrowing to any. Workaround pattern (unknown + typeof + re-narrow) is recorded in `safe-narrow-of-unknown-shape.md` at status draft.
+- Audit-on-rejection-only is the right scope decision. T-0010's 15.j cleanly verifies that successful requests produce no `<auth>` entry; T-0011 layers per-tool audit on top. Two audit layers compose naturally without schema stress on AuditEntry.
+
 ## Handoff notes
 
-T-0009 committed (7d78f91). T-0010 (MCP auth middleware; closes AC-4) in progress. T-0010 is the second slice of build plan §4.1: pure auth function + integration into the HTTP listener, with audit log entries for rejections. AC-4 closes here. After T-0010, T-0011 (tool dispatch + ping) closes AC-3 and AC-5, completing §4.1.
+T-0010 committed (4a13e06). T-0011 (tool dispatch + ping; closes AC-3 and AC-5; completes build plan §4.1) in progress. After T-0011 closes, T-0012 begins tunnel manager (cloudflared subprocess + respawn policy; closes AC-6). T-0011 also creates `safe-narrow-of-unknown-shape.md` at status draft.
 
-Two scope decisions carried into T-0010 from orchestrator planning notes: (a) `mcp/auth.ts` is a pure function and `mcp/server.ts` wires it; (b) audit entries written only on rejection (T-0011 handles per-tool audit on success).
+Four scope decisions carried from planning notes: (a) minimal DaemonState (T-0013 extends); (b) full ToolRegistry per build plan, not inline shortcut; (c) centralized audit-write in ToolRegistry.invoke; (d) documentation-first verification of SDK tool-handler API.

@@ -1,14 +1,14 @@
-// MCP server skeleton + HTTP transport + bearer-token auth (build plan §4.1,
-// first two slices). Bound to 127.0.0.1 by default; the tunnel (T-0012)
-// routes external traffic here. This slice ships auth (T-0010 / AC-4) but
-// no tools (T-0011 — closes AC-3, AC-5). The server announces the `tools`
-// capability but registers zero tools.
+// MCP server + HTTP transport + bearer-token auth + tool dispatch
+// (build plan §4.1, complete). Bound to 127.0.0.1 by default; the tunnel
+// (T-0012) routes external traffic here.
 //
-// Documentation-first: this implementation targets `@modelcontextprotocol/sdk`
-// v1.29, which exposes `Server` from `server/index.js` and
-// `StreamableHTTPServerTransport` from `server/streamableHttp.js`. The
-// transport's `handleRequest(req, res)` is what the HTTP listener calls
-// per-request after authentication.
+// Targets `@modelcontextprotocol/sdk` v1.29 with `StreamableHTTPServerTransport`
+// in stateless mode. Tools/list and tools/call dispatch through the project's
+// own `ToolRegistry` (T-0011) which centralizes per-call auditing.
+//
+// Per-request context (request_id, remote_addr) is plumbed through
+// AsyncLocalStorage so the SDK's request handler callbacks can read it
+// without coupling to the HTTP-level handler.
 
 import {
   createServer as createHttpServer,
@@ -17,16 +17,39 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createRequire } from "node:module";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Server as McpSdkServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+  type CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "../log/logger.js";
 import type { AuditLog } from "../audit/log.js";
+import type { DaemonState } from "../state.js";
 import { authenticate, type AuthFailureReason } from "./auth.js";
 import { onceOrError, promisifyCallback } from "../util/promises.js";
+import {
+  ToolRegistry,
+  ToolNotFoundError,
+  ToolInputError,
+  type ToolContext,
+} from "./dispatch.js";
 
 const localRequire = createRequire(import.meta.url);
 const pkg = localRequire("../../package.json") as { version: string };
+
+interface RequestContextData {
+  request_id: string;
+  remote_addr: string;
+}
+
+// Module-scope ALS — one per process. Each HTTP request runs its async
+// continuation inside `requestContext.run({...}, ...)`; the SDK's request
+// handler callbacks read via `requestContext.getStore()`.
+const requestContext = new AsyncLocalStorage<RequestContextData>();
 
 function isErrnoCode(err: unknown, code: string): boolean {
   return (
@@ -39,14 +62,20 @@ function generateRequestId(): string {
   return "req_" + randomBytes(4).toString("hex");
 }
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return "unknown";
+}
+
 export interface McpServerOpts {
   bindHost: string;
   bindPort: number;
   logger: Logger;
-  // Thunk for the expected token — read fresh on every request so token
-  // rotation (T-0017) takes effect without recreating the server.
   getExpectedToken: () => string;
   auditLog: AuditLog;
+  state: DaemonState;
+  registry: ToolRegistry;
 }
 
 export class McpBindError extends Error {
@@ -76,8 +105,25 @@ export class McpServer {
       { capabilities: { tools: {} } },
     );
 
+    // Wire tools/list and tools/call to the project's ToolRegistry. The
+    // request_id and remote_addr for the ToolContext come from
+    // AsyncLocalStorage set at the HTTP listener level.
+    mcp.setRequestHandler(ListToolsRequestSchema, () => {
+      return Promise.resolve({ tools: this.opts.registry.list() });
+    });
+
+    mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
+      return this.handleToolsCall(request.params.name, request.params.arguments);
+    });
+
+    // Stateful mode: the SDK generates a session ID on initialize and the
+    // client echoes it on subsequent requests. Stateless mode (passing
+    // `sessionIdGenerator: undefined`) was tried first but the SDK v1.29
+    // returns 500 on the `notifications/initialized` follow-up in that mode.
+    // Per-process session scope is fine for P0 (one Claude.ai connector
+    // per daemon).
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
+      sessionIdGenerator: () => randomUUID(),
     });
     await mcp.connect(transport);
 
@@ -87,8 +133,7 @@ export class McpServer {
       },
     );
     httpServer.on("error", (err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.opts.logger.warn("mcp http server error", { error: msg });
+      this.opts.logger.warn("mcp http server error", { error: errorMessage(err) });
     });
 
     const listenSettled = onceOrError<void>(httpServer, "listening", "error");
@@ -125,8 +170,6 @@ export class McpServer {
 
     const authResult = authenticate(req, this.opts.getExpectedToken());
     if (!authResult.ok) {
-      // Per AC-9 / 01-p0-bus.md §Auth: 401 with no body, no
-      // WWW-Authenticate header (defensive against scheme advertisement).
       res.writeHead(401);
       res.end();
       const durationMs = Date.now() - startMs;
@@ -139,15 +182,72 @@ export class McpServer {
       return;
     }
 
-    // Authenticated — delegate to the MCP transport. Per-tool audit lands at
-    // T-0011 (closes AC-5).
-    void transport.handleRequest(req, res).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.opts.logger.warn("mcp transport.handleRequest failed", {
-        error: msg,
-        request_id: requestId,
-      });
-    });
+    // Authenticated — run the SDK dispatch inside an ALS context so the
+    // tools/call handler can read request_id and remote_addr.
+    void requestContext.run(
+      { request_id: requestId, remote_addr: remoteAddr },
+      () =>
+        transport.handleRequest(req, res).catch((err: unknown) => {
+          this.opts.logger.warn("mcp transport.handleRequest failed", {
+            error: errorMessage(err),
+            request_id: requestId,
+          });
+        }),
+    );
+  }
+
+  private async handleToolsCall(
+    name: string,
+    args: unknown,
+  ): Promise<CallToolResult> {
+    const ctxData = requestContext.getStore();
+    if (ctxData === undefined) {
+      // Should not happen — handleHttpRequest always runs the SDK dispatch
+      // inside ALS. Defensive: if it does, we still produce a well-formed
+      // CallToolResult rather than throwing into the SDK.
+      return {
+        content: [
+          { type: "text", text: "internal error: missing request context" },
+        ],
+        isError: true,
+      };
+    }
+
+    const ctx: ToolContext = {
+      request_id: ctxData.request_id,
+      remote_addr: ctxData.remote_addr,
+      auditLog: this.opts.auditLog,
+      logger: this.opts.logger,
+      state: this.opts.state,
+    };
+
+    try {
+      const output = await this.opts.registry.invoke(name, args, ctx);
+      // Wrap the tool's structured output as both a text content block (the
+      // SDK's required surface) and a structuredContent record (typed JSON
+      // for clients that want it without re-parsing the text).
+      const text = JSON.stringify(output);
+      const result: CallToolResult = {
+        content: [{ type: "text", text: text ?? "" }],
+      };
+      if (typeof output === "object" && output !== null && !Array.isArray(output)) {
+        result.structuredContent = output as Record<string, unknown>;
+      }
+      return result;
+    } catch (err) {
+      let text: string;
+      if (err instanceof ToolNotFoundError) {
+        text = `tool not found: ${err.toolName}`;
+      } else if (err instanceof ToolInputError) {
+        text = `invalid input: ${err.message}`;
+      } else {
+        text = `internal error: ${errorMessage(err)}`;
+      }
+      return {
+        content: [{ type: "text", text }],
+        isError: true,
+      };
+    }
   }
 
   private async auditAuthFailure(args: {
@@ -159,12 +259,7 @@ export class McpServer {
     try {
       await this.opts.auditLog.append({
         ts: new Date().toISOString(),
-        // Sentinel for pre-dispatch failures; angle brackets keep these
-        // grep-distinguishable from real tool entries (T-0011).
         tool: "<auth>",
-        // CC-4: never hash the presented token (a hash would be a side
-        // channel testable against guessed tokens). The literal "sha256:n/a"
-        // keeps the AuditEntry shape valid while signaling no hashable input.
         input_hash: "sha256:n/a",
         allowed: false,
         reason: args.reason,
@@ -174,12 +269,8 @@ export class McpServer {
         remote_addr: args.remoteAddr,
       });
     } catch (err) {
-      // AuditLog already surfaces internal write failures to stderr via the
-      // queue's catch. This catch keeps the void-discarded caller from
-      // producing an unhandled rejection if the per-write Promise rejects.
-      const msg = err instanceof Error ? err.message : String(err);
       this.opts.logger.warn("audit-write failed for auth rejection", {
-        error: msg,
+        error: errorMessage(err),
         request_id: args.requestId,
       });
     }
