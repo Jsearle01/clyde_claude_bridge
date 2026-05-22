@@ -7,7 +7,7 @@ import { z } from "zod";
 export const StatusPayloadSchema = z
   .object({
     daemon_pid: z.number().int().nonnegative(),
-    daemon_uptime_s: z.number().nonnegative(),
+    daemon_uptime_s: z.number().int().nonnegative(),
     endpoint: z.string(),                       // e.g. "127.0.0.1:7423"
     tunnel_status: z.enum(["up", "degraded", "down"]),
     tunnel_url: z.string().nullable(),

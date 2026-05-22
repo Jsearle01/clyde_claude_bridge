@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0003 CONFIRMED; T-0004 in progress (remaining shared contracts).
+**Status:** T-0004 CONFIRMED; T-0005 in progress (daemon logger — first daemon source).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0004 — Remaining shared contracts: audit, ipc, tools (build plan §2.2)
+- T-0005 — Daemon logger (build plan §3.2)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0005 — packages/daemon logger (build plan §3.2)
 - T-0006 — packages/daemon config layer + token generation; closes Q002 (build plan §3.3)
 - T-0007 — packages/daemon audit log; closes Q003 (build plan §3.4)
 - T-0008 — packages/daemon IPC server; closes Q005 (build plan §3.5)
@@ -41,6 +40,15 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0004** — Remaining shared contracts: audit, ipc, tools (CONFIRMED 2026-05-21; commit 2a516f7)
+  - All 11 gate-blocking AC passed; **zero reactive deviations** (first such task)
+  - `packages/shared/src/audit.ts` (AuditEntry interface — no trust boundary)
+  - `packages/shared/src/ipc.ts` (IpcRequestSchema + IpcResponseSchema as discriminated unions with .strict() per variant; StatusPayloadSchema; trust boundary)
+  - `packages/shared/src/tools.ts` (PingInputSchema schema + PingOutput interface)
+  - `packages/shared/src/index.ts` extended to re-export all four modules
+  - 19 new tests across 2 files (24 total in shared)
+  - `packages/shared` feature-complete for P0
+  - Carried forward: `daemon_uptime_s` schema tighten + "inert conforming tokens" pattern promotion → T-0005
 - **T-0003** — Config schema in @claude-bridge/shared (CONFIRMED 2026-05-21; commit 74b853e)
   - All 13 gate-blocking AC passed; first impl: commit on the project
   - `packages/shared/src/config.ts` (ConfigSchema with .strict() at trust boundary) + index.ts re-export
@@ -94,6 +102,7 @@ Project-specific patterns in `patterns/project/`. Status as of last conversation
 | `node-esm-imports.md` | **active** | promoted at T-0003 | Rules exercised in shared's src + tests; build/lint/test clean |
 | `zod-schema-validation.md` | **active** | promoted at T-0003 | ConfigSchema implements .strict() at trust boundary; test suite verifies pattern application |
 | `constant-time-compare.md` | draft | T-0006 (config layer token comparison) or T-0010 (MCP auth) | |
+| `test-token-fixtures.md` | **active** | created at T-0005 (codifies pattern observed in T-0003 + T-0004) | Inert conforming strings for token-format test fixtures; CC-4 corollary |
 
 Promotion from `draft` to `active` happens at orchestrator review after first real use.
 
@@ -139,6 +148,11 @@ Findings from completed tasks that inform future task design:
 - Orchestrator-side error caught by executor: the prompt's eslint.config.js template used the same `**` glob in both `files:` (ESLint matcher, allowed) and `allowDefaultProject:` (parserOption, disallowed). Lesson: when a prompt template includes config shared across tool boundaries, check that the same patterns are valid in every place they appear. Adding to orchestrator checklist for config-heavy prompts.
 - Verbatim source-file reporting at the right cadence. Verbatim config.ts, index.ts, config.test.ts, eslint.config.js; summarized everything else. Verification was complete from the report alone; no round-tripping needed.
 
+**From T-0004:**
+- First zero-deviation task. Prompts that name design choices explicitly (the schemas-vs-interfaces table) and leave structure flexibility (it.each as suggestion not mandate) produce clean executions when the toolchain is settled.
+- `recommendedTypeChecked` lint rules caught nothing for the second consecutive task — expected at the contract layer (no async, no unsafe patterns). Watch signal for T-0005 onward: first async code will be the real test of whether the rule set earns its cost or whether we're paying for unused enforcement.
+- Pattern promotion threshold validated: "inert conforming token strings" reached two confirmed instances (T-0003 + T-0004) — promoted to a proper pattern doc at T-0005 (with status `active`, not `draft`, because two instances already exist).
+
 ## Handoff notes
 
-T-0003 committed (74b853e). T-0004 (remaining shared contracts: audit, ipc, tools) in progress. After T-0004 closes, `packages/shared` is feature-complete for P0; T-0005 starts daemon code consuming these contracts.
+T-0004 committed. T-0005 (daemon logger — first daemon source file) in progress. Carries the `daemon_uptime_s` schema tighten and the `test-token-fixtures.md` pattern promotion bundled in. After T-0005 closes, T-0006 begins config layer (config dir resolution, config file load/init, token generation — closes Q002).
