@@ -6,7 +6,7 @@ Phases here align with the gate sequence in `00-overview.md`. Each phase is a bo
 
 | Phase | Description | Status | Design doc |
 |-------|-------------|--------|------------|
-| P0 | Bus validation | **GATE-REVIEW-READY** (pending AC-9 Unix-host run + AC-10 24-hour or clock-fake observation) | `01-p0-bus.md` |
+| P0 | Bus validation | **GATE-REVIEW-READY** (pending only AC-10 24-hour or clock-fake observation; AC-9 verified on WSL 2026-05-23) | `01-p0-bus.md` |
 | P1 | Headless delegation | NOT STARTED | Written after P0 ships |
 | P2 | VS Code extension | NOT STARTED | Written after P1 ships |
 | P3 | Polish (last-shell, named tunnels, autostart) | NOT STARTED | Written after P2 ships |
@@ -36,7 +36,7 @@ Derived from the 10 P0 acceptance criteria in `01-p0-bus.md`. When the last bloc
 | AC-6 | Killing cloudflared respawns within 30s with new URL; status reflects new URL | **VERIFIED** | T-0012 + T-0019 acceptance run | Acceptance harness 2026-05-23 step 6 PASS: cloudflared killed by PID, daemon's TunnelManager respawned within the window, new URL observed via status (differed from original). manager.test.ts 15.c/15.d cover the mechanism in unit form. Manual `degraded`-recovery path: `claude-bridge tunnel restart` (T-0017). |
 | AC-7 | `claude-bridge stop` cleanly shuts down both processes, removes PID file, flushes audit log | **VERIFIED** | T-0016 + T-0008 + T-0013 + T-0019 acceptance run | Acceptance harness 2026-05-23 step 7 PASS: stop returns `Stopped.`, PID file absent after wait. CLI-side unit tests + SMOKE-3 14ms reverse-instantiation cover the breakdown. |
 | AC-8 | `claude-bridge token rotate` generates new token, invalidates old (verified 401), prints new | **VERIFIED** | T-0017 + T-0013 + T-0010 + T-0019 acceptance run | Acceptance harness 2026-05-23 step 8 PASS: rotated cb_live_...ZR73 → cb_live_...N35O; old token receives 401, new token successfully pings. End-to-end exercise of the in-memory thunk + on-disk config + auth middleware chain. |
-| AC-9 | Daemon refuses to start if `config.json` permissions are looser than 0600 on Unix | IMPLEMENTED (VERIFIED-ON-UNIX-PENDING) | T-0006 (`loadConfig`) + T-0019 acceptance run | Acceptance harness 2026-05-23 step 9 SKIP with note: daemon's `checkConfigPermissions` is a no-op on Windows by design (CC-3); unit test 13.f exercises the Unix path. End-to-end Unix-host run still required before P0 close. |
+| AC-9 | Daemon refuses to start if `config.json` permissions are looser than 0600 on Unix | **VERIFIED** | T-0006 (`loadConfig`) + T-0019.6 WSL verification 2026-05-23 | Verified on WSL (Ubuntu, Linux 6.6.87.2-microsoft-standard-WSL2). Procedure: first start created config at `-rw-------`; `chmod 0644` then `start` exited 1 with `Daemon failed to start: daemon startup failed: Config file at /home/jaysearle/.claude-bridge/config.json has loose permissions (0644); must be 0600`; `chmod 0600` restored normal start. Full verbatim transcript in T-0019.6 report. Windows hosts intentionally no-op the check (CC-3). |
 | AC-10 | Audit log rotates at midnight UTC; previous day's file renamed `audit-YYYY-MM-DD.jsonl` | IMPLEMENTED (MANUAL-VERIFIED-AT-GATE) | T-0007 (`audit/log.ts` hybrid midnight timer + per-append guardrail) + T-0019 acceptance run | Acceptance harness 2026-05-23 step 10 SKIP with note: rotation requires either a 24-hour wait or a clock-fake harness. Unit tests in T-0007 audit/log.test.ts cover the mechanism; live midnight rotation reviewed manually at P0 gate. |
 
 ## Phase-to-task mapping

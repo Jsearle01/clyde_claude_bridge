@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** T-0019.5 CONFIRMED; T-0020 in progress (README + runbook — last P0 task). **Steady-state operating mode**.
+**Status:** T-0020 CONFIRMED; T-0019.6 in progress (AC-9 verification on WSL). **Steady-state operating mode**. **P0 gate-review-ready** (9-of-10 mechanically verified; AC-10 awaits midnight observation or accept-as-unit-tested).
 
 ## Gate status
 
@@ -20,12 +20,19 @@
 ## Task queue
 
 ### In progress
-- T-0020 — README + runbook (Definition of done items; last P0 task)
+- T-0019.6 — AC-9 verification on WSL (Linux file-mode permission check; insert task)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- (none — P0 task list complete after T-0020 closes)
+- (none — P0 task list complete; AC-10 midnight observation is the only remaining external dependency)
 
 ### Recently completed
+- **T-0020** — README + runbook (CONFIRMED 2026-05-23; commit 4a936f9)
+  - 6 min Clyde-time; consolidation-medium sub-bucket (faster than the medium prediction band because all findings were cached from T-0019/T-0019.5).
+  - `README.md` (~95 lines): replaced T-0001 scaffolded version with quick-start + layered gate table + per-OS cloudflared install + MCP client procedures including SMOKE-2 caveat.
+  - `docs/runbook.md` (~280 lines): every CLI command with examples; full config.json schema; troubleshooting (cloudflared/PATH, stale PID, port collision, DNS for trycloudflare, Windows console, file-handle inheritance trap); MCP client procedures in depth; AC-9 + AC-10 verification procedures; acceptance harness run instructions.
+  - `docs/project-state.md`: Final P0 calibration summary section with timing table, forward prediction bands (trivial/small/medium-fresh/medium-consolidation/large), 5 findings to keep, 3 findings to apply at P1.
+  - `docs/milestones.md`: P0 phase OPEN → GATE-REVIEW-READY.
+  - No code changes (doc-only per scope); 193 tests passing unchanged.
 - **T-0019.5** — Windows console-window suppression + conventions codification (CONFIRMED 2026-05-23; commit cb690fa)
   - 5 min Clyde-time; trivial bucket; insert task between T-0019 and T-0020.
   - `packages/cli/src/commands/start.ts`: +1 line (`windowsHide: true` in the daemon spawn options).
@@ -369,9 +376,17 @@ Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-001
 
 ## Handoff notes
 
-T-0019.5 confirmed (commit cb690fa). T-0020 (README + runbook) in progress as the **last P0 task**. After T-0020 closes and the orchestrator-side gate review confirms the AC matrix, P0 closes and P1 design work can begin.
+T-0020 confirmed (commit 4a936f9). T-0019.6 (AC-9 WSL verification) in progress as an insert task.
 
-T-0020 is doc-only: `README.md` at the repo root replaces the scaffolded placeholder with a full quick-start + status + dive-deeper layout; `docs/runbook.md` is new and covers lifecycle, configuration, files-and-directories, troubleshooting (cloudflared, DNS, Windows console, file-handle trap), MCP client procedures (Inspector / Claude.ai SMOKE-2 caveat / Claude Code / Claude Desktop), AC-9 + AC-10 verification procedures, and the acceptance-harness run instructions.
+T-0019.6 verifies AC-9 on a real Linux host. Setup: WSL Ubuntu was installed but lacked Node and cloudflared; installed both user-locally (Node 20.18 tarball to `~/node-v20`; cloudflared 2026.5.0 binary to `~/cloudflared`) to avoid sudo. Project copied via rsync from `/mnt/c` to `~/claude-bridge-wsl` so ext4 native permissions apply. Build had two cross-platform-related stumbles documented as uncertainty flags but no code changes. Procedure ran end-to-end:
+
+- Step 1: first start created config at `-rw-------` (0600) and printed URL + token block
+- Step 5: `chmod 0644 && start` exited 1 with the expected `ConfigPermissionError`: `Daemon failed to start: daemon startup failed: Config file at /home/jaysearle/.claude-bridge/config.json has loose permissions (0644); must be 0600`
+- Step 7: `chmod 0600 && start` succeeded cleanly
+
+AC-9 transitions IMPLEMENTED → **VERIFIED** with T-0019.6 reference. P0 gate-review-ready with only AC-10 (midnight rotation) awaiting either a 24-hour observation or accept-as-unit-tested-at-T-0007.
+
+The `~/claude-bridge-wsl` working copy and the `~/node-v20` + `~/cloudflared` user-local binaries are left in place for any future Unix-side verification.
 
 ## Final P0 calibration summary
 
