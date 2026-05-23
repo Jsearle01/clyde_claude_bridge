@@ -22,7 +22,12 @@ import { checkStalePid, readPidFromFile } from "../util/pidfile.js";
 
 const localRequire = createRequire(import.meta.url);
 
-const READY_TIMEOUT_MS = 5000;
+// 15s mirrors the daemon's TunnelManager start timeout (T-0012). The
+// daemon's "ready" line writes AFTER cloudflared returns a URL, so a CLI
+// timeout shorter than the tunnel's own budget will spuriously fail
+// cold-start scenarios. AC-1's 10s wall-clock budget is the user-facing
+// gate; the acceptance harness asserts it independently.
+const READY_TIMEOUT_MS = 15000;
 
 export class CloudflaredMissingError extends Error {
   constructor() {

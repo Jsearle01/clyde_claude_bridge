@@ -117,10 +117,13 @@ export class ToolRegistry {
       throw new ToolInputError(tool.name, parsed.error.format());
     }
 
-    const startMs = Date.now();
+    // performance.now() (not Date.now) so sub-ms tools still report >= 1ms
+    // after Math.ceil — Date.now's millisecond granularity rounds fast
+    // operations to 0, which violates AC-5's "non-zero duration_ms" check.
+    const startMs = performance.now();
     try {
       const output = await tool.handler(parsed.data, ctx);
-      const durationMs = Date.now() - startMs;
+      const durationMs = Math.ceil(performance.now() - startMs);
       await this.tryAudit(ctx, {
         ts: new Date().toISOString(),
         tool: tool.name,
@@ -133,7 +136,7 @@ export class ToolRegistry {
       });
       return output;
     } catch (err) {
-      const durationMs = Date.now() - startMs;
+      const durationMs = Math.ceil(performance.now() - startMs);
       await this.tryAudit(ctx, {
         ts: new Date().toISOString(),
         tool: tool.name,

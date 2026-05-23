@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** T-0017 CONFIRMED; T-0018 in progress (CLI bin entry + global install). **Steady-state operating mode**.
+**Status:** T-0018 CONFIRMED; T-0019 in progress (P0 acceptance script — all 10 ACs run end-to-end). **Steady-state operating mode**.
 
 ## Gate status
 
@@ -20,14 +20,24 @@
 ## Task queue
 
 ### In progress
-- T-0018 — packages/cli bin entry + global install (build plan §7.3)
+- T-0019 — P0 acceptance test script (build plan §8)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0019 — Acceptance test script (build plan §8)
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
-- **T-0017** — `token rotate` + `tunnel restart` CLI commands (CONFIRMED 2026-05-23)
+- **T-0018** — CLI bin entry + global install (CONFIRMED 2026-05-23; commit 223a518)
+  - First trivial-bucket task; 5 min Clyde-time.
+  - `packages/cli/src/index.ts`: `--version` flag via commander + createRequire (matches daemon state.ts pattern); reads from packages/cli/package.json
+  - `scripts/verify-install.ps1`: `npm link` + PATH resolution check + `--version` match + `--help` non-empty (4 PASS gates)
+  - Shebang preservation: `tsc -b` preserves natively; no post-build scaffolding added (verified by inspecting dist/index.js's first line)
+  - Manual smoke: `claude-bridge status` from `/tmp` → `Daemon: down` (exit 0); bin is globally reachable from any directory
+  - No AC closes here (infrastructure for AC-1's globally-reachable invariant; T-0019 acceptance script exercises the linked bin)
+  - 193 cases passing + 6 platform-skipped across 26 test files
+  - Zero reactive source deviations
+  - 15th consecutive zero-fire on async-discipline rules
+  - The T-0018 commit bundled T-0017's source files (token.ts, tunnel.ts + tests) per orchestrator direction since T-0017's standalone closure verdict was not issued before T-0018 dispatched. AC-8 + AC-6 cross-link doc edits attribute to T-0017 in milestones.md.
+- **T-0017** — `token rotate` + `tunnel restart` CLI commands (CONFIRMED 2026-05-23; bundled in commit 223a518 with T-0018)
   - AC-8 IMPLEMENTED. Two thin sendIpc wrappers following the stop/status pattern; PID-stale pre-flight, bounded timeouts, typed error classes per failure mode mapped to friendly stderr in index.ts.
   - `packages/cli/src/commands/token.ts`: `tokenRotateCommand` + 3 typed errors (`DaemonNotRunningError`, `TokenRotateConnectionLostError`, `TokenRotateTimeoutError`); 10s timeout.
   - `packages/cli/src/commands/tunnel.ts`: `tunnelRestartCommand` + 3 typed errors (`TunnelRestartConnectionLostError`, `TunnelRestartTimeoutError`, `TunnelRestartFailedError`); 20s timeout (cloudflared start + buffer). Imports `DaemonNotRunningError` from token.ts.
@@ -344,9 +354,14 @@ Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-001
 
 ## Handoff notes
 
-T-0017 confirmed. T-0018 (CLI bin entry + global install) in progress. After T-0018 closes, T-0019 lands the acceptance test script; T-0020 writes README + runbook.
+T-0018 confirmed (commit 223a518). T-0019 (P0 acceptance script) in progress. After T-0019 closes, T-0020 writes README + runbook and P0 is gate-ready.
 
-T-0018 verification: shebang `#!/usr/bin/env node` survives `tsc -b` unmodified (no post-build script needed). `--version` and `-V` both wired via commander's `.version(pkg.version)` with the daemon's `createRequire(import.meta.url)` pattern. `scripts/verify-install.ps1` covers `npm link` → PATH resolution → `--version` / `--help` smoke; ran clean on the Windows dev host.
+T-0019 produced a full end-to-end acceptance harness at `scripts/acceptance-p0.ps1` (10 steps; 8 verified mechanically, 2 skipped with notes). The harness uses `scripts/mcp-ping-client.mjs` (an `@modelcontextprotocol/sdk` Node helper) to drive MCP roundtrips. Final live run: AC-1 cold-start in 7.6s (under 10s budget); all PASS through AC-8; AC-9 + AC-10 skipped with documented reasons.
+
+**Three reactive fixes from T-0019:**
+1. `packages/cli/src/commands/start.ts` — `READY_TIMEOUT_MS` raised 5s → 15s to match daemon's TunnelManager budget. Cold-start cloudflared can easily exceed 5s; the CLI's old default would spuriously fail valid scenarios.
+2. `packages/daemon/src/mcp/dispatch.ts` — switched `Date.now()` → `performance.now()` + `Math.ceil` for `duration_ms`. `Date.now()` has 1ms granularity; sub-ms tools (e.g. ping) rounded to 0 which violated AC-5's "non-zero duration_ms" requirement.
+3. `scripts/mcp-ping-client.mjs` — installed `undici` as a dev-dep and set a global dispatcher that resolves via `dns.resolve4` (c-ares) against Cloudflare/Google public resolvers. The host's system DNS returned NXDOMAIN for newly-issued `*.trycloudflare.com` subdomains; `dns.setServers()` alone doesn't affect `dns.lookup()` (which fetch uses). The custom dispatcher's `connect.lookup` honors `options.all` per net.connect's polymorphic contract.
 
 **Install-and-run procedure (dev):**
 
@@ -355,4 +370,4 @@ T-0018 verification: shebang `#!/usr/bin/env node` survives `tsc -b` unmodified 
       npm run build
       cd packages/cli && npm link
 
-Then `claude-bridge --help` from any directory. To unlink: `npm unlink -g @claude-bridge/cli`. This snippet promotes to README at T-0020.
+Then `claude-bridge --help` from any directory. To unlink: `npm unlink -g @claude-bridge/cli`. To run the gate: `pwsh scripts/acceptance-p0.ps1` (or `powershell -ExecutionPolicy Bypass -File` on 5.1 hosts).

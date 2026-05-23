@@ -12,7 +12,8 @@
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "test": "vitest run",
-    "lint": "eslint src tests"
+    "lint": "eslint src tests",
+    "acceptance": "powershell -ExecutionPolicy Bypass -File ../../scripts/acceptance-p0.ps1"
   },
   "devDependencies": {
     "@types/node": "^20.11.0"
