@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** T-0020 CONFIRMED; T-0019.6 in progress (AC-9 verification on WSL). **Steady-state operating mode**. **P0 gate-review-ready** (9-of-10 mechanically verified; AC-10 awaits midnight observation or accept-as-unit-tested).
+**Status:** **P0 GATE-CLOSED 2026-05-23**. All 10 ACs VERIFIED. T-0019.6 CONFIRMED; T-0019.7 (gate close ceremony) CONFIRMED. P1 design conversation pending.
 
 ## Gate status
 
@@ -20,12 +20,21 @@
 ## Task queue
 
 ### In progress
-- T-0019.6 — AC-9 verification on WSL (Linux file-mode permission check; insert task)
+- (none — P0 GATE-CLOSED 2026-05-23)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- (none — P0 task list complete; AC-10 midnight observation is the only remaining external dependency)
+- (P0 task list complete; P1 design conversation opens next)
 
 ### Recently completed
+- **T-0019.7** — P0 gate close — all 10 ACs VERIFIED (CONFIRMED 2026-05-23; gate-close commit)
+  - Trivial doc-only insert; ~3 min Clyde-time. Two milestones.md cell edits + project-state.md status / in-progress / recently-completed / handoff updates.
+  - AC-10 transitioned IMPLEMENTED → **VERIFIED** with MANUAL-VERIFIED-AT-GATE per orchestrator + human gate decision. T-0007 unit-tested the rotation with synthetic midnight; async-sink-queue architecture protects against rotation-during-write race. Natural confirmation expected at first midnight-crossing daemon run during P1.
+  - P0 phase row IMPLEMENTED → **GATE-CLOSED** 2026-05-23.
+  - 23-commit P0 history (T-0001 through T-0020 + T-0002.5 + T-0019.5 + T-0019.6 + T-0019.7).
+- **T-0019.6** — AC-9 verification on WSL Ubuntu (CONFIRMED 2026-05-23; commit c721198)
+  - 17 min Clyde-time; +15 min WSL environment setup overhead (user-local Node 20.18 + cloudflared 2026.5.0 tarballs, project rsync from /mnt/c to ~/claude-bridge-wsl for native ext4 modes).
+  - AC-9 procedure ran end-to-end with cloudflared functional: first start created config at -rw-------; chmod 0644 → start exited 1 with verbatim `ConfigPermissionError`; chmod 0600 restored normal start. Verbatim transcript in T-0019.6 report.
+  - Noted-not-fixed: TS7016/TS7006 build noise on Node 20 + WSL for `@modelcontextprotocol/sdk/types.js`; JS output complete, runtime unaffected; candidate P1 follow-up.
 - **T-0020** — README + runbook (CONFIRMED 2026-05-23; commit 4a936f9)
   - 6 min Clyde-time; consolidation-medium sub-bucket (faster than the medium prediction band because all findings were cached from T-0019/T-0019.5).
   - `README.md` (~95 lines): replaced T-0001 scaffolded version with quick-start + layered gate table + per-OS cloudflared install + MCP client procedures including SMOKE-2 caveat.
@@ -376,17 +385,16 @@ Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-001
 
 ## Handoff notes
 
-T-0020 confirmed (commit 4a936f9). T-0019.6 (AC-9 WSL verification) in progress as an insert task.
+**P0 GATE-CLOSED 2026-05-23.** All 10 ACs VERIFIED. 23 commits across roughly 2.5 weeks calendar time (T-0001 through T-0020 plus T-0002.5 + T-0019.5 + T-0019.6 + T-0019.7). The methodology held: pre-populate-then-discover patterns, §3.5.1 reporting cadence, steady-state operating mode after T-0014, insert tasks at the .5/.6/.7 nomenclature, and `recommendedTypeChecked` rule pack delivering on both async-discipline (preventive) and type-safety (reactive) value streams.
 
-T-0019.6 verifies AC-9 on a real Linux host. Setup: WSL Ubuntu was installed but lacked Node and cloudflared; installed both user-locally (Node 20.18 tarball to `~/node-v20`; cloudflared 2026.5.0 binary to `~/cloudflared`) to avoid sudo. Project copied via rsync from `/mnt/c` to `~/claude-bridge-wsl` so ext4 native permissions apply. Build had two cross-platform-related stumbles documented as uncertainty flags but no code changes. Procedure ran end-to-end:
+**P1 design conversation is the next step.** Resume in the orchestrator conversation's saved context; this repo currently has no `docs/snapshots/` directory — snapshot artifacts live in the orchestrator's storage. The natural P1 scope is headless delegation (job queue + result streaming) per `docs/design/00-overview.md` §"Gate sequence". Carry items for P1:
 
-- Step 1: first start created config at `-rw-------` (0600) and printed URL + token block
-- Step 5: `chmod 0644 && start` exited 1 with the expected `ConfigPermissionError`: `Daemon failed to start: daemon startup failed: Config file at /home/jaysearle/.claude-bridge/config.json has loose permissions (0644); must be 0600`
-- Step 7: `chmod 0600 && start` succeeded cleanly
+1. **Build the acceptance harness early** — T-0019 exposed three source bugs that unit tests didn't catch (CLI ready timeout vs daemon tunnel budget; ms-granularity duration_ms; DNS resolution chain for fetch). P1 should start its harness early, not last.
+2. **Cross-platform discipline is a continuous tax** — three platform-specific findings codified during P0 (line endings T-0002.5; Windows IPC pipe name T-0008; Windows file-handle trap + windowsHide T-0019.5). P1's job queue + result streaming will likely surface more, especially around process group / signal propagation on Windows.
+3. **TS type resolution for `@modelcontextprotocol/sdk/types.js` on Node 20 + WSL** — flagged in T-0019.6 as TS7016/TS7006 build noise (JS output complete; runtime unaffected). Worth resolving cleanly in P1 if the SDK surface keeps growing.
+4. **AC-10 natural confirmation** — first midnight-crossing daemon run during P1 will naturally validate the audit log rotation. Watch for `audit-YYYY-MM-DD.jsonl` files in `~/.claude-bridge/`. No instrumented test needed; the unit tests already cover the mechanism.
 
-AC-9 transitions IMPLEMENTED → **VERIFIED** with T-0019.6 reference. P0 gate-review-ready with only AC-10 (midnight rotation) awaiting either a 24-hour observation or accept-as-unit-tested-at-T-0007.
-
-The `~/claude-bridge-wsl` working copy and the `~/node-v20` + `~/cloudflared` user-local binaries are left in place for any future Unix-side verification.
+The `~/claude-bridge-wsl` working copy and `~/node-v20` + `~/cloudflared` user-local binaries in WSL are left in place for any future Unix-side verification (P1's job queue, AC-10 midnight observation, etc.).
 
 ## Final P0 calibration summary
 
