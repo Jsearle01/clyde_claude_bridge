@@ -5,7 +5,8 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** **P0 GATE-CLOSED 2026-05-23**. All 10 ACs VERIFIED. T-0019.6 CONFIRMED; T-0019.7 (gate close ceremony) CONFIRMED. P1 design conversation pending.
+**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-001.5 (design handoff + remote push) COMPLETE, awaiting verdict; bundles T-P1-001 work. Steady-state operating mode under methodology v0.4.
+**Repository:** https://github.com/Jsearle01/clyde_claude_bridge (public; remote added at T-P1-001.5)
 
 ## Gate status
 
@@ -20,10 +21,11 @@
 ## Task queue
 
 ### In progress
-- (none — P0 GATE-CLOSED 2026-05-23)
+- T-P1-001.5 — P1 design handoff + github.com remote (COMPLETE, awaiting verdict; bundles T-P1-001)
 
-### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- (P0 task list complete; P1 design conversation opens next)
+### Pending (ordered, mapped from `p1-build-plan.md` phases)
+- T-P1-002+ — Phase 2 workspace registry stub
+- (Phases 3-14 per `docs/design/p1-build-plan.md` §Task order; note Phase 4/5 swap applied)
 
 ### Recently completed
 - **T-0019.7** — P0 gate close — all 10 ACs VERIFIED (CONFIRMED 2026-05-23; gate-close commit)

@@ -7,7 +7,7 @@ Phases here align with the gate sequence in `00-overview.md`. Each phase is a bo
 | Phase | Description | Status | Design doc |
 |-------|-------------|--------|------------|
 | P0 | Bus validation | **GATE-CLOSED** 2026-05-23 (all 10 ACs VERIFIED) | `01-p0-bus.md` |
-| P1 | Headless delegation | NOT STARTED | Written after P0 ships |
+| P1 | Headless delegation | IN PROGRESS (Phase 1 — Shared types) | `02-p1-delegation.md` |
 | P2 | VS Code extension | NOT STARTED | Written after P1 ships |
 | P3 | Polish (last-shell, named tunnels, autostart) | NOT STARTED | Written after P2 ships |
 | P4 | Stretch (co-agent, multi-window, streaming) | NOT STARTED | Written after P3 ships |
@@ -38,6 +38,30 @@ Derived from the 10 P0 acceptance criteria in `01-p0-bus.md`. When the last bloc
 | AC-8 | `claude-bridge token rotate` generates new token, invalidates old (verified 401), prints new | **VERIFIED** | T-0017 + T-0013 + T-0010 + T-0019 acceptance run | Acceptance harness 2026-05-23 step 8 PASS: rotated cb_live_...ZR73 → cb_live_...N35O; old token receives 401, new token successfully pings. End-to-end exercise of the in-memory thunk + on-disk config + auth middleware chain. |
 | AC-9 | Daemon refuses to start if `config.json` permissions are looser than 0600 on Unix | **VERIFIED** | T-0006 (`loadConfig`) + T-0019.6 WSL verification 2026-05-23 | Verified on WSL (Ubuntu, Linux 6.6.87.2-microsoft-standard-WSL2). Procedure: first start created config at `-rw-------`; `chmod 0644` then `start` exited 1 with `Daemon failed to start: daemon startup failed: Config file at /home/jaysearle/.claude-bridge/config.json has loose permissions (0644); must be 0600`; `chmod 0600` restored normal start. Full verbatim transcript in T-0019.6 report. Windows hosts intentionally no-op the check (CC-3). |
 | AC-10 | Audit log rotates at midnight UTC; previous day's file renamed `audit-YYYY-MM-DD.jsonl` | **VERIFIED** (MANUAL-VERIFIED-AT-GATE per gate close 2026-05-23) | T-0007 (`audit/log.ts` hybrid midnight timer + per-append guardrail) + T-0019 acceptance run | Acceptance harness 2026-05-23 step 10 SKIP with note: rotation requires either a 24-hour wait or a clock-fake harness. Unit tests in T-0007 audit/log.test.ts cover the mechanism; live midnight rotation reviewed manually at P0 gate. |
+
+## P1 — Headless Delegation
+
+P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged per methodology v0.4 §29.4 (`[MECH]` / `[SMOKE]` / `[INFER]`). Build plan at `docs/design/p1-build-plan.md` slices the work into 14 build phases. Tasks land in `project-state.md` as T-P1-NNN. Per-AC closure tracking will populate this section as work lands.
+
+| Build phase | Task(s) | Status |
+|---|---|---|
+| Phase 1 — Shared types | T-P1-001 | COMPLETE (bundled in T-P1-001.5 commit) |
+| (infra) | T-P1-001.5 | P1 design handoff + github.com remote |
+| Phase 2 — Workspace registry stub | — | not started |
+| Phase 3 — Job queue + state machine | — | not started |
+| Phase 4 — Tool surface | — | not started |
+| Phase 5 — Acceptance harness skeleton | — | not started |
+| Phase 6 — Transcript writer | — | not started |
+| Phase 7 — Snapshot + diff | — | not started |
+| Phase 8 — Report assembler | — | not started |
+| Phase 9 — Claude Code SDK integration | — | not started |
+| Phase 10 — Cancellation cross-platform | — | not started |
+| Phase 11 — Acceptance harness expansion | — | not started |
+| Phase 12 — WSL cross-platform run | — | not started |
+| Phase 13 — Runbook + walkthrough | — | not started |
+| Phase 14 — P1 gate close | — | not started |
+
+Phase 4/5 swap applied during T-P1-001 verdict (tool surface must precede harness so the harness can exercise the MCP path); reflected in `p1-build-plan.md` and `orchestrator-context-p1-open.md`.
 
 ## Phase-to-task mapping
 

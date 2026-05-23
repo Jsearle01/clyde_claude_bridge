@@ -4,6 +4,7 @@
 // silently falling back to defaults.
 
 import { z } from "zod";
+import { WorkspaceConfigSchema } from "./workspace.js";
 
 export const ConfigSchema = z
   .object({
@@ -29,6 +30,10 @@ export const ConfigSchema = z
       path: z.string(),
       level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     }),
+    // P1 addition: optional workspace block. Absent block is the daemon's
+    // P0-equivalent mode — `ping` works; `delegate_to_claude_code` returns
+    // 503 no_workspace_configured (AC-12).
+    workspace: WorkspaceConfigSchema.optional(),
   })
   .strict();
 

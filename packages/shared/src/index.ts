@@ -2,3 +2,6 @@ export * from "./config.js";
 export * from "./audit.js";
 export * from "./ipc.js";
 export * from "./tools.js";
+export * from "./workspace.js";
+export * from "./jobs.js";
+export * from "./delegation.js";

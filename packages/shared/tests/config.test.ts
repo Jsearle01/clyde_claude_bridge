@@ -74,4 +74,19 @@ describe("ConfigSchema", () => {
     const input = { ...fullConfig, extra_field: "anything" };
     expect(ConfigSchema.safeParse(input).success).toBe(false);
   });
+
+  it("accepts an optional workspace block (P1 addition)", () => {
+    const input = {
+      ...fullConfig,
+      workspace: { id: "local#default", abs_path: "/home/user/projects/repo" },
+    };
+    const result = ConfigSchema.parse(input);
+    expect(result.workspace?.id).toBe("local#default");
+    expect(result.workspace?.default_mode).toBe("agentic"); // default applied
+  });
+
+  it("rejects a malformed workspace block", () => {
+    const input = { ...fullConfig, workspace: { id: "" } };
+    expect(ConfigSchema.safeParse(input).success).toBe(false);
+  });
 });
