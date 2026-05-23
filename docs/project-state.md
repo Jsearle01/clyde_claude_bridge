@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0012 CONFIRMED; T-0013 in progress (daemon main wiring + pidfile). **Calibration phase closes at T-0013** — steady-state operating mode begins after this task.
+**Status:** T-0013 CONFIRMED; T-0014 in progress (cli ipc-client). **Steady-state operating mode** (calibration closed at T-0013).
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0013 — Daemon main wiring + pidfile + DaemonState extension (build plan §6)
+- T-0014 — packages/cli ipc-client (build plan §7.1; first CLI package source)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0014 — packages/cli ipc-client (build plan §7.2)
 - T-0015 — packages/cli start command (build plan §7.2)
 - T-0016 — packages/cli stop/status/tail-log (build plan §7.2)
 - T-0017 — packages/cli token rotate + tunnel restart (build plan §7.2)
@@ -32,6 +31,14 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0013** — Daemon main wiring + pidfile + DaemonState (CONFIRMED 2026-05-22; commit 72c6134)
+  - First runnable daemon: `node packages/daemon/dist/main.js` produces working daemon end-to-end
+  - Token rotation wired across three locations (closure, on-disk, auth thunk)
+  - Script-entry guard prevents test imports from triggering real daemon startup
+  - 2 reactive fixes; 16 new daemon tests; 145 cases total (141 passing + 4 platform-skipped)
+  - 10th consecutive zero-fire on async-discipline rules for production
+  - **Smoke-tested 2026-05-22 via MCP Inspector**: AC-3 and AC-5 functionally validated end-to-end (see calibration findings #SMOKE-1 through #SMOKE-5 below)
+  - **Calibration phase CLOSED at T-0013.** Steady-state operating mode (lighter prompts, paragraph verdicts, summary reports) starts at T-0014.
 - **T-0012** — Tunnel manager + AC-6 closure (CONFIRMED 2026-05-22; commit 55644db)
   - All 23 gate-blocking AC passed
   - AC-6 IMPLEMENTED (exit-handler triggers respawn; emits url_change; manager.test.ts 15.c/15.d verify; T-0019 end-to-end with real cloudflared)
@@ -287,10 +294,18 @@ Findings from completed tasks that inform future task design:
 
 ## Calibration phase closure
 
-Calibration phase closes at T-0013 per methodology §25.3. The first 13 tasks (T-0001 through T-0013) ran with full prompt detail, comprehensive verbatim reporting, and per-task human-gate confirmations. The toolchain (TypeScript, ESLint with recommendedTypeChecked, vitest, conventions, patterns) is settled. Steady-state operating mode starts after T-0013: lighter prompts, paragraph verdicts, summary reports except for safety-relevant files explicitly named.
+Calibration phase closed at T-0013 per methodology §25.3. The first 13 tasks (T-0001 through T-0013) ran with full prompt detail, comprehensive verbatim reporting, and per-task human-gate confirmations. The toolchain (TypeScript, ESLint with recommendedTypeChecked, vitest, conventions, patterns) is settled. Steady-state operating mode in effect from T-0014: lighter prompts, paragraph verdicts, summary reports except for safety-relevant files explicitly named.
+
+## Smoke-test findings (post-T-0013, pre-T-0014)
+
+Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-0013 closed. Findings:
+
+- **SMOKE-1**: AC-3 and AC-5 functionally validated end-to-end. Milestones doc updated to mark both VERIFIED (IMPLEMENTED → VERIFIED with smoke-test reference in Verified-At column).
+- **SMOKE-2**: Claude.ai's custom MCP connector UI restricts auth to OAuth client id/secret only — no Bearer token field. **Scope-affecting:** the literal AC-3 wording ("from a Claude.ai project") cannot be satisfied via the connector UI with our current static-Bearer-token design. Functional satisfaction comes through MCP Inspector, Claude Code (`claude mcp add --transport http`), Claude Desktop, and raw HTTP clients — all accept Bearer tokens. The connector UI is the outlier, not our design. P1+ design decision: implement OAuth in the daemon, document the alternative-client workaround, or both.
+- **SMOKE-3**: Clean SIGINT shutdown validated end-to-end. Reverse-instantiation sequence completed in 14ms total (IPC 0ms → MCP 2ms → tunnel 10ms → audit 1ms → logger). Well under the 10s budget. AC-7 functionally validated (the CLI-side `claude-bridge stop` at T-0016 will trigger the same shutdown via IPC rather than signal).
+- **SMOKE-4**: T-0019 acceptance script implications. Driving an MCP handshake against the live daemon will need either (a) programmatic MCP Inspector invocation (brittle) or (b) raw curl with manual JSON-RPC (more code, fewer deps). T-0019 design will weigh these.
+- **SMOKE-5**: Audit log accumulated ~33 failed-auth entries from MCP Inspector's session-setup probes (mix of missing_header and malformed_header). AC-4's audit-on-rejection mechanism scaled correctly under burst.
 
 ## Handoff notes
 
-T-0012 committed (55644db). T-0013 (daemon main wiring + pidfile + DaemonState extension) in progress. After T-0013 closes, the daemon is runnable end-to-end (`node packages/daemon/dist/main.js` produces a working daemon with ready signal + URL + token output).
-
-Three scope decisions confirmed: shutdown ordering = reverse-instantiation (IPC → MCP → tunnel → audit → logger); PID file at `~/.claude-bridge/daemon.pid`; `ready` signal = one literal line on stdout.
+T-0013 committed (72c6134). T-0014 (cli ipc-client) in progress. First source file in packages/cli; foundation for T-0015 (`claude-bridge start`), T-0016 (status/stop/tail-log), T-0017 (token rotate / tunnel restart).

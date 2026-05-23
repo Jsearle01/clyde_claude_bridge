@@ -7,7 +7,12 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "test": "vitest run",
+    "lint": "eslint src tests"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0"
   },
   "dependencies": {
     "@claude-bridge/shared": "*",
