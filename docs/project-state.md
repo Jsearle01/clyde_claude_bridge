@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** T-0019 CONFIRMED; T-0019.5 in progress (Windows console-window suppression + conventions codification). **Steady-state operating mode**.
+**Status:** T-0019.5 CONFIRMED; T-0020 in progress (README + runbook — last P0 task). **Steady-state operating mode**.
 
 ## Gate status
 
@@ -20,12 +20,18 @@
 ## Task queue
 
 ### In progress
-- T-0019.5 — Windows console-window suppression on daemon spawn (insert; UX polish)
+- T-0020 — README + runbook (Definition of done items; last P0 task)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0020 — README + runbook (Definition of done items)
+- (none — P0 task list complete after T-0020 closes)
 
 ### Recently completed
+- **T-0019.5** — Windows console-window suppression + conventions codification (CONFIRMED 2026-05-23; commit cb690fa)
+  - 5 min Clyde-time; trivial bucket; insert task between T-0019 and T-0020.
+  - `packages/cli/src/commands/start.ts`: +1 line (`windowsHide: true` in the daemon spawn options).
+  - `docs/conventions.md`: CC-2 bullet codifying two T-0015 + T-0019 findings — `windowsHide: true` for detached children on Windows, and the file-handle inheritance trap with redirected stdio when launching daemons from PowerShell.
+  - No AC closes; no test changes (visual UX verification is the user's interactive check).
+  - 17th consecutive zero-fire on async-discipline rules.
 - **T-0019** — P0 acceptance script + 8-of-10 AC verification (CONFIRMED 2026-05-23; commit 5ed3940)
   - 60 min Clyde-time; medium task hit low end of prediction band.
   - `scripts/mcp-ping-client.mjs`: SDK client driver with custom-DNS workaround for trycloudflare subdomain propagation (undici Agent + `dns.resolve4` against 1.1.1.1/8.8.8.8 since the local resolver returned NXDOMAIN for newly-issued URLs)
@@ -363,9 +369,45 @@ Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-001
 
 ## Handoff notes
 
-T-0019 confirmed (commit 5ed3940). T-0019.5 (Windows console suppression) in progress as a small insert. After T-0019.5 closes, T-0020 writes README + runbook and P0 is gate-ready.
+T-0019.5 confirmed (commit cb690fa). T-0020 (README + runbook) in progress as the **last P0 task**. After T-0020 closes and the orchestrator-side gate review confirms the AC matrix, P0 closes and P1 design work can begin.
 
-T-0019.5 adds `windowsHide: true` to the spawn options in `cli/src/commands/start.ts` (one-line; no test changes) and codifies the cross-cutting Windows-spawn discipline in `docs/conventions.md` under CC-2: hide windows on detached children, and never pipe stdout when launching daemons (the redirect handle inherits to the grandchild and pins the parent until the daemon dies).
+T-0020 is doc-only: `README.md` at the repo root replaces the scaffolded placeholder with a full quick-start + status + dive-deeper layout; `docs/runbook.md` is new and covers lifecycle, configuration, files-and-directories, troubleshooting (cloudflared, DNS, Windows console, file-handle trap), MCP client procedures (Inspector / Claude.ai SMOKE-2 caveat / Claude Code / Claude Desktop), AC-9 + AC-10 verification procedures, and the acceptance-harness run instructions.
+
+## Final P0 calibration summary
+
+After 22 commits across 19 tasks (T-0001 through T-0020 plus T-0002.5 and T-0019.5):
+
+### Timing data (from T-0018 onward — earlier tasks predate the standing-requirement instrument)
+
+| Task | Bucket | Predicted | Actual | Notes |
+|---|---|---|---|---|
+| T-0018 | trivial | — | 0:05 | Bin entry + version flag; manual smoke; verify-install script |
+| T-0019 | medium | 60-90 min | 1:00 | Acceptance harness + live run; 3 source bugs surfaced and fixed; 3 PowerShell-side iterations |
+| T-0019.5 | trivial | T-0018 size | 0:05 | One-line + convention bullet |
+| T-0020 | medium (prose) | 60-90 min | 0:06 | Two user-facing docs; no code changes. Came in well under prediction because cached context (SMOKE-2, DNS, file-handle trap, schema field semantics) was already in mind from T-0019 / T-0019.5 — no fresh discovery pass needed. |
+
+### Prediction bands (forward)
+
+- **Trivial:** 5-10 min — one-line fix or small mechanical addition with clear AC and no integration surface
+- **Small:** 15-30 min — single command/module + small test suite, established patterns
+- **Medium:** 60-90 min — new component with integration surface, or doc-heavy task; may surface bugs that need triage
+- **Large:** 90-180 min — multiple modules, new patterns, or unfamiliar integration
+
+The T-0019 hit-the-low-end-of-band finding (60 min for a medium task) calibrates against having a settled toolchain + established patterns; new patterns or unfamiliar SDKs push toward the upper bound. The T-0020 finding (6 min for a "medium prose" task) calibrates a sub-bucket: **doc tasks that consolidate already-discovered findings ship much faster than the medium band suggests** — closer to trivial. Doc tasks that require fresh discovery (reading docs, learning new APIs) stay in the medium band.
+
+### Methodology findings worth keeping
+
+1. **Pre-populate-then-discover pattern docs.** Pattern documents created BEFORE first use validated the rhythm: when the security boundary needed `constant-time-compare`, the doc was ready. Carry forward into P1.
+2. **§3.5.1 reporting cadence.** Verbatim for safety-relevant source files; summary for everything else. Worked across all 19 tasks. Verbatim discipline was load-bearing on auth, audit, IPC; summary discipline kept the report-vs-work ratio sustainable.
+3. **Steady-state operating mode** (active from T-0014). Lighter prompts, paragraph verdicts, summary reports — the prompts shrunk by ~50% from T-0014 onward without loss of clarity. Continue into P1.
+4. **Insert tasks (`T-NNNN.5`).** Used twice (T-0002.5 line-ending hygiene; T-0019.5 windowsHide). Single-purpose closure-after-discovery; valuable for keeping the build-plan task IDs aligned to the build-plan sections.
+5. **`recommendedTypeChecked` value.** 17 consecutive zero-fires on async-discipline rules for production code; ~12 reactive fires on type-safety rules catching real issues. Rule pack value is not single-shaped — both async-discipline (preventive) and type-safety (reactive-but-real) streams justify the cost.
+
+### Findings to apply at P1
+
+1. **Acceptance harness is the gate test.** T-0019's harness exposed three source bugs that unit tests didn't catch (`READY_TIMEOUT_MS` racing the daemon's tunnel budget; `duration_ms` ms-granularity; DNS resolution chain for fetch). P1 should build its acceptance harness early, not last.
+2. **Cross-platform discipline (CC-2) is a continuous tax.** Three platform-specific findings codified during P0 (line endings T-0002.5; Windows IPC pipe name T-0008; Windows file-handle trap + windowsHide T-0019.5). P1's job queue + result streaming may surface more.
+3. **Smoke-vs-mechanical verification gap.** SMOKE-2 (Claude.ai connector UI's OAuth-only constraint) was a smoke-test discovery that the mechanical acceptance harness doesn't capture. P1 design should consider what's verifiable mechanically vs requires interactive smoke and bias toward mechanical where possible.
 
 T-0019 produced a full end-to-end acceptance harness at `scripts/acceptance-p0.ps1` (10 steps; 8 verified mechanically, 2 skipped with notes). The harness uses `scripts/mcp-ping-client.mjs` (an `@modelcontextprotocol/sdk` Node helper) to drive MCP roundtrips. Final live run: AC-1 cold-start in 7.6s (under 10s budget); all PASS through AC-8; AC-9 + AC-10 skipped with documented reasons.
 

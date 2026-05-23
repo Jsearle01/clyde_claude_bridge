@@ -6,7 +6,7 @@ Phases here align with the gate sequence in `00-overview.md`. Each phase is a bo
 
 | Phase | Description | Status | Design doc |
 |-------|-------------|--------|------------|
-| P0 | Bus validation | OPEN | `01-p0-bus.md` |
+| P0 | Bus validation | **GATE-REVIEW-READY** (pending AC-9 Unix-host run + AC-10 24-hour or clock-fake observation) | `01-p0-bus.md` |
 | P1 | Headless delegation | NOT STARTED | Written after P0 ships |
 | P2 | VS Code extension | NOT STARTED | Written after P1 ships |
 | P3 | Polish (last-shell, named tunnels, autostart) | NOT STARTED | Written after P2 ships |
