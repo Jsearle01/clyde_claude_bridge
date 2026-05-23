@@ -13,15 +13,12 @@ import {
   type ChildProcess,
   type SpawnSyncOptions,
 } from "node:child_process";
-import { stat, readFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import {
-  sendIpc,
-  getCliConfigPath,
-  loadCliConfig,
-} from "../ipc-client.js";
+import { sendIpc } from "../ipc-client.js";
+import { getCliConfigPath, getCliPidPath } from "../util/paths.js";
+import { loadCliConfig } from "../util/config.js";
+import { checkStalePid, readPidFromFile } from "../util/pidfile.js";
 
 const localRequire = createRequire(import.meta.url);
 
@@ -52,59 +49,6 @@ export class DaemonStartFailedError extends Error {
   constructor(public readonly stderrText: string) {
     super(`Daemon failed to start: ${stderrText}`);
     this.name = "DaemonStartFailedError";
-  }
-}
-
-// CLI's PID file path (duplicates daemon's getPidPath; kept inline per
-// T-0014's design intent to avoid cli→daemon TS coupling).
-export function getCliPidPath(): string {
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA;
-    if (appData === undefined || appData === "") {
-      throw new Error("APPDATA environment variable is not set");
-    }
-    return join(appData, "claude-bridge", "daemon.pid");
-  }
-  const home = process.env.HOME ?? homedir();
-  return join(home, ".claude-bridge", "daemon.pid");
-}
-
-// CLI's stale-PID check (duplicates daemon's checkStalePid; kept inline).
-async function checkStalePid(
-  path: string,
-): Promise<"alive" | "stale" | "absent"> {
-  let content: string;
-  try {
-    content = await readFile(path, "utf8");
-  } catch (err) {
-    if (
-      err instanceof Error &&
-      (err as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return "absent";
-    }
-    throw err;
-  }
-  const pid = Number.parseInt(content.trim(), 10);
-  if (Number.isNaN(pid) || pid <= 0) return "stale";
-  try {
-    process.kill(pid, 0);
-    return "alive";
-  } catch (err) {
-    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ESRCH") {
-      return "stale";
-    }
-    return "alive";
-  }
-}
-
-async function readPidFromFile(path: string): Promise<number | null> {
-  try {
-    const content = await readFile(path, "utf8");
-    const pid = Number.parseInt(content.trim(), 10);
-    return Number.isNaN(pid) ? null : pid;
-  } catch {
-    return null;
   }
 }
 

@@ -4,8 +4,8 @@
 **Methodology version:** v0.3
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
-**Last conversation date:** 2026-05-21
-**Status:** T-0014 CONFIRMED; T-0015 in progress (`claude-bridge start`; closes AC-1). **Steady-state operating mode**.
+**Last conversation date:** 2026-05-22
+**Status:** T-0015 CONFIRMED; T-0016 in progress (stop/status/tail-log; closes AC-2 and AC-7). **Steady-state operating mode**.
 
 ## Gate status
 
@@ -20,16 +20,25 @@
 ## Task queue
 
 ### In progress
-- T-0015 — `claude-bridge start` CLI command + bin entry (build plan §7.2; closes AC-1)
+- T-0016 — packages/cli stop/status/tail-log (build plan §7.2; closes AC-2 and AC-7)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0016 — packages/cli stop/status/tail-log (build plan §7.2)
 - T-0017 — packages/cli token rotate + tunnel restart (build plan §7.2)
 - T-0018 — packages/cli bin entry + global install (build plan §7.3)
 - T-0019 — Acceptance test script (build plan §8)
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0015** — `claude-bridge start` CLI command + bin entry (CONFIRMED 2026-05-22; commit ac66642)
+  - First user-facing command; AC-1 IMPLEMENTED (end-to-end verification at T-0019)
+  - `packages/cli/src/commands/start.ts`: orchestrator + 4 typed errors + 3 testable helpers (checkCloudflared, checkExistingDaemon, waitForReady)
+  - `packages/cli/src/index.ts`: commander-based bin entry with shebang; friendly stderr mapping per error class
+  - Pre-flight: cloudflared --version check; PID stale-detection; config-absent notice (daemon's main.ts handles actual init)
+  - Daemon spawn detached + ready-line wait + unref + pipe destroy; full token surfaced via re-reading config
+  - `packages/daemon/src/main.ts`: EPIPE handler on stdout/stderr (carry needed by T-0015's CLI detach pattern; daemon-side fix)
+  - 12 new cli tests; 158 cases total + 4 platform-skipped
+  - 1 reactive lint fix (restrict-template-expressions on never-narrowed response.kind; resolved by dropping over-specified generic)
+  - 12th consecutive zero-fire on async-discipline rules for production
 - **T-0014** — cli ipc-client (CONFIRMED 2026-05-22; commit 17398e3)
   - First source in packages/cli; foundation for T-0015–T-0017
   - `sendIpc<R>` + three typed error classes; 10s default timeout; addressOverride opt for test parallelism on Windows (parallels T-0008 IpcServer.addressOverride)
@@ -299,6 +308,9 @@ Findings from completed tasks that inform future task design:
 - FakeProcess subclass pattern for testing subprocess wrappers worked cleanly. EventEmitter typed-override pattern composable across CloudflaredProcess and TunnelManager. The `listener as never` cast for super calls is the right knob; no recommendedTypeChecked friction.
 - Microtask-flush test technique (`await new Promise(r => setImmediate(r))`) needed once for the restart-in-non-degraded-state case. Worth flagging if it recurs in T-0013's main.test.ts.
 
+**From T-0015:**
+- Detached-spawn pattern leaves the daemon writing to a half-closed pipe after the CLI's `unref()` + pipe destroy. Daemon-side EPIPE handler on stdout/stderr was the right carry; without it the daemon dies on first log write after CLI exit. Single line in main.ts; the failure mode is cross-cutting (any future detached-spawn entrypoint hits the same thing), so the handler stays in main.ts as infrastructure rather than at any specific call site.
+
 ## Calibration phase closure
 
 Calibration phase closed at T-0013 per methodology §25.3. The first 13 tasks (T-0001 through T-0013) ran with full prompt detail, comprehensive verbatim reporting, and per-task human-gate confirmations. The toolchain (TypeScript, ESLint with recommendedTypeChecked, vitest, conventions, patterns) is settled. Steady-state operating mode in effect from T-0014: lighter prompts, paragraph verdicts, summary reports except for safety-relevant files explicitly named.
@@ -315,6 +327,6 @@ Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-001
 
 ## Handoff notes
 
-T-0014 committed (17398e3). T-0015 (`claude-bridge start` + bin entry) in progress. Closes AC-1. After T-0015 closes, T-0016 (stop/status/tail-log) and T-0017 (token rotate / tunnel restart) round out the CLI subcommand surface.
+T-0015 committed (ac66642). T-0016 (stop/status/tail-log; closes AC-2 and AC-7) in progress. After T-0016 closes, T-0017 (token rotate / tunnel restart) is the last CLI-subcommand task; T-0018 packages the bin entry for global install; T-0019 lands the acceptance test script; T-0020 writes README + runbook.
 
-Small daemon-side carry from T-0015: EPIPE handler added to main.ts so the daemon survives the CLI's pipe-close after `unref()` (detached spawn pattern leaves the daemon writing to a half-closed pipe).
+T-0016 extracted shared CLI plumbing into `packages/cli/src/util/` (paths.ts, config.ts, pidfile.ts) — a refactor, not a new pattern. ipc-client.ts and start.ts now import from util/ instead of inline-duplicating helpers. The cli→daemon no-TS-reference design from T-0002 holds (util/paths.ts duplicates daemon helpers cli-side with header comment naming the daemon as source of truth).

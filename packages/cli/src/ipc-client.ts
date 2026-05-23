@@ -2,56 +2,19 @@
 // socket path, connects via net.connect, sends one newline-delimited JSON
 // request, reads one response line, returns the parsed IpcResponse.
 //
-// `getCliConfigPath` and `addressFor` are duplicated from
-// `packages/daemon/src/config/paths.ts` and
-// `packages/daemon/src/ipc/server.ts` respectively. T-0002 deliberately
-// avoided a cli→daemon TS project reference (the IPC channel IS the
-// boundary; static helpers shouldn't pull daemon into cli's type graph).
-// Each helper is small; if either ever changes, both sides update.
+// Path/address helpers and config loading were extracted to `util/` at
+// T-0016 when the third use site (stop/status) needed them.
 
 import { connect, type Socket } from "node:net";
-import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
-  ConfigSchema,
   IpcResponseSchema,
-  type Config,
   type IpcRequest,
   type IpcResponse,
 } from "@claude-bridge/shared";
+import { addressFor, getCliConfigPath } from "./util/paths.js";
+import { loadCliConfig } from "./util/config.js";
 
-const WINDOWS_PIPE_PATH = "\\\\.\\pipe\\claude-bridge";
 const DEFAULT_TIMEOUT_MS = 10000;
-
-export function getCliConfigDir(): string {
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA;
-    if (appData === undefined || appData === "") {
-      throw new Error("APPDATA environment variable is not set");
-    }
-    return join(appData, "claude-bridge");
-  }
-  const home = process.env.HOME ?? homedir();
-  return join(home, ".claude-bridge");
-}
-
-export function getCliConfigPath(): string {
-  return join(getCliConfigDir(), "config.json");
-}
-
-function addressFor(socketPath: string): string {
-  if (process.platform === "win32") {
-    return WINDOWS_PIPE_PATH;
-  }
-  return socketPath;
-}
-
-export async function loadCliConfig(path: string): Promise<Config> {
-  const raw = await readFile(path, "utf8");
-  const parsed: unknown = JSON.parse(raw);
-  return ConfigSchema.parse(parsed);
-}
 
 export class IpcClientTimeoutError extends Error {
   constructor(public readonly timeoutMs: number) {

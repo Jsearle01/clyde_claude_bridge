@@ -11,6 +11,9 @@ import {
   DaemonStartTimeoutError,
   DaemonStartFailedError,
 } from "./commands/start.js";
+import { stopCommand, DaemonStopTimeoutError } from "./commands/stop.js";
+import { statusCommand } from "./commands/status.js";
+import { tailLogCommand } from "./commands/tail-log.js";
 
 function reportError(err: unknown): void {
   if (err instanceof CloudflaredMissingError) {
@@ -36,6 +39,10 @@ function reportError(err: unknown): void {
     process.stderr.write(`Daemon failed to start: ${err.stderrText}\n`);
     return;
   }
+  if (err instanceof DaemonStopTimeoutError) {
+    process.stderr.write(`${err.message}\n`);
+    return;
+  }
   const message =
     err instanceof Error
       ? err.message
@@ -54,6 +61,43 @@ program
   .action(async () => {
     try {
       await startCommand();
+    } catch (err) {
+      reportError(err);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("stop")
+  .description("Stop the running daemon (graceful shutdown via IPC).")
+  .action(async () => {
+    try {
+      await stopCommand();
+    } catch (err) {
+      reportError(err);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("status")
+  .description("Print daemon + tunnel status.")
+  .action(async () => {
+    try {
+      await statusCommand();
+    } catch (err) {
+      reportError(err);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("tail-log")
+  .description("Stream the daemon log to stdout.")
+  .option("-f, --follow", "follow the log for new appends")
+  .action(async (opts: { follow?: boolean }) => {
+    try {
+      await tailLogCommand({ follow: opts.follow });
     } catch (err) {
       reportError(err);
       process.exit(1);
