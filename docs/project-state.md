@@ -4,8 +4,8 @@
 **Methodology version:** v0.3
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
-**Last conversation date:** 2026-05-22
-**Status:** T-0015 CONFIRMED; T-0016 in progress (stop/status/tail-log; closes AC-2 and AC-7). **Steady-state operating mode**.
+**Last conversation date:** 2026-05-23
+**Status:** T-0017 CONFIRMED; T-0018 in progress (CLI bin entry + global install). **Steady-state operating mode**.
 
 ## Gate status
 
@@ -20,15 +20,32 @@
 ## Task queue
 
 ### In progress
-- T-0016 — packages/cli stop/status/tail-log (build plan §7.2; closes AC-2 and AC-7)
+- T-0018 — packages/cli bin entry + global install (build plan §7.3)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0017 — packages/cli token rotate + tunnel restart (build plan §7.2)
-- T-0018 — packages/cli bin entry + global install (build plan §7.3)
 - T-0019 — Acceptance test script (build plan §8)
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0017** — `token rotate` + `tunnel restart` CLI commands (CONFIRMED 2026-05-23)
+  - AC-8 IMPLEMENTED. Two thin sendIpc wrappers following the stop/status pattern; PID-stale pre-flight, bounded timeouts, typed error classes per failure mode mapped to friendly stderr in index.ts.
+  - `packages/cli/src/commands/token.ts`: `tokenRotateCommand` + 3 typed errors (`DaemonNotRunningError`, `TokenRotateConnectionLostError`, `TokenRotateTimeoutError`); 10s timeout.
+  - `packages/cli/src/commands/tunnel.ts`: `tunnelRestartCommand` + 3 typed errors (`TunnelRestartConnectionLostError`, `TunnelRestartTimeoutError`, `TunnelRestartFailedError`); 20s timeout (cloudflared start + buffer). Imports `DaemonNotRunningError` from token.ts.
+  - The error-envelope path (sendIpc surfacing `{kind:"error",message}` as plain Error) wraps to `TunnelRestartFailedError` preserving the daemon's message — exercises the TunnelDegradedError 5-in-5 fail path.
+  - Commander nested subcommands (`token rotate`, `tunnel restart`); parent-without-subcommand prints help and exits 1 — appropriate default UX.
+  - 9 new cli tests; 193 cases total + 6 platform-skipped across 26 files
+  - 1 reactive fix: no-unused-vars on TunnelRestartFailedError import in tunnel.test.ts; resolved by switching from toMatchObject to instanceof + toThrow.
+  - 14th consecutive zero-fire on async-discipline rules
+  - AC-6 Notes column cross-linked: `tunnel restart` is the manual recovery path from `degraded` state.
+- **T-0016** — stop / status / tail-log CLI commands (CONFIRMED 2026-05-23; commit e23779e)
+  - AC-2 IMPLEMENTED; AC-7 IMPLEMENTED (SIGTERM path validated by smoke test 2026-05-22; CLI wrapper closes the user-facing surface)
+  - `packages/cli/src/util/{paths,config,pidfile}.ts`: extracted from ipc-client.ts and start.ts on third confirmed use
+  - `packages/cli/src/commands/stop.ts`: idempotent (absent → exit 0); ECONNREFUSED → "Daemon shut down."; 12s timeout → DaemonStopTimeoutError
+  - `packages/cli/src/commands/status.ts`: PID-down short-circuit; full formatted block per 01-p0-bus.md spec; formatUptime, formatBytes, collapsePath helpers
+  - `packages/cli/src/commands/tail-log.ts`: createReadStream + pipeline; follow mode via fs.watch + last-position tracking; truncation-tolerant; rotation tolerance deferred
+  - 31 new cli tests; 184 cases total + 6 platform-skipped across 24 files
+  - 2 reactive fixes: prefer-promise-reject-errors on tail-log watcher; cross-platform path.sep → explicit / or \\ in collapsePath
+  - 13th consecutive zero-fire on async-discipline rules
 - **T-0015** — `claude-bridge start` CLI command + bin entry (CONFIRMED 2026-05-22; commit ac66642)
   - First user-facing command; AC-1 IMPLEMENTED (end-to-end verification at T-0019)
   - `packages/cli/src/commands/start.ts`: orchestrator + 4 typed errors + 3 testable helpers (checkCloudflared, checkExistingDaemon, waitForReady)
@@ -327,6 +344,15 @@ Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-001
 
 ## Handoff notes
 
-T-0015 committed (ac66642). T-0016 (stop/status/tail-log; closes AC-2 and AC-7) in progress. After T-0016 closes, T-0017 (token rotate / tunnel restart) is the last CLI-subcommand task; T-0018 packages the bin entry for global install; T-0019 lands the acceptance test script; T-0020 writes README + runbook.
+T-0017 confirmed. T-0018 (CLI bin entry + global install) in progress. After T-0018 closes, T-0019 lands the acceptance test script; T-0020 writes README + runbook.
 
-T-0016 extracted shared CLI plumbing into `packages/cli/src/util/` (paths.ts, config.ts, pidfile.ts) — a refactor, not a new pattern. ipc-client.ts and start.ts now import from util/ instead of inline-duplicating helpers. The cli→daemon no-TS-reference design from T-0002 holds (util/paths.ts duplicates daemon helpers cli-side with header comment naming the daemon as source of truth).
+T-0018 verification: shebang `#!/usr/bin/env node` survives `tsc -b` unmodified (no post-build script needed). `--version` and `-V` both wired via commander's `.version(pkg.version)` with the daemon's `createRequire(import.meta.url)` pattern. `scripts/verify-install.ps1` covers `npm link` → PATH resolution → `--version` / `--help` smoke; ran clean on the Windows dev host.
+
+**Install-and-run procedure (dev):**
+
+    From the repo root:
+      npm install
+      npm run build
+      cd packages/cli && npm link
+
+Then `claude-bridge --help` from any directory. To unlink: `npm unlink -g @claude-bridge/cli`. This snippet promotes to README at T-0020.

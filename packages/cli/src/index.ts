@@ -3,6 +3,7 @@
 // command module exports an async function. Errors thrown from commands
 // are mapped to friendly stderr messages + non-zero exit codes here.
 
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import {
   startCommand,
@@ -14,6 +15,18 @@ import {
 import { stopCommand, DaemonStopTimeoutError } from "./commands/stop.js";
 import { statusCommand } from "./commands/status.js";
 import { tailLogCommand } from "./commands/tail-log.js";
+import {
+  tokenRotateCommand,
+  DaemonNotRunningError,
+  TokenRotateConnectionLostError,
+  TokenRotateTimeoutError,
+} from "./commands/token.js";
+import {
+  tunnelRestartCommand,
+  TunnelRestartConnectionLostError,
+  TunnelRestartTimeoutError,
+  TunnelRestartFailedError,
+} from "./commands/tunnel.js";
 
 function reportError(err: unknown): void {
   if (err instanceof CloudflaredMissingError) {
@@ -43,6 +56,17 @@ function reportError(err: unknown): void {
     process.stderr.write(`${err.message}\n`);
     return;
   }
+  if (
+    err instanceof DaemonNotRunningError ||
+    err instanceof TokenRotateConnectionLostError ||
+    err instanceof TokenRotateTimeoutError ||
+    err instanceof TunnelRestartConnectionLostError ||
+    err instanceof TunnelRestartTimeoutError ||
+    err instanceof TunnelRestartFailedError
+  ) {
+    process.stderr.write(`${err.message}\n`);
+    return;
+  }
   const message =
     err instanceof Error
       ? err.message
@@ -52,8 +76,14 @@ function reportError(err: unknown): void {
   process.stderr.write(`Error: ${message}\n`);
 }
 
+const localRequire = createRequire(import.meta.url);
+const pkg = localRequire("../package.json") as { version: string };
+
 const program = new Command();
-program.name("claude-bridge").description("Bridge a Claude.ai project to a local workspace via MCP.");
+program
+  .name("claude-bridge")
+  .description("Bridge a Claude.ai project to a local workspace via MCP.")
+  .version(pkg.version);
 
 program
   .command("start")
@@ -98,6 +128,36 @@ program
   .action(async (opts: { follow?: boolean }) => {
     try {
       await tailLogCommand({ follow: opts.follow });
+    } catch (err) {
+      reportError(err);
+      process.exit(1);
+    }
+  });
+
+const tokenCmd = program
+  .command("token")
+  .description("Token management.");
+tokenCmd
+  .command("rotate")
+  .description("Generate a new daemon token; invalidate the previous one.")
+  .action(async () => {
+    try {
+      await tokenRotateCommand();
+    } catch (err) {
+      reportError(err);
+      process.exit(1);
+    }
+  });
+
+const tunnelCmd = program
+  .command("tunnel")
+  .description("Tunnel management.");
+tunnelCmd
+  .command("restart")
+  .description("Restart the cloudflared tunnel; print the new URL.")
+  .action(async () => {
+    try {
+      await tunnelRestartCommand();
     } catch (err) {
       reportError(err);
       process.exit(1);
