@@ -5,6 +5,9 @@
   "version": "0.1.0",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "claude-bridge": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean",
@@ -15,7 +18,8 @@
     "@types/node": "^20.11.0"
   },
   "dependencies": {
+    "@claude-bridge/daemon": "*",
     "@claude-bridge/shared": "*",
-    "@claude-bridge/daemon": "*"
+    "commander": "^14.0.3"
   }
 }

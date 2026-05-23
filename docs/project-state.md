@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-21
-**Status:** T-0013 CONFIRMED; T-0014 in progress (cli ipc-client). **Steady-state operating mode** (calibration closed at T-0013).
+**Status:** T-0014 CONFIRMED; T-0015 in progress (`claude-bridge start`; closes AC-1). **Steady-state operating mode**.
 
 ## Gate status
 
@@ -20,10 +20,9 @@
 ## Task queue
 
 ### In progress
-- T-0014 — packages/cli ipc-client (build plan §7.1; first CLI package source)
+- T-0015 — `claude-bridge start` CLI command + bin entry (build plan §7.2; closes AC-1)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
-- T-0015 — packages/cli start command (build plan §7.2)
 - T-0016 — packages/cli stop/status/tail-log (build plan §7.2)
 - T-0017 — packages/cli token rotate + tunnel restart (build plan §7.2)
 - T-0018 — packages/cli bin entry + global install (build plan §7.3)
@@ -31,6 +30,14 @@
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0014** — cli ipc-client (CONFIRMED 2026-05-22; commit 17398e3)
+  - First source in packages/cli; foundation for T-0015–T-0017
+  - `sendIpc<R>` + three typed error classes; 10s default timeout; addressOverride opt for test parallelism on Windows (parallels T-0008 IpcServer.addressOverride)
+  - Cross-platform helpers (addressFor, getCliConfigDir) inline-duplicated from daemon with header comment; preserves T-0002's no-cli→daemon-TS-reference design
+  - Tests import IpcServer from daemon via relative path (vite-node handles cross-package resolution at runtime)
+  - 5 new cli tests; 146 cases total + 4 platform-skipped across 19 test files
+  - 11th consecutive zero-fire on async-discipline rules
+  - AC-3 and AC-5 → VERIFIED in milestones.md (smoke test 2026-05-22 via MCP Inspector)
 - **T-0013** — Daemon main wiring + pidfile + DaemonState (CONFIRMED 2026-05-22; commit 72c6134)
   - First runnable daemon: `node packages/daemon/dist/main.js` produces working daemon end-to-end
   - Token rotation wired across three locations (closure, on-disk, auth thunk)
@@ -308,4 +315,6 @@ Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-001
 
 ## Handoff notes
 
-T-0013 committed (72c6134). T-0014 (cli ipc-client) in progress. First source file in packages/cli; foundation for T-0015 (`claude-bridge start`), T-0016 (status/stop/tail-log), T-0017 (token rotate / tunnel restart).
+T-0014 committed (17398e3). T-0015 (`claude-bridge start` + bin entry) in progress. Closes AC-1. After T-0015 closes, T-0016 (stop/status/tail-log) and T-0017 (token rotate / tunnel restart) round out the CLI subcommand surface.
+
+Small daemon-side carry from T-0015: EPIPE handler added to main.ts so the daemon survives the CLI's pipe-close after `unref()` (detached spawn pattern leaves the daemon writing to a half-closed pipe).

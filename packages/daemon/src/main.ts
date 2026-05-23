@@ -108,6 +108,13 @@ export async function shutdown(
 }
 
 async function main(): Promise<void> {
+  // Tolerate writes-to-closed-pipe: when launched via `claude-bridge start`
+  // (T-0015), the spawning CLI exits after reading the `ready` signal and
+  // calling unref(). Subsequent logger stdout-mirror writes from the daemon
+  // would then hit EPIPE; default Node behavior is to crash. Silence them.
+  process.stdout.on("error", () => undefined);
+  process.stderr.on("error", () => undefined);
+
   const configPath = getConfigPath();
   const pidPath = getPidPath();
 

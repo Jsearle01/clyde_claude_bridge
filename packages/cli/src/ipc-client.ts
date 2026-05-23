@@ -24,7 +24,7 @@ import {
 const WINDOWS_PIPE_PATH = "\\\\.\\pipe\\claude-bridge";
 const DEFAULT_TIMEOUT_MS = 10000;
 
-function getCliConfigDir(): string {
+export function getCliConfigDir(): string {
   if (process.platform === "win32") {
     const appData = process.env.APPDATA;
     if (appData === undefined || appData === "") {
@@ -36,7 +36,7 @@ function getCliConfigDir(): string {
   return join(home, ".claude-bridge");
 }
 
-function getCliConfigPath(): string {
+export function getCliConfigPath(): string {
   return join(getCliConfigDir(), "config.json");
 }
 
@@ -47,7 +47,7 @@ function addressFor(socketPath: string): string {
   return socketPath;
 }
 
-async function loadCliConfig(path: string): Promise<Config> {
+export async function loadCliConfig(path: string): Promise<Config> {
   const raw = await readFile(path, "utf8");
   const parsed: unknown = JSON.parse(raw);
   return ConfigSchema.parse(parsed);

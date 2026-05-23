@@ -28,7 +28,7 @@ Derived from the 10 P0 acceptance criteria in `01-p0-bus.md`. When the last bloc
 
 | ID | Blocker | Status | Verified at | Notes |
 |----|---------|--------|-------------|-------|
-| AC-1 | `claude-bridge start` brings up daemon + tunnel <10s, prints URL and token | OPEN | — | Verified by acceptance test §1 |
+| AC-1 | `claude-bridge start` brings up daemon + tunnel <10s, prints URL and token | IMPLEMENTED | T-0015 (`cli/src/commands/start.ts`, `cli/src/index.ts`) | Acceptance test §1; unit tests on testable helpers (checkCloudflared, checkExistingDaemon, waitForReady); end-to-end smoke validation at T-0019 |
 | AC-2 | `claude-bridge status` reports `Daemon: up` and `Tunnel: up` | OPEN | — | Acceptance test §2 |
 | AC-3 | Claude.ai project calls `ping(message='hello')` and receives correct response | **VERIFIED** | T-0011 (`mcp/dispatch.ts`, `mcp/tools/ping.ts`); smoke test 2026-05-22 | Smoke test 2026-05-22 via MCP Inspector; PingOutput shape returned correctly with all six fields populated. Claude.ai connector UI cannot satisfy literal AC wording (no Bearer token field); functional satisfaction via MCP Inspector / Claude Code / Claude Desktop. |
 | AC-4 | Wrong bearer token returns 401 + audit log entry `allowed:false, reason:"invalid_token"` | IMPLEMENTED | T-0010 (`mcp/auth.ts`, `mcp/server.ts` integration) | Acceptance test §4; unit tests 12.a–12.i + integration tests 15.g/15.h verify; end-to-end verification via curl against running daemon at T-0019 |
