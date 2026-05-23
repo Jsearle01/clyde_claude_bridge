@@ -25,6 +25,8 @@ import { McpServer } from "./mcp/server.js";
 import { TunnelManager } from "./tunnel/manager.js";
 import { IpcServer, type IpcHandlers } from "./ipc/server.js";
 import { makeInitialState } from "./state.js";
+import { StubWorkspaceRegistry } from "./workspace/registry.js";
+import { validateWorkspaceConfig } from "./workspace/config.js";
 import {
   writePidFile,
   checkStalePid,
@@ -133,6 +135,14 @@ async function main(): Promise<void> {
     }
   }
 
+  // 1.5. Workspace config validation (P1). If present, must point at an
+  // existing directory; otherwise refuse to start in the same shape as
+  // P0's loose-permissions refusal. Absent workspace block is fine —
+  // P0 behavior preserved (`ping` works, no delegation capability).
+  if (config.workspace !== undefined) {
+    validateWorkspaceConfig(config.workspace);
+  }
+
   // 2. Logger.
   const logger = createLogger(config.log.path, config.log.level);
   logger.info("daemon starting", {
@@ -162,6 +172,14 @@ async function main(): Promise<void> {
   const state = makeInitialState(config);
   let currentToken = config.auth.token;
   const getExpectedToken = (): string => currentToken;
+
+  // 5.5. Workspace registry (P1). Stub for P1; P2's extension-backed
+  // registry replaces this without changing the WorkspaceRegistry contract
+  // or any caller. Passed to tool factories via deps in later phases.
+  const workspaceRegistry = new StubWorkspaceRegistry(config.workspace);
+  logger.info("workspace registry initialized", {
+    workspace_count: workspaceRegistry.list().length,
+  });
 
   // 6. Tool registry.
   const registry = new ToolRegistry();
