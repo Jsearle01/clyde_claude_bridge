@@ -1,8 +1,10 @@
 # claude-bridge
 
+**Repository:** https://github.com/Jsearle01/clyde_claude_bridge
+
 An MCP bridge that connects Claude.ai project chats to local development workspaces over a Cloudflare tunnel. The bridge daemon hosts a single MCP endpoint, owns the bearer token, writes an audit log, and (in future gates) coordinates job delegation to VS Code workspaces.
 
-**Project status:** P0 (bus validation) is gate-review-ready. The only tool exposed at this gate is `ping` — enough to prove the end-to-end roundtrip Claude.ai → tunnel → daemon → response works with auth. The acceptance harness reports 8 of 10 criteria mechanically verified; 1 awaits a Unix-host run, 1 awaits midnight-rotation observation. P1 (headless delegation) and P2 (VS Code extension) are future gates.
+**Project status:** P0 (bus validation) is **GATE-CLOSED** as of 2026-05-23, with all 10 acceptance criteria VERIFIED (8 mechanically via `scripts/acceptance-p0.ps1`; AC-9 via WSL Ubuntu run at T-0019.6; AC-10 manually verified at gate per T-0007 unit tests). The only tool exposed at this gate is `ping` — enough to prove the end-to-end roundtrip Claude.ai → tunnel → daemon → response works with auth. P1 (headless delegation) is in progress; P2 (VS Code extension) is a future gate.
 
 ## What is this?
 
@@ -14,8 +16,8 @@ The architecture is intentionally layered:
 
 | Gate | Adds | Status |
 |---|---|---|
-| P0 | Bus validation: daemon + tunnel + auth + audit + one tool | Gate-ready |
-| P1 | Headless delegation: queued jobs + result streaming | Not started |
+| P0 | Bus validation: daemon + tunnel + auth + audit + one tool | GATE-CLOSED 2026-05-23 |
+| P1 | Headless delegation: queued jobs + result streaming | In progress |
 | P2 | VS Code extension: workspace attachment | Not started |
 | P3+ | Polish: last-shell routing, named tunnels, autostart | Not started |
 
@@ -31,8 +33,8 @@ The architecture is intentionally layered:
 ## Install
 
 ```bash
-git clone <repo>
-cd claude-bridge
+git clone https://github.com/Jsearle01/clyde_claude_bridge.git
+cd clyde_claude_bridge
 npm install
 npm run build
 cd packages/cli
