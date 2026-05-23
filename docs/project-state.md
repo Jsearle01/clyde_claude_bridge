@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** T-0018 CONFIRMED; T-0019 in progress (P0 acceptance script — all 10 ACs run end-to-end). **Steady-state operating mode**.
+**Status:** T-0019 CONFIRMED; T-0019.5 in progress (Windows console-window suppression + conventions codification). **Steady-state operating mode**.
 
 ## Gate status
 
@@ -20,12 +20,21 @@
 ## Task queue
 
 ### In progress
-- T-0019 — P0 acceptance test script (build plan §8)
+- T-0019.5 — Windows console-window suppression on daemon spawn (insert; UX polish)
 
 ### Pending (ordered, mapped from `p0-build-plan.md` sections)
 - T-0020 — README + runbook (Definition of done items)
 
 ### Recently completed
+- **T-0019** — P0 acceptance script + 8-of-10 AC verification (CONFIRMED 2026-05-23; commit 5ed3940)
+  - 60 min Clyde-time; medium task hit low end of prediction band.
+  - `scripts/mcp-ping-client.mjs`: SDK client driver with custom-DNS workaround for trycloudflare subdomain propagation (undici Agent + `dns.resolve4` against 1.1.1.1/8.8.8.8 since the local resolver returned NXDOMAIN for newly-issued URLs)
+  - `scripts/acceptance-p0.ps1`: PowerShell-native harness for 8 mechanical AC checks + 2 SKIPs (AC-9 Unix-only; AC-10 24-hour midnight)
+  - `scripts/README.md`: index of dev scripts
+  - Three source bugs surfaced and fixed: start.ts READY_TIMEOUT_MS 5s → 15s (race with daemon tunnel budget); dispatch.ts `Date.now()` → `performance.now()` + `Math.ceil` (AC-5 non-zero `duration_ms` spec fidelity); `undici` added as devDep for the helper's DNS workaround.
+  - Live acceptance run 2026-05-23: 8 PASS / 2 SKIP / 0 FAIL across all 10 ACs (AC-1 cold-start 7.6s; AC-6 respawn observed; AC-8 full thunk → config → auth chain exercised).
+  - Three PowerShell-side iterations (Args automatic-variable conflict; native-exe stderr ErrorRecord wrapping; **Windows file-handle inheritance trap** — the last codified at T-0019.5 as a cross-cutting convention).
+  - 16th consecutive zero-fire on async-discipline rules.
 - **T-0018** — CLI bin entry + global install (CONFIRMED 2026-05-23; commit 223a518)
   - First trivial-bucket task; 5 min Clyde-time.
   - `packages/cli/src/index.ts`: `--version` flag via commander + createRequire (matches daemon state.ts pattern); reads from packages/cli/package.json
@@ -354,7 +363,9 @@ Captured 2026-05-22. Hand-tested daemon end-to-end via MCP Inspector after T-001
 
 ## Handoff notes
 
-T-0018 confirmed (commit 223a518). T-0019 (P0 acceptance script) in progress. After T-0019 closes, T-0020 writes README + runbook and P0 is gate-ready.
+T-0019 confirmed (commit 5ed3940). T-0019.5 (Windows console suppression) in progress as a small insert. After T-0019.5 closes, T-0020 writes README + runbook and P0 is gate-ready.
+
+T-0019.5 adds `windowsHide: true` to the spawn options in `cli/src/commands/start.ts` (one-line; no test changes) and codifies the cross-cutting Windows-spawn discipline in `docs/conventions.md` under CC-2: hide windows on detached children, and never pipe stdout when launching daemons (the redirect handle inherits to the grandchild and pins the parent until the daemon dies).
 
 T-0019 produced a full end-to-end acceptance harness at `scripts/acceptance-p0.ps1` (10 steps; 8 verified mechanically, 2 skipped with notes). The harness uses `scripts/mcp-ping-client.mjs` (an `@modelcontextprotocol/sdk` Node helper) to drive MCP roundtrips. Final live run: AC-1 cold-start in 7.6s (under 10s budget); all PASS through AC-8; AC-9 + AC-10 skipped with documented reasons.
 

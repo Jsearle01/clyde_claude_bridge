@@ -204,6 +204,7 @@ export async function startCommand(): Promise<void> {
   const child = spawn(process.execPath, [daemonMainPath], {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
   });
 
   // 5. wait for the ready signal
