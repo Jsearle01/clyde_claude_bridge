@@ -51,8 +51,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 2 — Workspace registry stub | T-P1-002 | COMPLETE |
 | Phase 3 — Job queue + state machine | T-P1-003 | COMPLETE |
 | Phase 4 — Tool surface | T-P1-004 | COMPLETE |
-| Phase 5 — Acceptance harness skeleton | T-P1-005 | COMPLETE, awaiting verdict |
-| Phase 6 — Transcript writer | — | not started |
+| Phase 5 — Acceptance harness skeleton | T-P1-005 | COMPLETE |
+| Phase 6 — Transcript writer | T-P1-006 | COMPLETE, awaiting verdict |
 | Phase 7 — Snapshot + diff | — | not started |
 | Phase 8 — Report assembler | — | not started |
 | Phase 9 — Claude Code SDK integration | — | not started |

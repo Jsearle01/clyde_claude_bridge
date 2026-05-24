@@ -9,9 +9,10 @@
 // the daemon is past the listening + tunnel-up gate. The summary lines
 // below it match `01-p0-bus.md` §"claude-bridge start".
 
-import { writeFile, chmod, stat } from "node:fs/promises";
+import { writeFile, chmod, stat, mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import type { Config, StatusPayload } from "@claude-bridge/shared";
 import { loadConfig, ConfigNotFoundError } from "./config/load.js";
 import { initConfig } from "./config/init.js";
@@ -33,6 +34,7 @@ import { StubWorkspaceRegistry } from "./workspace/registry.js";
 import { validateWorkspaceConfig } from "./workspace/config.js";
 import { JobQueue } from "./jobs/index.js";
 import { DailyTimer } from "./util/daily-timer.js";
+import { scanTranscriptOrphans } from "./jobs/transcript-orphan.js";
 import {
   writePidFile,
   checkStalePid,
@@ -177,6 +179,30 @@ async function main(): Promise<void> {
 
   // 4. Audit log.
   const auditLog = new AuditLog(config.audit.path, config.audit.retention_days);
+
+  // 4.5. Transcripts directory + one-shot orphan scan (P1). The scan is
+  // best-effort: failures are logged but do not abort daemon startup.
+  const configDir = dirname(configPath);
+  const transcriptsDir = join(configDir, "transcripts");
+  try {
+    await mkdir(transcriptsDir, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    logger.warn("transcripts dir create failed", { error: errorMessage(err) });
+  }
+  try {
+    const r = await scanTranscriptOrphans(transcriptsDir);
+    logger.info("transcripts orphan scan", {
+      scanned: r.scanned,
+      left_alone: r.left_alone,
+      renamed: r.renamed,
+      deleted: r.deleted,
+      errors: r.errors,
+    });
+  } catch (err) {
+    logger.error("transcripts orphan scan failed", {
+      error: errorMessage(err),
+    });
+  }
 
   // 5. State + token closure (token is mutable; T-0017 token rotate swaps it).
   const state = makeInitialState(config);
