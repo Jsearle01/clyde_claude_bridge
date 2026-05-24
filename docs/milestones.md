@@ -50,8 +50,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | (infra) | T-P1-001.6 | README factual correction; gh CLI installed + authenticated; T-P1-001.5 AC-6 visibility=PUBLIC mechanically verified |
 | Phase 2 — Workspace registry stub | T-P1-002 | COMPLETE |
 | Phase 3 — Job queue + state machine | T-P1-003 | COMPLETE |
-| Phase 4 — Tool surface | T-P1-004 | COMPLETE, awaiting verdict |
-| Phase 5 — Acceptance harness skeleton | — | not started |
+| Phase 4 — Tool surface | T-P1-004 | COMPLETE |
+| Phase 5 — Acceptance harness skeleton | T-P1-005 | COMPLETE, awaiting verdict |
 | Phase 6 — Transcript writer | — | not started |
 | Phase 7 — Snapshot + diff | — | not started |
 | Phase 8 — Report assembler | — | not started |

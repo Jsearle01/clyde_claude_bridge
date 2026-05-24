@@ -5,6 +5,26 @@
 
 import { z } from "zod";
 import { WorkspaceConfigSchema } from "./workspace.js";
+import { PartialProgressSchema } from "./jobs.js";
+import {
+  DelegationReportSchema,
+  ErrorDetailSchema,
+} from "./delegation.js";
+
+// P1-only; remove at Phase 9.
+// Stub-runner behavior payload for the acceptance harness. Daemon honors
+// this only when started with --allow-stub-config (defense against
+// accidental presence in production configs).
+export const StubBehaviorSchema = z
+  .object({
+    outcome: z.enum(["complete", "failed", "cancelled"]),
+    delay_ms: z.number().int().nonnegative().optional(),
+    partial_updates: z.array(PartialProgressSchema).optional(),
+    report: DelegationReportSchema.partial().optional(),
+    error: ErrorDetailSchema.optional(),
+  })
+  .strict();
+export type StubBehavior = z.infer<typeof StubBehaviorSchema>;
 
 export const ConfigSchema = z
   .object({
@@ -34,6 +54,10 @@ export const ConfigSchema = z
     // P0-equivalent mode — `ping` works; `delegate_to_claude_code` returns
     // 503 no_workspace_configured (AC-12).
     workspace: WorkspaceConfigSchema.optional(),
+    // P1-only; remove at Phase 9.
+    // Stub-runner behavior for the acceptance harness. Daemon refuses to
+    // start with this present unless --allow-stub-config is also set.
+    stub_behavior: StubBehaviorSchema.optional(),
   })
   .strict();
 

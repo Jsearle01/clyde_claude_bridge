@@ -217,7 +217,20 @@ async function main(): Promise<void> {
   // 5.8. Job runner. Stub for P1 (configurable canned outcomes for
   // Phase 5's harness); Phase 9 swaps in SdkJobRunner against the same
   // JobRunner interface without tool-side changes.
-  const jobRunner = new StubJobRunner(jobQueue);
+  // P1-only; remove at Phase 9.
+  // Stub behavior gating: config.stub_behavior is honored only when the
+  // daemon was started with --allow-stub-config. Refuse start otherwise
+  // — defense against accidental stub config in production builds.
+  const allowStubConfig = process.argv.includes("--allow-stub-config");
+  if (config.stub_behavior !== undefined && !allowStubConfig) {
+    throw new Error(
+      "config.stub_behavior is set but --allow-stub-config flag was not passed; refuse to start",
+    );
+  }
+  const jobRunner =
+    allowStubConfig && config.stub_behavior !== undefined
+      ? new StubJobRunner(jobQueue, config.stub_behavior)
+      : new StubJobRunner(jobQueue);
 
   // 6. Tool registry.
   const registry = new ToolRegistry();

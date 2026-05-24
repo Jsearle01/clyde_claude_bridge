@@ -7,6 +7,7 @@ import type { McpServer } from "../src/mcp/server.js";
 import type { TunnelManager } from "../src/tunnel/manager.js";
 import type { AuditLog } from "../src/audit/log.js";
 import type { Logger } from "../src/log/logger.js";
+import type { DailyTimer } from "../src/util/daily-timer.js";
 
 // Stub builders. We test shutdown via structural stubs (each component only
 // needs a stop method); cast through `unknown` to satisfy the typed
@@ -52,19 +53,28 @@ function noWherePath(): string {
   return join(tmpdir(), `claude-bridge-shutdown-test-pid-${process.pid}`);
 }
 
+function makeStubDailyTimer(order: string[]): DailyTimer {
+  return {
+    stop: vi.fn(() => {
+      order.push("daily-timer");
+    }),
+  } as unknown as DailyTimer;
+}
+
 describe("shutdown", () => {
-  it("stops layers in reverse-instantiation order: ipc → mcp → tunnel → audit → logger", async () => {
+  it("stops layers in reverse-instantiation order: ipc → mcp → tunnel → audit → daily-timer → logger", async () => {
     const order: string[] = [];
     const components: DaemonComponents = {
       ipcServer: makeStubOk("ipc", order) as unknown as IpcServer,
       mcpServer: makeStubOk("mcp", order) as unknown as McpServer,
       tunnelManager: makeStubOk("tunnel", order) as unknown as TunnelManager,
       auditLog: makeStubOk("audit", order) as unknown as AuditLog,
+      dailyTimer: makeStubDailyTimer(order),
       logger: makeStubLogger(order),
       pidPath: noWherePath(),
     };
     await shutdown("test", components);
-    expect(order).toEqual(["ipc", "mcp", "tunnel", "audit", "logger"]);
+    expect(order).toEqual(["ipc", "mcp", "tunnel", "audit", "daily-timer", "logger"]);
   });
 
   it("continues to the next layer if a stop rejects", async () => {
@@ -74,10 +84,11 @@ describe("shutdown", () => {
       mcpServer: makeStubFail("mcp", order) as unknown as McpServer,
       tunnelManager: makeStubOk("tunnel", order) as unknown as TunnelManager,
       auditLog: makeStubOk("audit", order) as unknown as AuditLog,
+      dailyTimer: makeStubDailyTimer(order),
       logger: makeStubLogger(order),
       pidPath: noWherePath(),
     };
     await shutdown("test", components);
-    expect(order).toEqual(["ipc", "mcp", "tunnel", "audit", "logger"]);
+    expect(order).toEqual(["ipc", "mcp", "tunnel", "audit", "daily-timer", "logger"]);
   });
 });
