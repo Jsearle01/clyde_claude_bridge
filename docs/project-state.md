@@ -12,6 +12,23 @@
 - Update `02-p1-delegation.md` `delegate_to_claude_code` validation rules: remove the "capped at 32 KB" phrase from the prompt-field description (was speculative architecture without empirical grounding; no enforcement in P1 by design per T-P1-009 reshape).
 **Repository:** https://github.com/Jsearle01/clyde_claude_bridge (public, mechanically verified via `gh repo view` at T-P1-001.6)
 
+## v0.6 candidates
+
+Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this list as its scope. Each P2-era verdict may append to the list; entries are append-only except for `status` updates.
+
+| id | source | title | status |
+|----|--------|-------|--------|
+| C-1 | v0.5 §10 | Pure-code-no-discovery vs pure-code-with-discovery as task-shape classification axis | open |
+| C-2 | v0.5 §10 | Deferred-discovery-via-documented-assumption as orthogonal axis | open |
+| C-3 | v0.5 §10 | Reshape-cost-vs-stay-cost as structured decision framework | open |
+| C-4 | v0.5 §10 | Pattern doc template normalization (8 P0/P1 patterns mixed templates) | open |
+| C-5 | v0.5 §10 | Live-API task variance characterization (5x wall-time variance for same semantic outcome) | open |
+| C-6 | P1 dispatch experience | Single-prompt-with-everything dispatch format (revision to v0.4 §3.4 and §22.1) | open |
+| C-7 | P1 dispatch experience | Mandatory User-interaction-during-task report section (revision to v0.4 §3.5.1) | open |
+| C-8 | T-P2-000-review (Clyde) | Review-task report shape — Form C variant? | deferred-pending-second-datapoint |
+| C-9 | T-P2-000-review (orchestrator self-flag) | Orchestrator-side discovery confidence levels (memory-based claims flagged verify) | open |
+| C-10 | T-P2-000-review (orchestrator self-flag) | Distinguish orchestrator-clock vs executor-clock in estimates | open |
+
 ## Gate status
 
 | Gate | Status | Owner | Notes |

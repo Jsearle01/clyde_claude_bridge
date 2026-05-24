@@ -100,6 +100,8 @@ Rejected alternatives:
 - Persistent registration across VS Code restarts: stale entries accumulate; cleanup story is real work.
 - Per-delegation registration check: round-trip latency per delegation; complexity for marginal benefit.
 
+**Failure mode: duplicate registration.** When a second VS Code window attempts to register the same `abs_path` already held by an active extension session, the daemon rejects the second registration with `403 path_already_registered`. The error payload identifies the existing holder (vscode session id and pid). The second window's status bar surfaces "Another VS Code window has this workspace registered; this window operates without delegation capability." Same-folder-in-two-windows is a known P2 limitation; multi-instance routing is a P3+ candidate.
+
 ### Q3 — Daemon lifecycle from the extension
 
 **Q3a — Daemon binary path resolution:** auto-detect with setting override. Extension looks in PATH, then in workspace's `node_modules/.bin`, falls back to `claudeBridge.daemonPath` setting.
@@ -109,6 +111,8 @@ Rejected alternatives:
 **Q3c — Auto-stop on deactivate:** never. Daemon is meant to be long-running. Stopping requires explicit user action (palette command or `claude-bridge stop` from terminal).
 
 **Q3d — `ANTHROPIC_API_KEY` handling:** env first, VS Code SecretStorage fallback. Extension forwards `process.env.ANTHROPIC_API_KEY` to spawned daemon if present; otherwise prompts user via `vscode.SecretStorage` API; stored key persists across VS Code restarts encrypted by VS Code.
+
+**Failure mode: externally-started daemon.** When the daemon is started outside the extension (`claude-bridge start` from a terminal), the daemon's `ANTHROPIC_API_KEY` is whatever the launching shell provided. The extension's SecretStorage prompt is not triggered. This is intentional: cross-process secret transfer would require its own threat model. Runbook section "API key management" (T-P2-013) documents which start path manages which key.
 
 ### Q4 — Inspection tool surface
 
@@ -124,11 +128,13 @@ Tool shapes (final wire schemas pending implementation):
 - Input: `{ workspace?: string, severity?: "error" | "warning" | "all" }` (severity defaults to all)
 - Output: list of `{ uri: string, range: {...}, severity: string, message: string, source?: string }` per diagnostic.
 
+**Approval interaction:** inspection tools bypass the Q6 approval flow. Trust at registration (Q7) is the only gate. Every call is audit-logged for operator visibility. Rationale: inspection tools are read-only and metadata-shaped (URIs + flags + diagnostic text), designed for high-frequency client use (e.g., before every delegation); approval-per-call would make them unusable.
+
 Tools deferred to P3 or later (no implementation in P2): `get_selection`, `get_git_state`, `get_terminal_output`, `get_search_results`, `show_diff`.
 
 ### Q5 — Workspace identifier scheme
 
-Identifier is a stable handle: lowercase slug from the workspace folder name + 6-char alphanumeric suffix for collision resistance. Example: `claude-bridge-x4k2p1`.
+Identifier is a stable handle: lowercase slug from the workspace folder name + 6-char alphanumeric suffix for collision resistance. Example: `claude-bridge-x4k2p1`. **The identifier persists across VS Code sessions:** first registration of an `abs_path` generates the identifier and writes it to `workspaces.json`; subsequent registrations of the same path reuse the stored identifier. This makes the handle truly stable for external references (claude.ai project configurations, scripts, documentation).
 
 Display info (what humans see for verification) lives alongside the handle:
 - `name`: human-readable label, defaults to folder name, user-overridable via settings.
@@ -172,13 +178,13 @@ When extension registers a workspace path the daemon has no prior trust record f
 >
 > [Trust] [Don't trust]
 
-Trust decision stored persistently per workspace path on daemon side (in config or a dedicated trust store; implementation detail for the registry task). Subsequent registrations of the same path skip the prompt.
+Trust decision stored persistently per workspace path on daemon side in `~/.claude-bridge/workspaces.json`. Entry shape: `{abs_path, identifier, name, trust_state, trusted_at}` — same file also holds the persistent workspace identifier from Q5 and the human-readable name. Subsequent registrations of the same path skip the prompt.
 
 Failure semantics:
 - User clicks "Don't trust" → registration rejected; extension surfaces an error in status bar.
 - Prompt times out → registration in pending state until user responds; extension shows "Awaiting trust decision" in status bar.
 
-Trust store does NOT have a "revoke" mechanism in P2 — user can manually edit the trust store file if needed. Revocation UI is P3 if real demand surfaces.
+The `workspaces.json` store does NOT have a "revoke" mechanism in P2 — user can manually edit the file if needed. Revocation UI is P3 if real demand surfaces.
 
 ## 5. Acceptance criteria
 
@@ -188,17 +194,18 @@ Full ACs are in `docs/design/p2-build-plan.md` per-phase. Summary:
 - AC-P2-2: Extension auto-activates on opening any workspace.
 - AC-P2-3: First-registration trust prompt fires; trust decision persists.
 - AC-P2-4: Daemon rejects delegations against unregistered workspaces with `503 no_workspace_registered`.
-- AC-P2-5: Daemon rejects delegations against untrusted workspaces with `403 workspace_untrusted`.
-- AC-P2-6: Daemon-lifecycle commands work — "Start Daemon" spawns process; daemon-not-running detection surfaces actionable notification.
-- AC-P2-7: `ANTHROPIC_API_KEY` handling — env-first inheritance works; SecretStorage prompt+store fallback works.
-- AC-P2-8: Approval flow — `read_only` auto-approves; `agentic` prompts on first call per session; "Approve for session" remembers.
-- AC-P2-9: Approval timeout treated as deny.
-- AC-P2-10: User denial returns `403 user_denied` to MCP caller.
-- AC-P2-11: `get_open_editors` returns correct editor state via MCP path.
-- AC-P2-12: `get_diagnostics` returns correct diagnostics via MCP path.
-- AC-P2-13: Extension status bar shows registered workspace identifier + name.
-- AC-P2-14: Multiple VS Code windows each register their own workspace; inspection tools route correctly via `workspace` argument.
-- AC-P2-15: Cross-platform parity (Windows + WSL Ubuntu) for all behavioral ACs.
+- AC-P2-5: Daemon-lifecycle commands work — "Start Daemon" spawns process; daemon-not-running detection surfaces actionable notification.
+- AC-P2-6: `ANTHROPIC_API_KEY` handling — env-first inheritance works; SecretStorage prompt+store fallback works.
+- AC-P2-7: Approval flow — `read_only` auto-approves; `agentic` prompts on first call per session; "Approve for session" remembers.
+- AC-P2-8: Approval timeout treated as deny.
+- AC-P2-9: User denial returns `403 user_denied` to MCP caller.
+- AC-P2-10: `get_open_editors` returns correct editor state via MCP path.
+- AC-P2-11: `get_diagnostics` returns correct diagnostics via MCP path.
+- AC-P2-12: Extension status bar shows registered workspace identifier + name.
+- AC-P2-13: Multiple VS Code windows each register their own workspace; inspection tools route correctly via `workspace` argument.
+- AC-P2-14: Cross-platform parity (Windows + WSL Ubuntu) for all behavioral ACs.
+
+**Reserved for P3:** `403 workspace_untrusted` is defined in the protocol but unreachable in P2. P2 trust is binary at registration; only `503 no_workspace_registered` is reachable as a delegation-rejection. P3's revocation UI will reactivate the `workspace_untrusted` path.
 
 ## 6. Open questions deferred to P3
 
@@ -211,6 +218,7 @@ Full ACs are in `docs/design/p2-build-plan.md` per-phase. Summary:
 - Headless mode (running claude-bridge without VS Code).
 - Multi-user / team-shared daemon.
 - CI integration of the extension-path harness.
+- Multi-instance routing for same-`abs_path` in multiple VS Code windows.
 
 ## 7. References
 
