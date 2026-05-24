@@ -285,3 +285,192 @@ For the existing ATTN-CC3 project:
 Each delegation runs locally with full ATTN-CC3 workspace context, and the structured report comes back with diff, diagnostics delta, and transcript URI. The user watches it run in the VS Code webview, and project-Claude reasons about the result on the Claude.ai side.
 
 That is the system, fully realized.
+
+---
+
+# P1 — Delegation surface (what's actually shipped)
+
+The section above describes the **steady-state UX** assuming P0 through P2 are complete. The section below describes the **delegation surface as it currently exists after P1**, before the VS Code extension lands at P2.
+
+This section is for contributors and operators who want to know how the daemon actually behaves today. Cross-references throughout to the [runbook](runbook.md) for operator concerns and the [P1 design doc](design/02-p1-delegation.md) for design rationale.
+
+## P1 overview
+
+P0 shipped the **bus**: daemon + cloudflared tunnel + MCP server + auth + audit + `ping` tool. P1 layers the **delegation surface** on top:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ MCP client (Bearer auth)                                         │
+│   delegate_to_claude_code / poll_delegation / cancel_delegation  │
+└──────────────────┬───────────────────────────────────────────────┘
+                   │  HTTPS  (P0 tunnel + auth)
+┌──────────────────▼───────────────────────────────────────────────┐
+│ Daemon                                                            │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │ MCP tools (P1)                                              │  │
+│  │   delegate.ts / poll.ts / cancel.ts                         │  │
+│  │   (wraps audit metadata; validates input)                   │  │
+│  └────────────────┬────────────────────────────────────────────┘  │
+│                   │                                                │
+│  ┌────────────────▼────────────────────────────────────────────┐  │
+│  │ JobQueue (P1) — single-concurrent FIFO + terminal-promise   │  │
+│  └────────────────┬────────────────────────────────────────────┘  │
+│                   │                                                │
+│  ┌────────────────▼────────────────────────────────────────────┐  │
+│  │ SdkJobRunner (P1) — query() AsyncGenerator + AbortController │  │
+│  │   ↳ TranscriptWriter (P1) — JSONL stream + 50MB cap          │  │
+│  │   ↳ snapshot/diff (P1) — before/after workspace state        │  │
+│  │   ↳ report assembler (P1) — derives DelegationReport         │  │
+│  └────────────────┬────────────────────────────────────────────┘  │
+│                   │                                                │
+│  ┌────────────────▼────────────────────────────────────────────┐  │
+│  │ @anthropic-ai/claude-agent-sdk (external)                   │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+The P0 surface (audit, auth, tunnel manager, IPC) is unchanged in P1. The new surface is the dotted-line section.
+
+## Job lifecycle
+
+P1 introduces a strict three-layer model for delegation state:
+
+- **`Job`** — immutable inputs: `id`, `workspace_id`, `prompt`, `mode`, `max_turns`, `working_directory`, `exhibits`, `model`, `created_at`. Set once at enqueue, never mutated.
+- **`JobRunState`** — mutable execution state: `status` (one of `queued` / `running` / `complete` / `failed` / `cancelled`), `partial` (progress block), `started_at`, `finished_at`, `cancel_requested`, `error`, `report`. Owned by the JobQueue; mutated through `mark*` methods.
+- **`JobView`** — projection for wire responses: a flattened snapshot of `Job` + `JobRunState` shaped for the MCP tool outputs.
+
+The split (decided at T-P1-003 per Decision 6) keeps immutable design data separate from mutable runtime state. Tests and instrumentation can reason about a `Job` without worrying about race conditions on its execution status.
+
+**Single-concurrent constraint.** The runner processes one job at a time. Additional `delegate_to_claude_code` calls enqueue; their `queued_position` is the FIFO index behind the running job (0 = first to run next). The constraint exists to bound resource usage on the user's machine (SDK can consume CPU + memory) and to keep the in-memory job state simple. P3 may revisit if multi-concurrent demand is real.
+
+**Partial progress.** During a running job, `poll_delegation` returns a `partial` block with `turns_so_far`, `last_tool`, `elapsed_ms`. These fields update as the SDK's `query()` AsyncGenerator yields messages — the runner taps each `assistant` message to extract the last tool name and increment the turn counter. Polling with `wait_ms: 0` reads the current partial; long-polling resolves on terminal.
+
+**Terminal-promise primitive.** The JobQueue exposes `terminalPromise(job_id)` which resolves when the job reaches a terminal state. The `poll_delegation` long-poll path races this promise against a `setTimeout(wait_ms)` — event-driven, no busy-wait. Verified at T-P1-005 AC-4 (poll resolved in 1513ms when stub delay was 1500ms, well before the 6000ms wait cap).
+
+## The three MCP tools
+
+Names match the design doc and the wire surface:
+
+- **`delegate_to_claude_code`** — enqueue a new delegation. Returns `{job_id, status, workspace_id, queued_position}`.
+- **`poll_delegation`** — read job state with optional long-poll. Returns `{job_id, status, workspace_id, partial?, report?}`.
+- **`cancel_delegation`** — request termination. Returns `{job_id, status, prior_status}`.
+
+Input/output shapes are fully specified by Zod schemas in `packages/shared/src/delegation.ts`; the [runbook's Operating Delegations section](runbook.md#operating-delegations-p1) is the operator-facing reference for field semantics and limits.
+
+**Audit metadata side-channel.** The audit log records per-tool-call entries with `job_id` and `workspace_id` fields. To populate these without coupling the audit middleware to the tool implementations, T-P1-004 introduced the `ctx.setAuditMetadata()` pattern: tool handlers receive a context object that includes a setter; the dispatch wrapper reads any metadata the handler set and merges it into the audit entry. Handlers that don't set metadata produce normal audit entries (`ping` doesn't set anything; the three delegation tools all set `job_id` + `workspace_id`).
+
+## Workspace registry stub
+
+P1 ships a single-workspace stub: configured via the `workspace` block in `config.json`, matched by exact-string ID compare. The implementation is at `packages/daemon/src/workspace/registry.ts` — interface `WorkspaceRegistry` with one method `resolve(id): Workspace | null`. The stub validates the configured workspace at daemon startup (absolute path, exists, is a directory; symlinks resolved per CC-1).
+
+P2 will replace the stub with a real registry: the VS Code extension registers workspaces at attach time via the IPC channel; the registry persists state to `~/.claude-bridge/workspaces/`. The interface stays the same — only the implementation changes.
+
+In the meantime: one workspace per daemon. Multi-workspace work (the [walkthrough's UX narrative above](#multiple-workspaces-simultaneously)) is forward-looking.
+
+## Snapshot + diff
+
+Before each delegation, `takeSnapshot(workspace_id, abs_path)` produces a `WorkspaceSnapshot`: a list of `FileEntry` (path, size_bytes, sha256, is_binary). After the delegation, a second snapshot is taken; the pair feeds `computeDiff` to produce the textual diff that lands in the report.
+
+**File enumeration paths:**
+
+- **Git workspaces** (`git ls-files` returns at least one file): use `git ls-files -z` for tracked files + `git ls-files -z --others --exclude-standard` for untracked-but-not-ignored. NUL-separated to handle filenames with newlines. Two-step approach because `git ls-files` doesn't combine tracked and untracked in a single invocation cleanly.
+- **Non-git workspaces** (or `git` unavailable): walk recursively with the [`ignore`](https://www.npmjs.com/package/ignore) package's `.gitignore`-syntax engine reading the workspace's `.gitignore` (if present) plus a hardcoded default exclude list (`node_modules/`, `dist/`, `.git/`).
+
+Either path produces the same `FileEntry[]` shape. Per-file: read first 8KB to detect binary (presence of NUL byte), then either stream `sha256` of the full file (text) or just compute the size + flag binary. 50000-file cap with `truncated: true` propagation.
+
+**Diff computation:**
+
+- **Git path:** `git diff --no-index --binary --text <before-tree> <after-tree>` against ephemeral tree objects built from the two snapshots. Produces unified diff format directly.
+- **Fallback path:** the [`diff`](https://www.npmjs.com/package/diff) npm package's `createPatch` per file pair. Concatenated into a single multi-file unified diff. Chosen at T-P1-007 after a real §22.5 consultation (the `diff` package was already a devDep candidate; user chose to keep it).
+
+Both paths respect the 256KB-per-file cap with `truncated: true` propagation. Binary files are listed by path in `files_modified` but excluded from `diff`.
+
+## Transcript writer
+
+`TranscriptWriter` streams JSONL to `~/.claude-bridge/transcripts/{job_id}.jsonl`. One JSON object per line; the SDK's `SDKMessage` shape is passed through pretty-much-unchanged (no normalization — the docs-vs-runtime pattern at work; see [v0.5 §6](claude-orchestrated-methodology-v0_5.md#6-the-docs-describe-happy-path-runtime-reveals-edges-pattern-new-in-v05)). The writer:
+
+- Creates the transcripts directory lazily on first write (mode 0700 on Unix).
+- Opens the file with mode 0600 on Unix.
+- Caps total bytes at 50MB; appends a final marker line `{"type":"truncation","reason":"transcript_size","truncated_at":<bytes>}` when the cap is reached. Subsequent appends are dropped silently.
+- Idempotent `close()` per the async-sink-queue pattern (see `docs/patterns/project/async-sink-queue.md`).
+
+**Orphan handling at startup** (T-P1-006): the daemon scans `~/.claude-bridge/transcripts/` and reports any transcript files whose `job_id` isn't in the JobQueue's retained-IDs set (P1 has no persistent job state, so all transcripts at startup are orphans). The default action is to leave orphans in place for forensic recovery; the runbook covers manual cleanup.
+
+## Report assembler
+
+`assembleReport({job, run_state, before_snapshot, after_snapshot, transcript_path, ...})` produces a `DelegationReport`. Responsibilities:
+
+- **Parse the transcript** with `parseTranscript` — line-by-line JSON, fail-soft (one bad line doesn't abort; logged at warn level, line skipped).
+- **Extract the summary** — backward-walk the parsed messages from the end, finding the last assistant message with text content; if no such message exists, return empty string.
+- **Extract shell commands** — forward-walk parsed messages, looking for `tool_use` blocks with `name === "Bash"`; pair each with its `tool_result` and extract `command` + exit-code-from-result regex.
+- **Compute files diff** — call `computeDiff(before_snapshot, after_snapshot)`; categorize file additions/modifications/deletions from snapshot comparison.
+- **Pick truncation reason** — 4-tier precedence: `timeout` > `max_turns` > `transcript_size` > `workspace_size`. First match wins; `truncated: true` if any match.
+
+The assembler is the reason for the docs-vs-runtime pattern showing up at T-P1-008: the orchestrator's pre-dispatch reading of SDK docs said messages have a flat `content` field; the SDK's actual TypeScript types nest assistant content under `.message.content` (full Anthropic `BetaMessage` shape). The `effectiveContent(m)` helper (in `report.ts`) reads both shapes, preferring the nested form when present. The legacy flat-content path remains for backward compatibility with messages that may not be assistant-typed.
+
+## SDK integration
+
+The SdkJobRunner wraps `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code` in late 2025; the older name appears in some older design notes — a P1-close doc-debt item).
+
+**Permission mode mapping:**
+
+| `Job.mode` | SDK `permissionMode` |
+|---|---|
+| `agentic` | `"acceptEdits"` |
+| `read_only` | `"plan"` |
+
+**Belt-and-suspenders for `read_only` (T-P1-010 fix):** the SDK's `"plan"` mode is not actually read-only on its own. Claude in plan mode can call the `ExitPlanMode` tool which the SDK **auto-approves** and flips `permissionMode` to `"default"` — on the next turn, write tools become available. T-P1-010's SMOKE run caught this: on Windows the test happened to pass only because `max_turns=3` ran out before the post-flip turn; with higher max_turns the workspace would have been mutated.
+
+The fix is to pin `disallowedTools` for read_only delegations: `["Write", "Edit", "MultiEdit", "NotebookEdit", "ExitPlanMode"]`. The SDK enforces `disallowedTools` at the dispatch layer regardless of any `permissionMode` flip. Belt + suspenders: permission mode says "plan," disallowed-tools list says "and even if plan mode is escaped, these stay forbidden."
+
+See [v0.5 §6](claude-orchestrated-methodology-v0_5.md#6-the-docs-describe-happy-path-runtime-reveals-edges-pattern-new-in-v05) for the methodology lesson: orchestrator-side documentation reading said "plan mode is read-only"; runtime exercise revealed the `ExitPlanMode` escape hatch.
+
+**Bash deny via canUseTool.** The SDK's `canUseTool` callback fires before each tool invocation. The runner inspects `toolName === "Bash"` and matches the command against a hardcoded deny pattern list (from `00-overview.md`): `sudo`, `rm -rf /`, `dd of=/dev/`, `npm install`, `pip install`, `apt install`, `brew install`, `~/.ssh` access, `~/.aws` access. Match → return `{behavior: "deny", message: "Blocked by claude-bridge deny list: <reason>"}`. The SDK surfaces the deny message in the transcript as a `tool_result`. P2 will layer per-workspace `.claude-bridge.json` overrides on top; P1 is hardcoded.
+
+**Cancellation: AbortController, not `query.interrupt()`.** T-P1-009's original design specified `query.interrupt()` for cancellation. The SDK's TypeScript declarations explicitly say `interrupt()` is "only supported when streaming input/output is used" — for single-prompt delegations (which is all P1 does), it's a no-op. The actual primitive is `Options.abortController`: the runner constructs an `AbortController`, passes it into the SDK options, and calls `.abort()` on cancel. This was a reactive deviation at T-P1-009 documented in `sdk-runner.ts`'s header.
+
+**Transcript pass-through.** Each `SDKMessage` from the `query()` AsyncGenerator is appended to the transcript writer's JSONL stream. Lossless from the SDK's perspective — the daemon does not normalize or filter. The transcript is the ground truth for what the SDK did; the report is a derived summary.
+
+## Acceptance harnesses
+
+Two harnesses, both at `scripts/`, both invoking the same MCP client (`scripts/mcp-delegate-client.mjs`):
+
+- **`acceptance-p1.mjs`** (T-P1-005) — drives 9 [MECH] ACs against the **StubJobRunner**. No API key needed; runs in ~7 seconds. Covers `delegate_to_claude_code` latency, queue semantics, long-poll event-driven behavior, cancellation of queued jobs, audit-entry metadata, input validation, no-workspace-503 path.
+- **`acceptance-p1-smoke.mjs`** (T-P1-011) — drives 3 [SMOKE] ACs against the real **SdkJobRunner** with live Anthropic API. Requires `ANTHROPIC_API_KEY`. Covers AC-5 (agentic happy path), AC-6 (read_only refusal — verifies the belt-and-suspenders), AC-8 (cancel running delegation within 15s).
+
+Both harnesses share `scripts/lib/harness-common.mjs` (extracted at T-P1-011): temp env setup, config writing, daemon spawn/stop, ready-poll, `pass`/`fail`/`extractResult` helpers, the `ensureCloudflaredOnPath` PATH-augmentation function (covers Windows install paths + Linux user-local `~/cloudflared` per T-0019.6 + system paths per T-P1-012).
+
+**Harness brittleness defense** (T-P1-011 reactive fix; codified in [v0.5 §7](claude-orchestrated-methodology-v0_5.md#7-harness-brittleness-defense-new-in-v05)): the SMOKE harness uses an `unwrapOrThrow(callResult, where)` helper that hard-fails when the MCP response carries `isError: true`. Without it, a schema-rejection or other server-side error gets wrapped in an envelope, `extractResult` returns the bare result object (no `structuredContent`), and assertions like `p.status === "cancelled"` evaluate `undefined === "cancelled"` → false → silent "pass." T-P1-011's first run had AC-6 "pass" in 38ms because of exactly this — a `wait_ms: 90000` rejected at the `PollInputSchema` boundary (60000 cap).
+
+Cross-platform parity verified at T-P1-012: both harnesses run identically on Windows and WSL Ubuntu with the same PASS counts. Per-AC elapsed varies (Claude's model nondeterminism on read_only delegations can produce 5x wall-time variance for the same semantic outcome — neither is wrong).
+
+## Cross-platform considerations
+
+P1 inherits CC-1 through CC-3 from P0 and adds CC-4 through CC-6 (per [v0.5 §8](claude-orchestrated-methodology-v0_5.md#8-cross-platform-discipline-cc-n-artifacts)):
+
+| Discipline | What it means | P1 manifestation |
+|---|---|---|
+| CC-1 | Path-handling: canonical forward slashes; `path.join`; `pathToFileURL` for file URIs | Transcript URIs use `pathToFileURL`; snapshot paths normalized at the boundary. |
+| CC-2 | Process/signal handling: Windows vs Unix subprocess semantics | Daemon spawns SDK + cloudflared with platform-aware kill chains (SIGTERM with 5s SIGKILL watchdog on Unix; equivalent shape on Windows). |
+| CC-3 | File permissions: Unix mode bits no-op on Windows | Daemon's loose-perms refusal is Unix-only (`0600` check skipped on `win32`). Audit log file mode 0600 set when supported. |
+| CC-4 | Defensive clean install before cross-platform validation | The runbook's [WSL pre-flight](runbook.md#wsl-pre-flight-checklist) documents this. |
+| CC-5 | Lazy-load with graceful degradation for rare-case dependencies | The MCP client's `undici` import is wrapped in try/catch — load failure (Node 20.18 vs `>=22.19` engine) drops the DNS workaround with a stderr warning. Localhost MCP unaffected. |
+| CC-6 | Node engine pinning matrix | The runbook's [Node engine guidance](runbook.md#node-engine-guidance) makes the matrix explicit. |
+
+The `ensureCloudflaredOnPath` helper is the most-edited cross-platform surface in the harness — Windows install path at T-0019, Linux user-local + system paths at T-P1-012. macOS Homebrew paths are an open follow-up.
+
+## What's deferred to P2
+
+P1 explicitly excludes (will land at P2 or later):
+
+- **VS Code extension** — workspace registration via IPC, status bar, webview for live delegation streaming, toast approval UI.
+- **Real workspace registry** — multi-workspace support, attach/detach lifecycle, persistent state.
+- **Per-workspace `.claude-bridge.json`** — additional bash-deny patterns, additional inspection-tool deny patterns, `auto_attach` snapshot configuration.
+- **OAuth** — Claude.ai connector UI requires OAuth-style credentials; static Bearer tokens (P1's mechanism) work via MCP Inspector, Claude Code CLI, Claude Desktop, and any other Bearer-capable MCP client, but not the Claude.ai connector. May land between P1 and P2 or be absorbed into P2.
+- **Tier-2 inspection tools** — `list_workspace`, `read_file`, `get_git_status`, `get_git_diff`, `get_diagnostics`, `search_workspace`, `get_open_editors`.
+- **Persistent job state** — daemon crash mid-job loses the in-memory `JobRunState`. P3 candidate.
+- **Multi-concurrent runner** — single-concurrent is a soft constraint; multi could land at P3 if there's real demand.
+- **Streaming responses to project-Claude** — P1 is poll-only. Streaming via MCP server-sent events is a P4 stretch.
+- **Persistent named tunnels** — every cloudflared restart issues a new URL. Named tunnels (P3) avoid the re-paste-the-URL friction.
+
+Cross-references: the [P1 design doc](design/02-p1-delegation.md) has the full out-of-scope list with rationale.

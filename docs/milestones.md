@@ -58,8 +58,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 9 — Claude Code SDK integration | T-P1-009 | COMPLETE |
 | Phase 10 — Cancellation cross-platform + live SMOKE on Win + WSL | T-P1-010 | COMPLETE |
 | Phase 11 — Acceptance harness MCP-path SMOKE expansion | T-P1-011 | COMPLETE |
-| Phase 12 — WSL cross-platform run | T-P1-012 | COMPLETE, awaiting verdict (WSL Ubuntu: stub harness 9/9 PASS + SMOKE 3/3 PASS for AC-5/6/8; two platform fixes — Linux cloudflared PATH branch, lazy undici load; Windows still 9/9 post-edits; AC-9 MECH-VERIFIED via MCP path on both platforms) |
-| Phase 13 — Runbook + walkthrough | — | not started |
+| Phase 12 — WSL cross-platform run | T-P1-012 | COMPLETE |
+| Phase 13 — Runbook + walkthrough | T-P1-013 | COMPLETE, awaiting verdict (runbook +301 lines: prerequisites, installation, workspace block, operating delegations, P1 troubleshooting items, uninstallation; walkthrough +189 lines: P1 delegation surface narrative with 11 sub-sections + diagram + P2 deferral notes) |
 | Phase 14 — P1 gate close | — | not started |
 
 Phase 4/5 swap applied during T-P1-001 verdict (tool surface must precede harness so the harness can exercise the MCP path); reflected in `p1-build-plan.md` and `orchestrator-context-p1-open.md`.

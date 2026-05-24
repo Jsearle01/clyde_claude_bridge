@@ -2,6 +2,40 @@
 
 Operational reference. Pairs with the project [README](../README.md) (what is this, how to install) — this doc covers "I have it running; how do I work with it; what do I do when X breaks."
 
+Sections are arranged operator-flow-first: prerequisites and install at the top; lifecycle, config, files; then the P1 delegation surface (`delegate_to_claude_code` / `poll_delegation` / `cancel_delegation`); troubleshooting at the end. The [walkthrough](walkthrough.md) covers internals and design narrative for contributors; the [design doc](design/02-p1-delegation.md) covers rationale.
+
+## Prerequisites
+
+| Item | Required | Notes |
+|---|---|---|
+| OS | Yes | Windows 10/11 and WSL Ubuntu (validated through P1). Linux distros and macOS are untested but should work given POSIX paths + cross-platform discipline (CC-1 through CC-6 in the methodology); please report results. |
+| Node.js | Yes | **20.19+ recommended.** 20.18 works for the daemon and SDK runtime, but `undici@8.x` (transitive dev-dep) crashes at module load on 20.18 — the harness scripts degrade gracefully (see [Troubleshooting → "undici unavailable" warning](#undici-unavailable-warning)). 20.10 is the daemon's hard floor (P0 baseline). |
+| Git | Yes | Snapshot/diff computation uses `git ls-files` and `git diff` when the workspace is a git repo; falls back to package-based walking and diff for non-git workspaces. |
+| cloudflared | Optional | Required only for tunneled MCP access (Claude.ai, remote clients). For localhost-only use (MCP Inspector on the same host, acceptance harnesses), the daemon still spawns cloudflared at startup unless `tunnel.binary` is overridden — see [cloudflared per OS](#cloudflared-installation-per-os). |
+| ANTHROPIC_API_KEY | Required for live delegation | Get from console.anthropic.com. The daemon's child process inherits the env var of the shell that spawned it. Never written to disk by claude-bridge. Without the key, `delegate_to_claude_code` calls reach the SDK runner and fail at runtime with `error.category: "auth"`. |
+
+## Installation
+
+```bash
+git clone https://github.com/Jsearle01/clyde_claude_bridge.git
+cd clyde_claude_bridge
+npm install
+npm run build
+```
+
+`npm install` may take 1-2 minutes the first time. The SDK package (`@anthropic-ai/claude-agent-sdk@^0.3.150`) is a normal npm dependency — no extra binary fetch is required at install time. The SDK lazily resolves the Claude Code runtime when a delegation actually runs.
+
+For developer convenience, link the CLI globally:
+
+```bash
+cd packages/cli
+npm link
+```
+
+Then `claude-bridge --version` from any directory.
+
+To uninstall: `npm unlink -g @claude-bridge/cli` (see [Uninstallation](#uninstallation) at the bottom of this doc for full cleanup).
+
 ## Lifecycle
 
 ### `claude-bridge start`
@@ -132,6 +166,32 @@ Field notes:
 
 **Permissions (Unix only).** The daemon refuses to start if `config.json` permissions are looser than 0600 (CC-3). On Windows the file-mode check is a no-op by design.
 
+### Workspace block (P1)
+
+P1 ships with a stub workspace registry: a single workspace is configured in `config.json` and matched by ID. The P2 VS Code extension will replace the stub with a real registry where workspaces register themselves at attach time.
+
+Add a `workspace` block to enable delegations:
+
+```json
+{
+  "workspace": {
+    "id": "local#default",
+    "abs_path": "/home/you/projects/your-repo",
+    "default_mode": "agentic"
+  }
+}
+```
+
+- `id` — opaque string; the only constraint is uniqueness across multi-workspace registries (P2). For the stub, anything matches via exact-string compare.
+- `abs_path` — absolute path to the workspace root. Must exist and be a directory. Symlinks are resolved at config load time (CC-1).
+- `default_mode` — `"agentic"` (writes allowed via the SDK) or `"read_only"` (writes blocked by `disallowedTools` belt-and-suspenders — see [walkthrough P1 §8](walkthrough.md#sdk-integration)).
+
+When no `workspace` block is present, `delegate_to_claude_code` returns `503 no_workspace_configured`; `ping` continues to work.
+
+### Stub-config block (development only)
+
+The daemon also accepts an undocumented-by-design `stub_behavior` block for harness/test work. It requires the `--allow-stub-config` flag and forces the StubJobRunner runner regardless of `workspace`. Leave it absent in production configs.
+
 ## Files and directories
 
 | Path | Purpose |
@@ -144,6 +204,139 @@ Field notes:
 | `~/.claude-bridge/daemon.sock` | IPC socket (Unix only) |
 
 On Windows substitute `%APPDATA%\claude-bridge\` and `\\.\pipe\claude-bridge` for the IPC endpoint.
+
+P1 adds the transcripts subdirectory:
+
+| Path | Purpose |
+|---|---|
+| `~/.claude-bridge/transcripts/` | One JSONL file per delegation, named `{job_id}.jsonl` (mode 0700 dir on Unix; mode 0600 per file) |
+
+The transcripts dir is created lazily on first delegation. Orphan handling (T-P1-006) sweeps stale transcripts at daemon startup based on the JobQueue's retained job IDs — but P1 has no persistent job state across daemon restarts, so all transcripts present at startup are treated as orphans of prior runs and left in place for forensic recovery. Manual cleanup is the user's job; the runbook's [Uninstallation](#uninstallation) section covers full directory removal.
+
+## Operating delegations (P1)
+
+P1 ships three MCP tools that compose into a single delegation lifecycle: `delegate_to_claude_code` enqueues work; `poll_delegation` retrieves progress and final report; `cancel_delegation` aborts. All three are exposed at the `/mcp` endpoint and require the same Bearer token used by `ping`.
+
+### `delegate_to_claude_code`
+
+Inputs (Zod-validated at the MCP boundary):
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `prompt` | string (non-empty) | yes | The instruction Claude Code receives. No size cap enforced by claude-bridge in P1 (SDK and Anthropic API enforce real limits). |
+| `workspace` | string | no | If absent, the configured workspace is used. If present, it must match an attached workspace ID (P1: the stub's single ID). Mismatch → `404 workspace_not_found`. |
+| `mode` | `"agentic"` \| `"read_only"` | no | Defaults to the workspace's `default_mode`. |
+| `max_turns` | integer 1-200 | no | Defaults to 50. Hits the SDK's `maxTurns` directly. Exceeding triggers truncation. |
+| `working_directory` | string | no | Subdirectory of the workspace, used as the SDK's `cwd`. Absolute paths rejected (`working_directory_absolute`); `..` escapes rejected (`working_directory_escapes_workspace`). |
+| `exhibits` | array | no | Up to 100 inline files (≤256KB total) appended to the prompt as `--- EXHIBIT: <path> ---` blocks. |
+| `model` | string | no | Override the SDK's default model. |
+
+Response shape on success:
+
+```json
+{
+  "job_id": "j_FJ7QBO3X7LQO",
+  "status": "queued",
+  "workspace_id": "local#default",
+  "queued_position": 0
+}
+```
+
+`queued_position: 0` means "first in the FIFO behind any currently-running job." With the single-concurrent runner, position 0 typically means "will start immediately when the runner picks the next job."
+
+### `poll_delegation`
+
+Inputs:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `job_id` | string | yes | The ID returned by `delegate_to_claude_code`. |
+| `wait_ms` | integer 0-60000 | no | Long-poll budget. Defaults to 0 (non-blocking). Capped at 60000 by the schema. |
+
+Behavior: returns immediately if the job is terminal (`complete` / `failed` / `cancelled`); otherwise waits until terminal or `wait_ms` elapses, whichever comes first. Resolution is event-driven via the JobQueue's terminal-promise primitive — no busy-wait.
+
+Recommended polling pattern: long-poll with `wait_ms: 30000-60000`. Re-poll on `running` until terminal. Short polls (`wait_ms: 0` or `< 1000`) work for "what's the current state" checks but burn round-trips during long delegations.
+
+Response shape (running):
+
+```json
+{
+  "job_id": "j_FJ7QBO3X7LQO",
+  "status": "running",
+  "workspace_id": "local#default",
+  "partial": {
+    "turns_so_far": 3,
+    "last_tool": "Write",
+    "elapsed_ms": 4521
+  }
+}
+```
+
+Response shape (terminal): includes `report` with the full `DelegationReport` (see below).
+
+### `cancel_delegation`
+
+Inputs:
+
+| Field | Type | Required |
+|---|---|---|
+| `job_id` | string | yes |
+
+Behavior: flips `cancel_requested` on the job. If the job is queued, transitions to `cancelled` immediately. If running, signals the SDK via the runner's AbortController; terminal `cancelled` state reached within ~2 seconds typical (T-P1-012 measured 1.4s WSL / 2.2s Windows; 15s budget per AC-8 in design doc).
+
+Response shape:
+
+```json
+{
+  "job_id": "j_FJ7QBO3X7LQO",
+  "status": "cancelled",
+  "prior_status": "running"
+}
+```
+
+### Interpreting `DelegationReport`
+
+When the job reaches `complete`, `failed`, or `cancelled`, the next poll returns the report in the response's `report` field:
+
+```json
+{
+  "job_id": "j_FJ7QBO3X7LQO",
+  "summary": "Created hello.txt at workspace root with content 'hi from claude-code'.",
+  "files_created": ["hello.txt"],
+  "files_modified": [],
+  "files_deleted": [],
+  "diff": "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n...",
+  "shell_commands": [],
+  "tool_calls_made": 2,
+  "turns": 1,
+  "duration_ms": 9334,
+  "truncated": false,
+  "truncation_reason": null,
+  "error": null,
+  "transcript_uri": "file:///home/you/.claude-bridge/transcripts/j_FJ7QBO3X7LQO.jsonl"
+}
+```
+
+Field-by-field:
+
+| Field | What it tells you |
+|---|---|
+| `summary` | Backward-walk-derived string from the last assistant message's text content. Empty string if the SDK produced no text. |
+| `files_created` / `files_modified` / `files_deleted` | Computed from the before/after workspace snapshot pair (taken at delegation start and end). Binary files are listed by path even when excluded from `diff`. |
+| `diff` | Unified text diff of the workspace state change. Truncated at 256KB per file. Empty string if no changes. |
+| `shell_commands` | Bash invocations extracted from the transcript's `tool_use` blocks: `[{cmd, exit_code}]`. |
+| `tool_calls_made` | Count of all SDK tool invocations across the run. |
+| `turns` | Assistant-message count. May be less than `max_turns`. |
+| `duration_ms` | Wall-clock duration from runner-claim to terminal. |
+| `truncated` / `truncation_reason` | If `truncated: true`, one of `"timeout"` \| `"max_turns"` \| `"transcript_size"` \| `"workspace_size"` (precedence in that order — T-P1-008). |
+| `error` | `null` on `complete`; structured `ErrorDetail` on `failed` / `cancelled`: `{category, message, details}`. Categories: `"auth"` \| `"permission"` \| `"timeout"` \| `"cancelled"` \| `"internal"` \| `"sdk_runtime"`. |
+| `transcript_uri` | `file://` URL to the full JSONL transcript. Survives daemon restart. |
+
+The transcript is the authoritative record of what happened; the report is a derived summary. When in doubt about a delegation's behavior, read the transcript.
+
+### Audit trail
+
+Each MCP tool invocation produces one audit log entry in `~/.claude-bridge/audit.jsonl` with `tool`, `request_id`, `allowed`, `duration_ms`, plus P1 additions `job_id` and `workspace_id` (when present in the tool's context). The job completing does **not** produce a separate audit entry — the audit is on tool calls, not on job lifecycle events. To trace a delegation end-to-end: filter audit entries by `job_id`.
 
 ## Troubleshooting
 
@@ -197,6 +390,74 @@ See `scripts/acceptance-p0.ps1`'s `Start-DaemonAndWait` helper for the canonical
 ### Stale audit/log handles after `claude-bridge stop`
 
 Shouldn't happen — the daemon's idempotent close discipline (CC-1) closes both handles before exit. If `tail-log -f` keeps a daemon.log open across a stop+restart, restart the tail.
+
+### WSL pre-flight checklist
+
+Before running the daemon or the acceptance harness on WSL Ubuntu (or any Linux that has previously held stale state from another host or another Node version), do the defensive clean install:
+
+```bash
+cd ~/claude-bridge-wsl   # or wherever your WSL checkout lives
+rm -rf node_modules packages/*/node_modules
+find packages -name "*.tsbuildinfo" -delete
+npm install
+npm run build
+```
+
+Reasoning (CC-4): incremental npm installs across Node versions or platforms can leave orphaned files (T-P1-010 hit `.d.ts.map` files without their `.d.ts` siblings, breaking `tsc -b`). Clean install costs ~30 seconds and prevents an entire class of confusing failures.
+
+Also: cloudflared must be reachable. The harness's `ensureCloudflaredOnPath` (T-P1-012) probes `~/cloudflared`, `/usr/local/bin/cloudflared`, and `/usr/bin/cloudflared`. If your install lives elsewhere, either symlink it to one of those paths or set `tunnel.binary` in the test config.
+
+### "undici unavailable" warning
+
+When you see this on stderr while running the MCP delegate client (or any harness that loads it):
+
+```
+[mcp-client] undici unavailable; DNS workaround disabled — localhost is fine;
+trycloudflare hostnames may fail to resolve.
+(webidl.util.markAsUncloneable is not a function)
+```
+
+This is **benign for localhost-only setups.** It means `undici@8.x` failed to load — almost always because your Node is below the `>=22.19` engine requirement, with WSL Ubuntu's stock Node 20.18 the dominant case. The MCP client lazy-loads undici and degrades gracefully: localhost MCP connections work; the DNS workaround for newly-issued `*.trycloudflare.com` URLs (T-0019) is disabled.
+
+If you actually need the workaround (e.g., your client targets a tunnel URL whose DNS hasn't propagated through your local resolver), upgrade Node:
+
+```bash
+# In WSL: replace the user-local install with Node 20.19+ or 22 LTS
+cd ~
+rm -rf node-v20
+wget https://nodejs.org/dist/v20.19.0/node-v20.19.0-linux-x64.tar.xz
+tar xf node-v20.19.0-linux-x64.tar.xz
+mv node-v20.19.0-linux-x64 node-v20
+# PATH already augmented; re-source your shell if needed
+```
+
+Or pin the system Node via your distro's package manager. After upgrade, the warning disappears and the DNS workaround re-enables transparently.
+
+### cloudflared installation per OS
+
+| OS | Recommended | Path |
+|---|---|---|
+| Windows | Official installer from cloudflare.com/docs | `C:\Program Files (x86)\cloudflared\cloudflared.exe` (harness auto-detects this path) |
+| WSL Ubuntu / Debian | `cloudflared` apt package or user-local tarball | `/usr/bin/cloudflared` (apt) or `~/cloudflared` (user-local, T-0019.6 pattern) |
+| Linux (other) | Distro package or static binary from Cloudflare GitHub releases | `/usr/local/bin/cloudflared` |
+| macOS | `brew install cloudflared` (untested at P1; should work) | `/usr/local/bin/cloudflared` (Intel) or `/opt/homebrew/bin/cloudflared` (Apple Silicon — the harness does not yet probe this path; symlink it to `~/cloudflared` as a workaround) |
+
+To override the path explicitly without depending on auto-detection, set `tunnel.binary` in `config.json` to the absolute path of the binary.
+
+### Node engine guidance
+
+The matrix:
+
+| Use case | Floor | Recommended |
+|---|---|---|
+| Daemon runtime | 20.10 | 20.19+ |
+| SDK runtime (delegations) | 20.18 (warns) | 20.19+ |
+| MCP delegate client (undici-based DNS workaround) | 22.19 | 22 LTS |
+| Acceptance harnesses (localhost MCP) | 20.10 | 20.19+ (warning-free) |
+
+20.10 is the P0 daemon floor. Below that, native ESM dynamic-import semantics differ enough to risk runtime surprises. 20.19 is the recommended floor for the SDK runtime to silence the engine warning. 22.19 is undici@8's hard floor.
+
+If you can choose a single version, **Node 22 LTS** satisfies everything cleanly.
 
 ## Connecting an MCP client (in depth)
 
@@ -304,3 +565,43 @@ What it does, in order: cold-wipes `~/.claude-bridge/`; starts the daemon; verif
 Expected outcome: `ALL P0 ACCEPTANCE CRITERIA PASSED (8 verified mechanically; 2 skipped with notes)`.
 
 Pre-requisites: `claude-bridge` on PATH (via `npm link`); `cloudflared` on PATH or at a well-known Windows install location; `node` on PATH; network connectivity for the tunnel.
+
+### P1 harnesses
+
+P1 ships two harnesses, both under `scripts/`:
+
+```bash
+# StubJobRunner via MCP — no API key needed; 9 mechanical ACs in ~7s
+pwsh scripts/acceptance-p1.ps1            # Windows
+bash scripts/acceptance-p1.sh             # Linux / WSL
+
+# SdkJobRunner via MCP against the real Anthropic API — ~1-2 min, ~$0.30 in credits
+ANTHROPIC_API_KEY="sk-ant-..." pwsh scripts/acceptance-p1-smoke.ps1
+ANTHROPIC_API_KEY="sk-ant-..." bash scripts/acceptance-p1-smoke.sh
+```
+
+Both wrappers invoke the same `.mjs` core. The SMOKE harness aborts with exit 2 if `ANTHROPIC_API_KEY` is absent from the invoking shell.
+
+Cross-platform parity was verified at T-P1-012: Windows and WSL both produce identical PASS counts on both harnesses. Per-AC elapsed varies (Claude's model nondeterminism on read_only delegations can produce 5x wall-time variance between runs — neither is wrong).
+
+## Uninstallation
+
+Stop the daemon and remove state:
+
+```bash
+claude-bridge stop          # idempotent; exit 0 if not running
+rm -rf ~/.claude-bridge/    # config, audit, transcripts, sockets, pidfile
+```
+
+On Windows: `Remove-Item -Recurse -Force "$env:APPDATA\claude-bridge"`.
+
+Remove the global CLI link (if installed):
+
+```bash
+cd packages/cli
+npm unlink -g @claude-bridge/cli
+```
+
+Remove the repo: `rm -rf /path/to/clyde_claude_bridge`.
+
+The daemon's audit and transcript directories are the only state outside the repo. After removing `~/.claude-bridge/` and unlinking the CLI, claude-bridge leaves no trace on the host.

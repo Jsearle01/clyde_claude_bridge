@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-24
-**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-012 (Phase 12 cross-platform WSL Ubuntu MCP-path validation) COMPLETE, awaiting verdict. Both harnesses run on WSL: StubJobRunner harness 9/9 PASS; SdkJobRunner SMOKE 3/3 PASS through MCP wire against the real SDK. Two reactive platform fixes (Linux cloudflared PATH branch + lazy undici load to survive Node 20.18 engine mismatch). Windows still 9/9 post-fix. AC-9 cross-platform parity MECH-VERIFIED on the MCP path. Steady-state operating mode under methodology v0.4.
+**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-013 (Phase 13 runbook + walkthrough updates) COMPLETE, awaiting verdict. Runbook extended +301 lines with P1 operator content (prerequisites, installation, workspace block, full operating-delegations section, 4 new troubleshooting items per Decision 3, uninstallation). Walkthrough extended +189 lines with the P1 delegation-surface narrative across 11 sub-sections including a layered architecture diagram and explicit P2 deferral notes. Steady-state operating mode now under **methodology v0.5** (placed at T-P1-012 conclusion).
 **SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`)
 **P1-close doc-debt (informal):**
 - Update `02-p1-delegation.md` / `p1-build-plan.md` references from `@anthropic-ai/claude-code` → `@anthropic-ai/claude-agent-sdk`.
@@ -25,13 +25,19 @@
 ## Task queue
 
 ### In progress
-- T-P1-012 — Phase 12 WSL Ubuntu cross-platform run of both harnesses; 2 reactive platform fixes (Linux cloudflared branch in `harness-common.mjs`; lazy undici load in `mcp-delegate-client.mjs`); WSL stub harness 9/9 PASS, WSL SMOKE 3/3 PASS, Windows still 9/9 (COMPLETE, awaiting verdict)
+- T-P1-013 — Phase 13 runbook + walkthrough updates; runbook extended +301 lines with P1 operator-facing content; walkthrough extended +189 lines with P1 delegation-surface narrative (COMPLETE, awaiting verdict)
 
 ### Pending (ordered, mapped from `p1-build-plan.md` phases)
-- T-P1-013+ — Phase 13 runbook + walkthrough updates
-- T-P1-014 — Phase 14 P1 gate close
+- T-P1-014 — Phase 14 P1 gate close (design-doc-debt sweep across `02-p1-delegation.md` + `p1-build-plan.md` + `00-overview.md`; P1 ACs final verification; gate close)
 
 ### Recently completed
+- **T-P1-013** — Phase 13 operator runbook + P1 walkthrough extension (COMPLETE, awaiting verdict; 2026-05-24)
+  - Pure-doc task; no code changes. First task operating under methodology v0.5.
+  - `docs/runbook.md` extended 306 → 607 lines. New sections: Prerequisites, Installation, Workspace block (P1 sub-section under Configuration), Operating delegations (P1) — full coverage of `delegate_to_claude_code` / `poll_delegation` / `cancel_delegation` shapes + DelegationReport field interpretation + audit-trail note. Four new Troubleshooting items per dispatch Decision 3: WSL pre-flight checklist (CC-4), "undici unavailable" warning (CC-5), cloudflared installation per OS, Node engine guidance (CC-6 matrix). New P1 harnesses sub-section under "Running the acceptance harness." New Uninstallation section.
+  - `docs/walkthrough.md` extended 287 → 476 lines. Existing P0-through-P2 UX narrative preserved intact; new "## P1 — Delegation surface" major section appended with 11 sub-sections per dispatch Decision 2: P1 overview (with layered architecture diagram on top of P0), job lifecycle (Job vs JobRunState vs JobView split + single-concurrent rationale + terminal-promise primitive), the three MCP tools (with audit-metadata side-channel pattern), workspace registry stub (P2 deferral noted), snapshot + diff (git path + fallback path), transcript writer (50MB cap + orphan handling), report assembler (parseTranscript + 4-tier truncation precedence + docs-vs-runtime pattern instance), SDK integration (permission-mode mapping + READ_ONLY_DISALLOWED_TOOLS belt-and-suspenders + bash deny via canUseTool + AbortController cancellation), acceptance harnesses (T-P1-005 stub + T-P1-011 SMOKE + shared lib + harness brittleness defense), cross-platform considerations (CC-1 through CC-6 in effect), P2 deferrals.
+  - Cross-references throughout: walkthrough cites runbook for operator concerns and v0.5 methodology §6/§7/§8 for the docs-vs-runtime / harness-brittleness / CC-N artifacts. Runbook cites walkthrough P1 sections for design rationale.
+  - Decision 3 P1-close items: 4 runbook-fits items absorbed here (WSL pre-flight, undici warning, cloudflared per OS, Node engine). Remaining 9 design-doc-debt items deferred to T-P1-014.
+  - Build/lint untouched (no code changes); 280 daemon tests still pass; 30th consecutive zero-fire on async-discipline rules (preserved by no-touch).
 - **T-P1-012** — Phase 12 cross-platform WSL Ubuntu MCP-path validation (COMPLETE, awaiting verdict; 2026-05-24)
   - WSL prep: `rm -rf node_modules && npm install && npm run build` — clean. T-P1-010's defensive prep pattern works.
   - **WSL stub harness results:** 9/9 PASS in ~7s wall (AC-1 56ms, AC-3 10ms, AC-4 1513ms, AC-12/15/2/7/13 all PASS; AC-10 21/27 audit entries carry job_id+workspace_id).
