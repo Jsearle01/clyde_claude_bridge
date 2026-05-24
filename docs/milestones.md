@@ -62,7 +62,9 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 13 — Runbook + walkthrough | T-P1-013 | COMPLETE |
 | Phase 14 — P1 gate close | T-P1-014 | COMPLETE |
 | (post-gate) | T-P1-015 | COMPLETE |
-| (pre-P2) | T-P2-000-review | COMPLETE, awaiting verdict — pre-P2 review pass on `03-p2-extension.md` + `p2-build-plan.md`; 2 low-risk corrections applied (config field name singular not plural; Q4 status code consistency); 7 design + 9 build-plan substantive concerns surfaced for orchestrator follow-up; confidence 80-85% ready; recommend short clarification round before T-P2-001 dispatches |
+| (pre-P2) | T-P2-000-review | COMPLETE |
+| (pre-P2) | T-P2-000-refinement | COMPLETE — applied 9 dispatched resolutions (3 blockers + 6 concerns) from review verdict + 1 reactive cross-reference fix; v0_6_candidates seeded with C-1 through C-10; design artifacts ready to drive T-P2-001 |
+| P2 Phase 1 | T-P2-001 | COMPLETE, awaiting verdict — `packages/extension/` scaffolded as VS Code extension; vitest harness with hand-rolled vscode mock via resolve.alias; 2/2 sanity tests pass; .vsix built and installed on Windows; one §22.5 consultation on vsce naming (scoped `@claude-bridge/*` rejected by vsce; renamed flat `claude-bridge-extension`); one trivial root eslint glob extension (`packages/*/tests/mocks/*.ts`) |
 
 Phase 4/5 swap applied during T-P1-001 verdict (tool surface must precede harness so the harness can exercise the MCP path); reflected in `p1-build-plan.md` and `orchestrator-context-p1-open.md`.
 

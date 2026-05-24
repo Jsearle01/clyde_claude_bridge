@@ -28,6 +28,8 @@ Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this li
 | C-8 | T-P2-000-review (Clyde) | Review-task report shape — Form C variant? | deferred-pending-second-datapoint |
 | C-9 | T-P2-000-review (orchestrator self-flag) | Orchestrator-side discovery confidence levels (memory-based claims flagged verify) | open |
 | C-10 | T-P2-000-review (orchestrator self-flag) | Distinguish orchestrator-clock vs executor-clock in estimates | open |
+| C-11 | T-P2-000-refinement verdict | §22.5 trigger clarification: find target absent but substantive intent applies elsewhere in same edit (at-site) vs find target exists with different wording (consult) | open |
+| C-12 | T-P1-013 + T-P2-000-refinement calibration | Empirical band for multi-file doc-edit with all decisions pre-resolved (15-22 min over 2 datapoints; legacy Medium-consolidation 5-15 min under-predicts) | open |
 
 ## Gate status
 
@@ -42,12 +44,23 @@ Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this li
 ## Task queue
 
 ### In progress
-- T-P2-000-review — pre-P2 review pass on `03-p2-extension.md` + `p2-build-plan.md` (COMPLETE, awaiting verdict)
+- T-P2-001 — Phase 1 extension scaffolding + vitest test harness (COMPLETE, awaiting verdict)
 
 ### Pending
-- (T-P2-001 dispatch pending orchestrator+user resolution of T-P2-000-review concerns)
+- T-P2-002 — Phase 2 IPC client + hello/versioning protocol (per dispatch's rewritten Phase 2 with lockstep CLI update)
 
 ### Recently completed
+- **T-P2-001** — Phase 1 extension scaffolding + vitest test harness (COMPLETE, awaiting verdict; 2026-05-24)
+  - New package `packages/extension/` (npm name `claude-bridge-extension` — flat, not scoped; see §22.5 consultation below). 8 files: `package.json`, `tsconfig.json`, `vitest.config.ts`, `.vscodeignore`, `README.md`, `src/extension.ts`, `tests/mocks/vscode.ts`, `tests/extension.test.ts`. Extension contributes one palette command `claudeBridge.showStatus`; activation on `onStartupFinished`; show-information-message with workspace path on invocation.
+  - **vsce naming §22.5 consultation:** dispatch Decision 2 said `@claude-bridge/extension` (match monorepo scope). vsce rejects scoped names per VS Code manifest spec (`^[a-z0-9\-]+$`). User chose flat `claude-bridge-extension`; added `displayName: "Claude Bridge"` for human-readable UI surfacing. Documented as a single-package deviation from monorepo convention; npm workspace resolution still works.
+  - **Trivial root eslint extension:** added `packages/*/tests/mocks/*.ts` to `allowDefaultProject` glob (one-line addition). Needed because the hand-rolled vscode mock is the first `tests/*` non-`.test.ts` file in the project; daemon's tests are all `.test.ts` so this glob never came up before. Per §22.5-NOT-fire ("wording polish at site"); at-site decision.
+  - **`vsce package` output:** `claude-bridge-extension.vsix` (5 files, 2.29 KB) — contains `dist/extension.js`, `package.json`, `readme.md`. `.vscodeignore` excludes `src/`, `tests/`, configs.
+  - **Install verified Windows:** `code.cmd --install-extension claude-bridge-extension.vsix` succeeded; extension shows as `undefined_publisher.claude-bridge-extension@0.1.0` in `code.cmd --list-extensions`; installed files match the .vsix manifest. (Manual UI verification of activation log + command palette + notification text is operator-side; programmatic verification of installed-package layout confirmed.)
+  - Tests: 2/2 vitest passing in 1.14s. Mock surface (`window.showInformationMessage`, `commands.registerCommand`, `commands.executeCommand`, `workspace.workspaceFolders`, `Disposable`, `ExtensionContext` interface) sized to T-P2-001 only; grows per phase.
+  - Build clean (tsc -b composite produces `dist/extension.js`). Lint clean across all 4 workspaces. Full daemon suite regression: 280 passed + 13 skipped (unchanged from T-P1-015). 33rd consecutive zero-fire on async-discipline rules (one new package's worth of source + tests added without disturbing the streak).
+  - Two new v0.6 candidates appended (C-11, C-12 per dispatch).
+- **T-P2-000-refinement** — applied 9 review resolutions + 1 reactive AC cross-reference fix (CONFIRMED 2026-05-24; commit 4324889)
+  - 3 blockers + 6 concerns. Phase 2 rewritten for hello/versioning lockstep; estimate inflation struck; v0_6_candidates seeded with C-1 through C-10; duplicate registration FCFS reject; inspection bypass approval; identifier persists in workspaces.json; AC-P2-5 removed; API key gap documented in T-P2-013 scope; dependency graph split.
 - **T-P2-000-review** — pre-P2 review pass (COMPLETE, awaiting verdict; 2026-05-24)
   - Read `docs/design/03-p2-extension.md` (224 lines) + `docs/design/p2-build-plan.md` (464 lines) end-to-end. Cross-checked against P1 codebase (`packages/shared/src/config.ts`, `packages/daemon/src/ipc/protocol.ts`) and P1 calibration data.
   - **2 low-risk corrections applied** inline: design-doc Q4 status code now uses `503 extension_offline` for consistency with `503 no_workspace_registered` / `403 user_denied` pattern; build-plan Phase 7 corrected `config.workspaces` → `config.workspace` (P1's actual schema field is singular).

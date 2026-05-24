@@ -1,0 +1,35 @@
+{
+  "name": "claude-bridge-extension",
+  "displayName": "Claude Bridge",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "main": "./dist/extension.js",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=20.10"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeBridge.showStatus",
+        "title": "Claude Bridge: Show Status"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "test": "vitest run",
+    "lint": "eslint src tests",
+    "vsix": "npm run build && vsce package --no-dependencies --out claude-bridge-extension.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.6.0"
+  }
+}

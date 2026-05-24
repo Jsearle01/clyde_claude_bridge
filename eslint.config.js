@@ -19,6 +19,7 @@ export default tseslint.config(
             "packages/*/tests/*.test.ts",
             "packages/*/tests/*/*.test.ts",
             "packages/*/tests/*/*/*.test.ts",
+            "packages/*/tests/mocks/*.ts",
           ],
           // Bumped past the v8 default of 8 — tests are growing past that
           // threshold. Each entry is a small file with no transitive imports
