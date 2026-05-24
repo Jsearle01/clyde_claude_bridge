@@ -18,6 +18,10 @@ import type { WorkspaceRegistry } from "../../workspace/registry.js";
 
 const MAX_EXHIBITS = 100;
 const MAX_INLINE_BYTES = 256 * 1024;
+// 32KB prompt cap per design doc validation rules. Schema is boundary-only
+// per T-P1-001 Decision A; handler-level cap added at T-P1-009 (was the
+// open follow-up from T-P1-005).
+const MAX_PROMPT_BYTES = 32 * 1024;
 
 export interface DelegateDeps {
   registry: WorkspaceRegistry;
@@ -102,6 +106,15 @@ export function makeDelegateTool(
           404,
           "workspace_not_found",
           `workspace not found: ${String(input.workspace)}`,
+        );
+      }
+
+      // Prompt size cap (handler-level; schema is boundary-only)
+      if (Buffer.byteLength(input.prompt, "utf8") > MAX_PROMPT_BYTES) {
+        throw new ToolHandlerError(
+          400,
+          "prompt_size_exceeded",
+          `prompt ${Buffer.byteLength(input.prompt, "utf8")}B exceeds cap ${MAX_PROMPT_BYTES}B`,
         );
       }
 

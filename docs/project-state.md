@@ -5,7 +5,8 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-008 (report assembler + cross-platform-test-inputs pattern doc) COMPLETE, awaiting verdict. Steady-state operating mode under methodology v0.4.
+**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-009 (Claude Agent SDK integration + cancellation) COMPLETE, awaiting verdict. Steady-state operating mode under methodology v0.4.
+**SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`; build plan + design doc still reference old name — P1-close doc-debt sweep)
 **Repository:** https://github.com/Jsearle01/clyde_claude_bridge (public, mechanically verified via `gh repo view` at T-P1-001.6)
 
 ## Gate status
@@ -21,7 +22,7 @@
 ## Task queue
 
 ### In progress
-- T-P1-008 — Phase 8 report assembler (fail-soft transcript parsing + summary backward-walk + truncation precedence) + new project pattern doc `cross-platform-test-inputs.md` at 5th use site (COMPLETE, awaiting verdict)
+- T-P1-009 — Phase 9 Claude Agent SDK integration (real SdkJobRunner; canUseTool deny enforcement; AbortController cancellation; 32KB prompt cap; report.ts updated for SDK BetaMessage nested-content shape; Phase 10 scope reduced) (COMPLETE, awaiting verdict)
 
 ### Pending (ordered, mapped from `p1-build-plan.md` phases)
 - T-P1-002+ — Phase 2 workspace registry stub

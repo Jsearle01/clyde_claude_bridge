@@ -381,6 +381,163 @@ describe("parseTranscript — summary cap", () => {
   });
 });
 
+// ---- SDK message shape (real Claude Agent SDK at T-P1-009) ----
+
+describe("parseTranscript — SDK message shape (nested .message.content)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cb-report-sdk-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function writeTranscript(content: string): string {
+    const path = join(dir, "t.jsonl");
+    writeFileSync(path, content);
+    return path;
+  }
+
+  it("SDKAssistantMessage shape: summary read from .message.content", async () => {
+    // Real SDKAssistantMessage shape: type=assistant, message.content is
+    // the BetaMessage content array.
+    const d = await parseTranscript(
+      writeTranscript(
+        jsonl([
+          {
+            type: "user",
+            message: { role: "user", content: "hi" },
+            parent_tool_use_id: null,
+          },
+          {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello from sdk" }],
+            },
+            parent_tool_use_id: null,
+            uuid: "u1",
+            session_id: "s1",
+          },
+        ]),
+      ),
+    );
+    expect(d.turns).toBe(1);
+    expect(d.summary).toBe("hello from sdk");
+  });
+
+  it("SDKAssistantMessage with tool_use in .message.content: counted, summary walks back", async () => {
+    const d = await parseTranscript(
+      writeTranscript(
+        jsonl([
+          {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "first response" }],
+            },
+            parent_tool_use_id: null,
+            uuid: "u1",
+            session_id: "s1",
+          },
+          {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "t1",
+                  name: "Bash",
+                  input: { command: "ls" },
+                },
+              ],
+            },
+            parent_tool_use_id: null,
+            uuid: "u2",
+            session_id: "s1",
+          },
+        ]),
+      ),
+    );
+    expect(d.turns).toBe(2);
+    expect(d.tool_calls_made).toBe(1);
+    expect(d.shell_commands).toEqual([{ cmd: "ls", exit_code: null }]);
+    // Backward walk skips the tool-use-only message; finds the prior text.
+    expect(d.summary).toBe("first response");
+  });
+
+  it("mixed legacy + SDK shapes in same transcript: both readable", async () => {
+    const d = await parseTranscript(
+      writeTranscript(
+        jsonl([
+          // Legacy
+          { type: "user", content: "hi" },
+          // SDK
+          {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "sdk-shape closing" }],
+            },
+            uuid: "u1",
+            session_id: "s1",
+            parent_tool_use_id: null,
+          },
+        ]),
+      ),
+    );
+    expect(d.summary).toBe("sdk-shape closing");
+  });
+
+  it("SDKResultMessage / SDKSystemMessage (other types): tolerated, no impact on turns/summary", async () => {
+    const d = await parseTranscript(
+      writeTranscript(
+        jsonl([
+          {
+            type: "system",
+            subtype: "init",
+            apiKeySource: "user",
+            cwd: "/tmp",
+            session_id: "s1",
+            uuid: "u-sys",
+            tools: [],
+            model: "claude-opus-4-7",
+            permissionMode: "acceptEdits",
+          },
+          {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+            },
+            parent_tool_use_id: null,
+            uuid: "u1",
+            session_id: "s1",
+          },
+          {
+            type: "result",
+            subtype: "success",
+            duration_ms: 1234,
+            duration_api_ms: 1000,
+            is_error: false,
+            num_turns: 1,
+            result: "done",
+            session_id: "s1",
+            total_cost_usd: 0.001,
+            usage: {},
+            uuid: "u-result",
+          },
+        ]),
+      ),
+    );
+    expect(d.summary).toBe("done");
+    expect(d.turns).toBe(1); // only the assistant message counts
+  });
+});
+
 // ---- assembleReport ----
 
 describe("assembleReport — integration", () => {

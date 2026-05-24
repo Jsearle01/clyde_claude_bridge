@@ -25,7 +25,8 @@ import { pingTool } from "./mcp/tools/ping.js";
 import { makeDelegateTool } from "./mcp/tools/delegate.js";
 import { makePollTool } from "./mcp/tools/poll.js";
 import { makeCancelTool } from "./mcp/tools/cancel.js";
-import { StubJobRunner } from "./jobs/runner.js";
+import { StubJobRunner, type JobRunner } from "./jobs/runner.js";
+import { SdkJobRunner } from "./jobs/sdk-runner.js";
 import { McpServer } from "./mcp/server.js";
 import { TunnelManager } from "./tunnel/manager.js";
 import { IpcServer, type IpcHandlers } from "./ipc/server.js";
@@ -240,23 +241,37 @@ async function main(): Promise<void> {
   });
   dailyTimer.start();
 
-  // 5.8. Job runner. Stub for P1 (configurable canned outcomes for
-  // Phase 5's harness); Phase 9 swaps in SdkJobRunner against the same
-  // JobRunner interface without tool-side changes.
-  // P1-only; remove at Phase 9.
-  // Stub behavior gating: config.stub_behavior is honored only when the
-  // daemon was started with --allow-stub-config. Refuse start otherwise
-  // — defense against accidental stub config in production builds.
+  // 5.8. Job runner. SdkJobRunner is the default (T-P1-009); StubJobRunner
+  // remains available behind --allow-stub-config + stub_behavior for the
+  // T-P1-005 acceptance harness.
+  // P1-only stub gating; remove at P2.
   const allowStubConfig = process.argv.includes("--allow-stub-config");
   if (config.stub_behavior !== undefined && !allowStubConfig) {
     throw new Error(
       "config.stub_behavior is set but --allow-stub-config flag was not passed; refuse to start",
     );
   }
-  const jobRunner =
-    allowStubConfig && config.stub_behavior !== undefined
-      ? new StubJobRunner(jobQueue, config.stub_behavior)
-      : new StubJobRunner(jobQueue);
+  let jobRunner: JobRunner;
+  if (allowStubConfig && config.stub_behavior !== undefined) {
+    jobRunner = new StubJobRunner(jobQueue, config.stub_behavior);
+    logger.info("job runner: StubJobRunner (stub_behavior present)");
+  } else {
+    if (
+      process.env.ANTHROPIC_API_KEY === undefined ||
+      process.env.ANTHROPIC_API_KEY === ""
+    ) {
+      logger.warn(
+        "ANTHROPIC_API_KEY not set; delegations will fail with auth error",
+      );
+    }
+    jobRunner = new SdkJobRunner(
+      jobQueue,
+      workspaceRegistry,
+      configDir,
+      logger,
+    );
+    logger.info("job runner: SdkJobRunner");
+  }
 
   // 6. Tool registry.
   const registry = new ToolRegistry();

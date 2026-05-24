@@ -6,20 +6,28 @@
 //
 // Produces a fully-populated DelegationReport matching the shared schema.
 //
-// TRANSCRIPT SHAPE ASSUMPTION (P1, T-P1-008). Phase 9 SDK integration
-// may discover SDK message format differs; this shape will be revised
-// then. The reader is fail-soft (Decision 4) so partial divergence
-// won't crash, but field-name divergence (e.g., SDK uses `role` instead
-// of `type`) requires schema update.
+// TRANSCRIPT SHAPE — confirmed against @anthropic-ai/claude-agent-sdk
+// 0.3.x at T-P1-009. The reader handles both shapes the SDK emits:
 //
-// Assumed per-line shape after JSON.parse:
-//   { type: "user" | "assistant" | "system",
-//     content: string | ContentBlock[],
-//     [k: string]: unknown }
-//   or
-//   { type: `_${string}`, [k: string]: unknown }   // metadata markers
+//   SDKAssistantMessage:
+//     { type: "assistant", message: { content: ContentBlock[] | string }, ... }
 //
-// Where ContentBlock is one of:
+//   SDKUserMessage:
+//     { type: "user", message: { content: ContentBlock[] | string, role: "user" }, ... }
+//
+//   Metadata markers (writer-internal):
+//     { type: "_truncated", ... }
+//
+//   Other SDK message types (SDKResultMessage, SDKSystemMessage,
+//   SDKPartialAssistantMessage, etc.) pass through but are not
+//   structurally walked — they tolerate as "unknown shape, skip for
+//   summary/shell extraction" via the fail-soft path.
+//
+// Legacy flat shape (no `.message` nesting, content at top level) is
+// ALSO tolerated for backward compatibility with hand-built fixtures
+// and for any future SDK variant that emits the simpler form.
+//
+// ContentBlock variants the walker recognizes:
 //   { type: "text", text: string }
 //   { type: "tool_use", id: string, name: string, input: object }
 //   { type: "tool_result", tool_use_id: string,
@@ -48,8 +56,25 @@ const EXIT_CODE_REGEX = /exit\s*code\s*[:=]\s*(-?\d+)/i;
 
 interface TranscriptMessage {
   type: string;
+  // SDK shape: assistant/user messages nest content under .message.content
+  // (BetaMessage / MessageParam shape from Anthropic Messages API).
+  message?: { content?: string | ContentBlock[]; [k: string]: unknown };
+  // Legacy/fallback shape: content at top level. Used by hand-built
+  // fixtures and any SDK variant that emits the simpler form.
   content?: string | ContentBlock[];
   [k: string]: unknown;
+}
+
+/** Returns the effective content for a transcript message, preferring
+ * the SDK's nested `.message.content` shape when present, else falling
+ * back to the legacy top-level `.content`. */
+function effectiveContent(
+  m: TranscriptMessage,
+): string | ContentBlock[] | undefined {
+  if (m.message !== undefined && m.message.content !== undefined) {
+    return m.message.content;
+  }
+  return m.content;
 }
 
 interface ContentBlock {
@@ -135,7 +160,7 @@ function findToolResult(
   tool_use_id: string,
 ): ContentBlock | null {
   for (const m of messages) {
-    for (const b of asArray(m.content)) {
+    for (const b of asArray(effectiveContent(m))) {
       if (b.type === "tool_result" && b.tool_use_id === tool_use_id) {
         return b;
       }
@@ -146,8 +171,9 @@ function findToolResult(
 
 function isAssistantClosingMessage(m: TranscriptMessage): boolean {
   if (m.type !== "assistant") return false;
-  const blocks = asArray(m.content);
-  if (blocks.length === 0 && typeof m.content === "string") return true;
+  const content = effectiveContent(m);
+  const blocks = asArray(content);
+  if (blocks.length === 0 && typeof content === "string") return true;
   // Skip if any block is a tool_use — this is a tool-call turn, not a closer.
   const hasToolUse = blocks.some((b) => b.type === "tool_use");
   if (hasToolUse) return false;
@@ -156,9 +182,10 @@ function isAssistantClosingMessage(m: TranscriptMessage): boolean {
 }
 
 function buildSummaryFromMessage(m: TranscriptMessage): string {
-  if (typeof m.content === "string") return m.content;
+  const content = effectiveContent(m);
+  if (typeof content === "string") return content;
   const texts: string[] = [];
-  for (const b of asArray(m.content)) {
+  for (const b of asArray(content)) {
     if (b.type === "text" && typeof b.text === "string") texts.push(b.text);
   }
   return texts.join("\n");
@@ -216,7 +243,7 @@ export async function parseTranscript(
 
   for (const m of messages) {
     if (m.type === "assistant") turns++;
-    for (const b of asArray(m.content)) {
+    for (const b of asArray(effectiveContent(m))) {
       if (b.type === "tool_use") {
         tool_calls_made++;
         if (typeof b.name === "string" && b.name.toLowerCase() === "bash") {
