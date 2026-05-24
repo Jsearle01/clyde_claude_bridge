@@ -27,8 +27,21 @@ import {
   TunnelRestartTimeoutError,
   TunnelRestartFailedError,
 } from "./commands/tunnel.js";
+import { IpcClientVersionMismatchError } from "./ipc-client.js";
 
-function reportError(err: unknown): void {
+// Returns the exit code to use after writing the user-facing message.
+// Most failures map to 1; IPC protocol-version mismatches map to 4 so
+// scripts can distinguish that case from transient connection errors.
+function reportError(err: unknown): number {
+  if (err instanceof IpcClientVersionMismatchError) {
+    process.stderr.write(`${err.message}\n`);
+    return err.exitCode;
+  }
+  reportErrorBody(err);
+  return 1;
+}
+
+function reportErrorBody(err: unknown): void {
   if (err instanceof CloudflaredMissingError) {
     process.stderr.write(
       "cloudflared not found on PATH; install from https://github.com/cloudflare/cloudflared/releases\n",
@@ -92,8 +105,7 @@ program
     try {
       await startCommand();
     } catch (err) {
-      reportError(err);
-      process.exit(1);
+      process.exit(reportError(err));
     }
   });
 
@@ -104,8 +116,7 @@ program
     try {
       await stopCommand();
     } catch (err) {
-      reportError(err);
-      process.exit(1);
+      process.exit(reportError(err));
     }
   });
 
@@ -116,8 +127,7 @@ program
     try {
       await statusCommand();
     } catch (err) {
-      reportError(err);
-      process.exit(1);
+      process.exit(reportError(err));
     }
   });
 
@@ -129,8 +139,7 @@ program
     try {
       await tailLogCommand({ follow: opts.follow });
     } catch (err) {
-      reportError(err);
-      process.exit(1);
+      process.exit(reportError(err));
     }
   });
 
@@ -144,8 +153,7 @@ tokenCmd
     try {
       await tokenRotateCommand();
     } catch (err) {
-      reportError(err);
-      process.exit(1);
+      process.exit(reportError(err));
     }
   });
 
@@ -159,12 +167,10 @@ tunnelCmd
     try {
       await tunnelRestartCommand();
     } catch (err) {
-      reportError(err);
-      process.exit(1);
+      process.exit(reportError(err));
     }
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
-  reportError(err);
-  process.exit(1);
+  process.exit(reportError(err));
 });

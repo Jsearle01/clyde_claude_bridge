@@ -16,6 +16,9 @@ export const window = {
   showInformationMessage: vi.fn<(message: string) => Promise<undefined>>(
     () => Promise.resolve(undefined),
   ),
+  showErrorMessage: vi.fn<(message: string) => Promise<undefined>>(
+    () => Promise.resolve(undefined),
+  ),
 };
 
 export const commands = {

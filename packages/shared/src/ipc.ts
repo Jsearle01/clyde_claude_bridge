@@ -24,8 +24,17 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("stop") }).strict(),
   z.object({ kind: z.literal("token_rotate") }).strict(),
   z.object({ kind: z.literal("tunnel_restart") }).strict(),
+  z
+    .object({
+      kind: z.literal("hello"),
+      version: z.string(),
+      role: z.enum(["cli", "extension"]),
+      pid: z.number().int(),
+    })
+    .strict(),
 ]);
 export type IpcRequest = z.infer<typeof IpcRequestSchema>;
+export type HelloRequest = Extract<IpcRequest, { kind: "hello" }>;
 
 export const IpcResponseSchema = z.discriminatedUnion("kind", [
   z
@@ -49,9 +58,28 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      kind: z.literal("hello_ok"),
+      daemon_version: z.string(),
+      min_supported: z.string(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("error"),
       message: z.string(),
+      // Optional machine-readable reason. Added at T-P2-002 for the hello-
+      // gate paths in daemon/src/ipc/server.ts. Existing callers that only
+      // set `message` continue to work unchanged.
+      //
+      // Known reason values (informal vocabulary; promote to z.enum in P3+
+      // if stabilized):
+      //   "version_mismatch"  - hello-gate version check failed
+      //   "protocol_error"    - protocol-level violation (e.g., non-hello
+      //                         first message before hello completes)
+      reason: z.string().optional(),
     })
     .strict(),
 ]);
 export type IpcResponse = z.infer<typeof IpcResponseSchema>;
+export type HelloOkResponse = Extract<IpcResponse, { kind: "hello_ok" }>;
+export type ErrorResponse = Extract<IpcResponse, { kind: "error" }>;

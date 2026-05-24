@@ -49,6 +49,35 @@ export interface IpcHandlers {
   tunnelRestart(): Promise<{ new_url: string }>;
 }
 
+// IPC protocol-version constants (distinct from package version).
+// Bump independently from package version when the wire protocol changes.
+// Synthetic mismatch test passes alternate values directly to checkVersion;
+// production callers use these.
+export const IPC_DAEMON_VERSION = "1.0";
+export const IPC_MIN_SUPPORTED = "1.0";
+
+export interface ConnectionState {
+  role: "cli" | "extension";
+  version: string;
+  hello_at: number;
+}
+
+// Pure function: returns null on accept, structured error payload on reject.
+// P2 implementation is string equality; replace with semver comparison in
+// P3+ if the wire-version vocabulary grows.
+export function checkVersion(
+  client_version: string,
+  daemon_version: string,
+  min_supported: string,
+): { reason: string; message: string } | null {
+  if (client_version === daemon_version) return null;
+  return {
+    reason: "version_mismatch",
+    message:
+      `version mismatch: client ${client_version}, daemon ${daemon_version}, min supported ${min_supported}`,
+  };
+}
+
 export class IpcSocketBusyError extends Error {
   constructor(public readonly path: string) {
     super(`IPC socket busy at ${path}`);
@@ -62,6 +91,10 @@ export class IpcServer {
   private readonly logger: Logger;
   private server: Server | null = null;
   private closed = false;
+  // Per-connection state populated after a successful hello exchange.
+  // Until a socket has an entry here, the dispatch path accepts only
+  // `kind: "hello"` and rejects everything else with reason "protocol_error".
+  private readonly connectionState = new Map<Socket, ConnectionState>();
 
   constructor(
     socketPath: string,
@@ -191,7 +224,12 @@ export class IpcServer {
     socket.on("error", (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn("ipc socket error", { error: msg });
+      this.connectionState.delete(socket);
       socket.destroy();
+    });
+
+    socket.on("close", () => {
+      this.connectionState.delete(socket);
     });
 
     socket.on("end", () => {
@@ -227,6 +265,58 @@ export class IpcServer {
       return;
     }
 
+    // Hello gate: until a socket has ConnectionState, only `hello` is
+    // accepted. Anything else returns error with reason "protocol_error"
+    // and closes the socket (T-P2-002).
+    const state = this.connectionState.get(socket);
+    if (state === undefined) {
+      if (request.kind !== "hello") {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: "expected hello as first message",
+          reason: "protocol_error",
+        });
+        socket.end();
+        return;
+      }
+      const mismatch = checkVersion(
+        request.version,
+        IPC_DAEMON_VERSION,
+        IPC_MIN_SUPPORTED,
+      );
+      if (mismatch !== null) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: mismatch.message,
+          reason: mismatch.reason,
+        });
+        socket.end();
+        return;
+      }
+      this.connectionState.set(socket, {
+        role: request.role,
+        version: request.version,
+        hello_at: Date.now(),
+      });
+      await this.writeResponse(socket, {
+        kind: "hello_ok",
+        daemon_version: IPC_DAEMON_VERSION,
+        min_supported: IPC_MIN_SUPPORTED,
+      });
+      return;
+    }
+
+    // State exists — hello already happened. Reject a second hello on the
+    // same connection (defensive; shouldn't happen with well-behaved clients).
+    if (request.kind === "hello") {
+      await this.writeResponse(socket, {
+        kind: "error",
+        message: "hello already exchanged on this connection",
+        reason: "protocol_error",
+      });
+      return;
+    }
+
     try {
       const response = await this.handleRequest(request);
       await this.writeResponse(socket, response);
@@ -259,6 +349,10 @@ export class IpcServer {
       case "tunnel_restart": {
         const { new_url } = await this.handlers.tunnelRestart();
         return { kind: "tunnel_restart_ok", new_url };
+      }
+      case "hello": {
+        // Hello is handled in the gate above; never reaches the switch.
+        throw new Error("unreachable: hello in handleRequest");
       }
     }
   }

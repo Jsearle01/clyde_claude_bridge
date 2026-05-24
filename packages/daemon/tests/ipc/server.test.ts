@@ -56,24 +56,52 @@ function uniquePipeName(): string {
   return `\\\\.\\pipe\\claude-bridge-test-${randomBytes(6).toString("hex")}`;
 }
 
-// Send one line, await one line in response, close the connection.
-function rpc(address: string, line: string): Promise<string> {
+// T-P2-002: every connection must hello-handshake before sending requests.
+// `rpc()` does hello → hello_ok → request → response transparently for
+// tests that don't care about the hello mechanics. `rpcRaw()` is for the
+// hello-gate tests that need to send non-hello as the first message.
+const HELLO_LINE = JSON.stringify({
+  kind: "hello",
+  version: "1.0",
+  role: "cli",
+  pid: 0,
+});
+
+function rpcRaw(
+  address: string,
+  lines: string[],
+  expectedResponses: number,
+): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const client = connect(address);
     let buf = "";
+    const responses: string[] = [];
+    let nextLine = 0;
     let settled = false;
     client.setEncoding("utf8");
     client.on("connect", () => {
-      client.write(line + "\n");
+      if (lines.length > 0) {
+        client.write(lines[nextLine] + "\n");
+        nextLine += 1;
+      }
     });
     client.on("data", (chunk: string) => {
+      if (settled) return;
       buf += chunk;
-      const idx = buf.indexOf("\n");
-      if (idx !== -1 && !settled) {
+      let idx = buf.indexOf("\n");
+      while (idx !== -1 && responses.length < expectedResponses) {
+        responses.push(buf.slice(0, idx));
+        buf = buf.slice(idx + 1);
+        if (nextLine < lines.length) {
+          client.write(lines[nextLine] + "\n");
+          nextLine += 1;
+        }
+        idx = buf.indexOf("\n");
+      }
+      if (responses.length >= expectedResponses) {
         settled = true;
-        const response = buf.slice(0, idx);
         client.end();
-        resolve(response);
+        resolve(responses);
       }
     });
     client.on("error", (err) => {
@@ -85,57 +113,38 @@ function rpc(address: string, line: string): Promise<string> {
     client.on("close", () => {
       if (!settled) {
         settled = true;
-        reject(new Error("connection closed without response"));
+        if (responses.length >= expectedResponses) {
+          resolve(responses);
+        } else {
+          reject(new Error(`connection closed; got ${responses.length}/${expectedResponses} responses`));
+        }
       }
     });
   });
 }
 
-// Send two lines on the same connection, await two responses.
-function rpcDouble(
+// Hello-prelude wrapper: returns just the application-level response line
+// (the hello_ok line is discarded).
+async function rpc(address: string, line: string): Promise<string> {
+  const [, response] = await rpcRaw(address, [HELLO_LINE, line], 2);
+  if (response === undefined) throw new Error("missing response after hello");
+  return response;
+}
+
+// Send two application-level lines on the same connection (with hello
+// prelude), await two responses. The hello_ok response is consumed
+// implicitly inside rpcRaw and discarded here.
+async function rpcDouble(
   address: string,
   line1: string,
   line2: string,
 ): Promise<[string, string]> {
-  return new Promise((resolve, reject) => {
-    const client = connect(address);
-    let buf = "";
-    const responses: string[] = [];
-    let settled = false;
-    client.setEncoding("utf8");
-    client.on("connect", () => {
-      client.write(line1 + "\n");
-    });
-    client.on("data", (chunk: string) => {
-      if (settled) return;
-      buf += chunk;
-      let idx = buf.indexOf("\n");
-      while (idx !== -1 && responses.length < 2) {
-        responses.push(buf.slice(0, idx));
-        buf = buf.slice(idx + 1);
-        if (responses.length === 1) {
-          client.write(line2 + "\n");
-        }
-        idx = buf.indexOf("\n");
-      }
-      if (responses.length === 2 && !settled) {
-        settled = true;
-        client.end();
-        const [r1, r2] = responses;
-        if (r1 === undefined || r2 === undefined) {
-          reject(new Error("missing response"));
-        } else {
-          resolve([r1, r2]);
-        }
-      }
-    });
-    client.on("error", (err) => {
-      if (!settled) {
-        settled = true;
-        reject(err);
-      }
-    });
-  });
+  const responses = await rpcRaw(address, [HELLO_LINE, line1, line2], 3);
+  const [, r1, r2] = responses;
+  if (r1 === undefined || r2 === undefined) {
+    throw new Error("missing response after hello");
+  }
+  return [r1, r2];
 }
 
 describe("IpcServer", () => {
@@ -333,4 +342,82 @@ describe("IpcServer", () => {
       }
     },
   );
+
+  // T-P2-002 hello-gate behavior.
+
+  it("non-hello first message returns error reason=protocol_error and closes (T-P2-002)", async () => {
+    const { s, address } = startConfig();
+    await s.start();
+    const [raw] = await rpcRaw(
+      address,
+      [JSON.stringify({ kind: "status" })],
+      1,
+    );
+    if (raw === undefined) throw new Error("expected one response");
+    const response = JSON.parse(raw) as IpcResponse;
+    expect(response.kind).toBe("error");
+    if (response.kind === "error") {
+      expect(response.reason).toBe("protocol_error");
+    }
+  });
+
+  it("hello with mismatched version returns error reason=version_mismatch (T-P2-002)", async () => {
+    const { s, address } = startConfig();
+    await s.start();
+    const helloBad = JSON.stringify({
+      kind: "hello",
+      version: "99.0",
+      role: "cli",
+      pid: 0,
+    });
+    const [raw] = await rpcRaw(address, [helloBad], 1);
+    if (raw === undefined) throw new Error("expected one response");
+    const response = JSON.parse(raw) as IpcResponse;
+    expect(response.kind).toBe("error");
+    if (response.kind === "error") {
+      expect(response.reason).toBe("version_mismatch");
+    }
+  });
+
+  it("hello_ok returned on accept; subsequent status request succeeds (T-P2-002)", async () => {
+    const { s, address } = startConfig();
+    await s.start();
+    const [helloRaw, statusRaw] = await rpcRaw(
+      address,
+      [HELLO_LINE, JSON.stringify({ kind: "status" })],
+      2,
+    );
+    if (helloRaw === undefined || statusRaw === undefined) {
+      throw new Error("expected two responses");
+    }
+    const hello = JSON.parse(helloRaw) as IpcResponse;
+    expect(hello.kind).toBe("hello_ok");
+    if (hello.kind === "hello_ok") {
+      expect(hello.daemon_version).toBe("1.0");
+      expect(hello.min_supported).toBe("1.0");
+    }
+    const status = JSON.parse(statusRaw) as IpcResponse;
+    expect(status.kind).toBe("status_ok");
+  });
+});
+
+describe("checkVersion (T-P2-002)", () => {
+  it("returns null when client_version matches daemon_version", async () => {
+    const { checkVersion } = await import("../../src/ipc/server.js");
+    expect(checkVersion("1.0", "1.0", "1.0")).toBeNull();
+  });
+
+  it("returns version_mismatch payload when versions disagree", async () => {
+    const { checkVersion } = await import("../../src/ipc/server.js");
+    const result = checkVersion("0.5", "1.0", "1.0");
+    expect(result).not.toBeNull();
+    expect(result?.reason).toBe("version_mismatch");
+    expect(result?.message).toContain("0.5");
+    expect(result?.message).toContain("1.0");
+  });
+
+  it("returns version_mismatch even when only min_supported differs from client (string-equality contract)", async () => {
+    const { checkVersion } = await import("../../src/ipc/server.js");
+    expect(checkVersion("0.9", "1.0", "0.9")).not.toBeNull();
+  });
 });

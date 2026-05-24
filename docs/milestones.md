@@ -64,7 +64,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | (post-gate) | T-P1-015 | COMPLETE |
 | (pre-P2) | T-P2-000-review | COMPLETE |
 | (pre-P2) | T-P2-000-refinement | COMPLETE — applied 9 dispatched resolutions (3 blockers + 6 concerns) from review verdict + 1 reactive cross-reference fix; v0_6_candidates seeded with C-1 through C-10; design artifacts ready to drive T-P2-001 |
-| P2 Phase 1 | T-P2-001 | COMPLETE, awaiting verdict — `packages/extension/` scaffolded as VS Code extension; vitest harness with hand-rolled vscode mock via resolve.alias; 2/2 sanity tests pass; .vsix built and installed on Windows; one §22.5 consultation on vsce naming (scoped `@claude-bridge/*` rejected by vsce; renamed flat `claude-bridge-extension`); one trivial root eslint glob extension (`packages/*/tests/mocks/*.ts`) |
+| P2 Phase 1 | T-P2-001 | COMPLETE |
+| P2 Phase 2 | T-P2-002 | COMPLETE, awaiting verdict — IPC hello/versioning protocol with lockstep CLI; daemon `ConnectionState` Map + `checkVersion()` pure function + hello-first gate in `dispatchLine`; CLI `performIpc` extended with hello prelude + `IpcClientVersionMismatchError` (exit code 4); extension's first IpcClient with reconnect/backoff + version-mismatch UX; one §22.5 consultation on error-variant shape (added optional `reason` field per user choice); shared error variant + hello variants now in `packages/shared/src/ipc.ts`; tests 421/421 passing + 15 skipped (daemon 286+13, cli 53+2, shared 74, extension 8) — +13 new tests for hello-gate paths |
 
 Phase 4/5 swap applied during T-P1-001 verdict (tool surface must precede harness so the harness can exercise the MCP path); reflected in `p1-build-plan.md` and `orchestrator-context-p1-open.md`.
 

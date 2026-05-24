@@ -30,6 +30,9 @@ Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this li
 | C-10 | T-P2-000-review (orchestrator self-flag) | Distinguish orchestrator-clock vs executor-clock in estimates | open |
 | C-11 | T-P2-000-refinement verdict | §22.5 trigger clarification: find target absent but substantive intent applies elsewhere in same edit (at-site) vs find target exists with different wording (consult) | open |
 | C-12 | T-P1-013 + T-P2-000-refinement calibration | Empirical band for multi-file doc-edit with all decisions pre-resolved (15-22 min over 2 datapoints; legacy Medium-consolidation 5-15 min under-predicts) | open |
+| C-13 | T-P2-001 verdict (orchestrator self-flag) | Pre-dispatch verification of monorepo file/script conventions: grep/list before drafting code-touching dispatches to avoid memory-asserted convention drifts (3 instances in T-P2-001) | open |
+| C-14 | T-P2-000-refinement + T-P2-001 calibration (orchestrator self-flag) | Empirical band recalibration evidence: pure-code/doc tasks with all-decisions-pre-resolved consistently land in lower half of empirical bands (2 datapoints so far; needs 2-3 more) | open-tracking |
+| C-9 (annotation) | T-P2-001 vsce-naming miss was a second instance of C-9 (memory-asserted "monorepo `@claude-bridge/*` convention is feasible for VS Code extensions" turned out wrong). If C-9 fires a third time, codification becomes high-priority for v0.6. | (status: open; instance count: 2) |
 
 ## Gate status
 
@@ -44,12 +47,24 @@ Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this li
 ## Task queue
 
 ### In progress
-- T-P2-001 — Phase 1 extension scaffolding + vitest test harness (COMPLETE, awaiting verdict)
+- T-P2-002 — Phase 2 IPC hello/versioning protocol with lockstep CLI (COMPLETE, awaiting verdict)
 
 ### Pending
-- T-P2-002 — Phase 2 IPC client + hello/versioning protocol (per dispatch's rewritten Phase 2 with lockstep CLI update)
+- T-P2-003 — Phase 3 workspace registration + trust prompt + workspaces.json store
 
 ### Recently completed
+- **T-P2-002** — Phase 2 IPC hello/versioning protocol with lockstep CLI (COMPLETE, awaiting verdict; 2026-05-24)
+  - Introduces hello as a new variant of the kind-discriminated IPC protocol. Both clients (CLI + extension) send hello as the first message on every connection; daemon tracks `(role, version)` per connection in a `Map<Socket, ConnectionState>`; non-hello first message or version mismatch closes the connection via the existing error variant.
+  - **§22.5 consultation** on error-variant shape. Existing `{kind: "error", message: string}` had no machine-readable reason field; user chose to extend with optional `reason: z.string().optional()`. Known reason vocabulary documented in code comment: `"version_mismatch"`, `"protocol_error"`. Backwards-compatible: existing callers that only set message keep working.
+  - **Shared (`packages/shared/src/ipc.ts`):** added `hello` request variant (`version`, `role: "cli"|"extension"`, `pid`), `hello_ok` response variant (`daemon_version`, `min_supported`), and the optional `reason` field on the error variant. Exported inferred types `HelloRequest`, `HelloOkResponse`, `ErrorResponse`.
+  - **Daemon (`packages/daemon/src/ipc/server.ts`):** added `IPC_DAEMON_VERSION = "1.0"`, `IPC_MIN_SUPPORTED = "1.0"`, `ConnectionState` interface, `checkVersion()` pure function, per-instance `Map<Socket, ConnectionState>` populated on hello-success and cleared on socket close/error. `dispatchLine` gate: until socket has state, only `kind: "hello"` is accepted; anything else returns `error: protocol_error` and ends the socket; mismatched hello returns `error: version_mismatch` and ends the socket; matching hello stores state and returns `hello_ok`.
+  - **CLI (`packages/cli/src/ipc-client.ts`):** refactored `performIpc` into a two-phase state machine (`awaiting_hello_ok` → `awaiting_response`); every connection now sends hello first and awaits hello_ok before sending the real request. New typed error `IpcClientVersionMismatchError` with `exitCode = 4`. `packages/cli/src/index.ts` `reportError` refactored to return exit code; every commander action now calls `process.exit(reportError(err))` so version-mismatch maps to 4 (distinct from generic-1).
+  - **Extension (`packages/extension/src/ipc/client.ts`):** new file. `IpcClient` class with `connect()`, `disconnect()`, `getConnectionState()`. Connection lifecycle: open socket → send hello → await hello_ok → transition to `connected`. Exponential reconnect on disconnect (1s, 2s, 4s, ..., max 30s); does NOT auto-retry on version_mismatch (state stays `version_mismatch` until explicit reconnect via daemon restart). On version_mismatch surfaces `vscode.window.showErrorMessage`. Endpoint discovery: reads `~/.claude-bridge/config.json` for `daemon.ipc_socket`; falls back to canonical path; Windows uses the hardcoded named pipe.
+  - **Extension wire-in (`packages/extension/src/extension.ts`):** instantiates `IpcClient` at activate, calls `connect()` without blocking. Updated `claudeBridge.showStatus` notification text to include current IPC state: "Daemon: connected" / "disconnected" / "connecting" / "version mismatch". Disposes client on extension deactivate.
+  - **Tests added:** daemon `tests/ipc/server.test.ts` +6 (3 hello-gate tests + 3 `checkVersion` unit tests); CLI `tests/ipc-client.test.ts` +1 (version-mismatch via mock server); extension `tests/ipc-client.test.ts` +6 (state machine, hello shape, hello_ok→connected, version_mismatch+showErrorMessage, disconnect transition, no-auto-retry-on-mismatch). Refactored daemon `rpc()` and `rpcDouble()` test helpers to include hello prelude transparently; added `rpcRaw()` for non-hello-first-message hello-gate tests.
+  - **Test totals:** 421 passing + 15 skipped (was 354+15 before T-P2-002; +13 new tests). Daemon 286+13, CLI 53+2, shared 74, extension 8. Lint clean across all 4 workspaces. 34th consecutive zero-fire on async-discipline rules.
+  - **.vsix:** repackaged to 4.96 KB (6 files); reinstalled on Windows. Manual UI verification of "Daemon: connected" notification text is operator-side (same constraint as T-P2-001 AC-7).
+  - Three v0.6 candidates appended (C-13, C-14, C-9 annotation per dispatch).
 - **T-P2-001** — Phase 1 extension scaffolding + vitest test harness (COMPLETE, awaiting verdict; 2026-05-24)
   - New package `packages/extension/` (npm name `claude-bridge-extension` — flat, not scoped; see §22.5 consultation below). 8 files: `package.json`, `tsconfig.json`, `vitest.config.ts`, `.vscodeignore`, `README.md`, `src/extension.ts`, `tests/mocks/vscode.ts`, `tests/extension.test.ts`. Extension contributes one palette command `claudeBridge.showStatus`; activation on `onStartupFinished`; show-information-message with workspace path on invocation.
   - **vsce naming §22.5 consultation:** dispatch Decision 2 said `@claude-bridge/extension` (match monorepo scope). vsce rejects scoped names per VS Code manifest spec (`^[a-z0-9\-]+$`). User chose flat `claude-bridge-extension`; added `displayName: "Claude Bridge"` for human-readable UI surfacing. Documented as a single-package deviation from monorepo convention; npm workspace resolution still works.

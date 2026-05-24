@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { createServer, type Server, type Socket } from "node:net";
 import type { StatusPayload } from "@claude-bridge/shared";
 import {
   IpcServer,
@@ -13,6 +14,7 @@ import {
   sendIpc,
   IpcClientTimeoutError,
   IpcClientConnectionError,
+  IpcClientVersionMismatchError,
 } from "../src/ipc-client.js";
 
 const silentLogger: Logger = {
@@ -143,5 +145,65 @@ describe("sendIpc", () => {
         { addressOverride: address, timeoutMs: 100 },
       ),
     ).rejects.toBeInstanceOf(IpcClientTimeoutError);
+  });
+});
+
+// T-P2-002: hello-prelude error paths via a minimal mock server that
+// returns version_mismatch on the hello message. The real IpcServer's
+// hello-gate is exercised in daemon/tests/ipc/server.test.ts; here we
+// verify the CLI client correctly classifies the mismatch error.
+
+describe("sendIpc — hello version_mismatch (T-P2-002)", () => {
+  let tempDir: string;
+  let address: string;
+  let server: Server | null = null;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "claude-bridge-cli-vm-"));
+    address =
+      process.platform === "win32"
+        ? uniquePipeName()
+        : join(tempDir, "daemon.sock");
+    server = null;
+  });
+
+  afterEach(async () => {
+    if (server !== null) {
+      await new Promise<void>((resolve) =>
+        server!.close(() => resolve()),
+      );
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("raises IpcClientVersionMismatchError with exitCode 4", async () => {
+    server = createServer((socket: Socket) => {
+      socket.setEncoding("utf8");
+      socket.once("data", () => {
+        socket.write(
+          JSON.stringify({
+            kind: "error",
+            message:
+              "version mismatch: client 1.0, daemon 9.9, min supported 9.9",
+            reason: "version_mismatch",
+          }) + "\n",
+        );
+        socket.end();
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(address, resolve));
+    await expect(
+      sendIpc({ kind: "status" }, { addressOverride: address }),
+    ).rejects.toBeInstanceOf(IpcClientVersionMismatchError);
+    try {
+      await sendIpc({ kind: "status" }, { addressOverride: address });
+    } catch (err) {
+      expect(err).toBeInstanceOf(IpcClientVersionMismatchError);
+      if (err instanceof IpcClientVersionMismatchError) {
+        expect(err.exitCode).toBe(4);
+        expect(err.daemonVersion).toBe("9.9");
+        expect(err.minSupported).toBe("9.9");
+      }
+    }
   });
 });
