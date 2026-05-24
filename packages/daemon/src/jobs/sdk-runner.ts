@@ -66,6 +66,20 @@ function mapMode(mode: "read_only" | "agentic"): PermissionMode {
   return mode === "read_only" ? "plan" : "acceptEdits";
 }
 
+// In plan mode the SDK lets Claude exit-plan via ExitPlanMode (auto-approved),
+// flipping permissionMode to "default" mid-run and letting writes through on
+// the next turn. Pinning `disallowedTools` for read_only delegations blocks
+// the write tools regardless of mode flips. T-P1-010 SMOKE caught this on
+// Windows (smoke #2 failed with status=failed+category=sdk_runtime — file
+// happened not to be written only because max_turns=3 ran out mid-plan).
+const READ_ONLY_DISALLOWED_TOOLS: ReadonlyArray<string> = [
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+  "ExitPlanMode",
+];
+
 function commandToString(value: unknown): string {
   // Avoid Object's default stringification ("[object Object]") for the
   // common-error case where input.command is missing or non-string.
@@ -257,6 +271,9 @@ export class SdkJobRunner implements JobRunner {
       abortController,
       settingSources: [],
     };
+    if (job.mode === "read_only") {
+      options.disallowedTools = [...READ_ONLY_DISALLOWED_TOOLS];
+    }
     if (job.model !== null) options.model = job.model;
 
     let q: Query;

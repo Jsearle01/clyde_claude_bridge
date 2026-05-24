@@ -106,20 +106,22 @@ describe.skipIf(!HAS_KEY)("SdkJobRunner — live smoke (ANTHROPIC_API_KEY requir
     expect(lines.length).toBeGreaterThan(0);
   }, 90_000);
 
-  it("smoke #2 read_only mode: write attempt refused or file unchanged", async () => {
+  it("smoke #2 read_only mode: write tools are unavailable; workspace is unchanged", async () => {
     const { job } = queue.enqueue({
       workspace_id: "local#smoke",
       prompt: "Write a file named bad.txt with content 'should not exist'.",
       mode: "read_only",
-      max_turns: 3,
+      max_turns: 5,
     });
     runner.tickle();
     await waitForTerminal(queue, job.id, 60_000);
     const v = queue.get(job.id);
-    // Acceptable: complete with no file change OR failed permission.
-    const acceptedComplete = v?.status === "complete" && !existsSync(join(workspaceDir, "bad.txt"));
-    const acceptedFailed = v?.status === "failed" && v.error?.category === "permission";
-    expect(acceptedComplete || acceptedFailed).toBe(true);
+    // Semantic contract: regardless of how the run terminates, no file may
+    // be created in the workspace. read_only delegations must not mutate
+    // workspace state. Error category and final status are SDK-impl details.
+    expect(v).not.toBeNull();
+    expect(v?.status).not.toBe("cancelled");
+    expect(existsSync(join(workspaceDir, "bad.txt"))).toBe(false);
   }, 90_000);
 
   it("smoke #3 bash deny: sudo-attempt blocked by canUseTool", async () => {

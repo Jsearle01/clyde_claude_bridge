@@ -4,8 +4,8 @@
 **Methodology version:** v0.3
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
-**Last conversation date:** 2026-05-23
-**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-009 (Claude Agent SDK integration + cancellation) COMPLETE + orchestrator-side scope reshape on the 32KB prompt cap follow-up (no cap in P1 by design); awaiting verdict on combined commits. Steady-state operating mode under methodology v0.4.
+**Last conversation date:** 2026-05-24
+**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-010 (cross-platform live SMOKE on Windows + WSL Ubuntu) COMPLETE, awaiting verdict. 5/5 SMOKE PASS on both platforms after a reactive read_only hardening (added `disallowedTools` for write tools + `ExitPlanMode` to prevent the SDK's plan→default mode flip from letting writes through). Steady-state operating mode under methodology v0.4.
 **SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`)
 **P1-close doc-debt (informal):**
 - Update `02-p1-delegation.md` / `p1-build-plan.md` references from `@anthropic-ai/claude-code` → `@anthropic-ai/claude-agent-sdk`.
@@ -25,13 +25,25 @@
 ## Task queue
 
 ### In progress
-- T-P1-009 — Phase 9 Claude Agent SDK integration (real SdkJobRunner; canUseTool deny enforcement; AbortController cancellation; report.ts updated for SDK BetaMessage nested-content shape; Phase 10 scope reduced) + 32KB-cap reshape (no cap in P1 by design; deferral comment at delegate.ts) (COMPLETE, awaiting verdict)
+- T-P1-010 — Phase 10 cross-platform live SMOKE validation (Windows + WSL Ubuntu); 5/5 SMOKE PASS on both platforms; reactive `disallowedTools` hardening for `read_only` mode (COMPLETE, awaiting verdict)
 
 ### Pending (ordered, mapped from `p1-build-plan.md` phases)
-- T-P1-002+ — Phase 2 workspace registry stub
-- (Phases 3-14 per `docs/design/p1-build-plan.md` §Task order; note Phase 4/5 swap applied)
+- T-P1-011+ — Phase 11 acceptance harness expansion (cover ACs 5/6/8/9 in `scripts/acceptance-p1.mjs` via the same SMOKE shapes now that the runner is validated)
+- (Phases 12-14 per `docs/design/p1-build-plan.md` §Task order)
 
 ### Recently completed
+- **T-P1-010** — Phase 10 cross-platform live SMOKE (COMPLETE, awaiting verdict; 2026-05-24)
+  - SMOKE results table: 5 tests × 2 platforms = 10 runs, all PASS. Windows totals: 5/5 in ~80s (smoke#1=13.0s, #2=37.5s, #3=10.9s, #4=6.5s, #5=11.2s). WSL Ubuntu totals: 5/5 in ~67s (#1=9.1s, #2=31.7s, #3=11.7s, #4=6.2s, #5=7.0s).
+  - **Reactive deviation** (in-scope for SMOKE-uncovered defect): Windows smoke #2 (read_only) failed on first pass — Claude in plan mode called `ExitPlanMode`, which the SDK auto-approved and flipped permissionMode to `default`; the file would have been written on the next turn if max_turns hadn't run out first. Real read_only enforcement gap, not a brittle test. Hardened `SdkJobRunner` by adding `disallowedTools: ["Write","Edit","MultiEdit","NotebookEdit","ExitPlanMode"]` when `mode === "read_only"`, so writes are impossible regardless of any mode flips. Test #2's assertion relaxed from error-category match to the semantic contract ("no file may be created in the workspace"). All 5/5 PASS on both platforms after the fix.
+  - WSL prep finding: a partial `npm install` left `@modelcontextprotocol/sdk` with `.d.ts.map` files but missing `.d.ts` files, breaking `tsc -b`. Clean reinstall (`rm -rf node_modules && npm install`) resolved. Engine warning observed (Node 20.18 vs SDK preference for 20.19+); runtime worked fine. Not actionable for P1; noted for runbook.
+  - AC closures via this SMOKE run: AC-5 (agentic happy path) MECH-VERIFIED on Windows + WSL; AC-6 (read_only refusal semantics) MECH-VERIFIED on both platforms after hardening; AC-8 (cancellation within 15s) MECH-VERIFIED on both platforms; AC-9 (cross-platform AC-5 verification) MECH-VERIFIED.
+  - Files changed: `packages/daemon/src/jobs/sdk-runner.ts` (added `READ_ONLY_DISALLOWED_TOOLS` constant + `options.disallowedTools` set when mode is read_only); `packages/daemon/tests/jobs/sdk-runner.test.ts` (smoke #2 assertion rewrite + `max_turns: 3 → 5` to give the model headroom to actually attempt and fail).
+  - Daemon full suite green: 280 passed + 13 skipped (5 SMOKE + 8 platform) across 31 files; SMOKE tests skip cleanly without `ANTHROPIC_API_KEY` set.
+- **T-P1-009** — Phase 9 Claude Agent SDK integration (CONFIRMED 2026-05-24; commits 12120e4 + d6bcdc1)
+  - 0:18 + ~5 min reshape (sixth dual-band datapoint; below empirical band low end at -55%). Largest P1 task by surface: sdk-runner.ts ~310 lines; report.ts effectiveContent helper; main.ts default-runner swap + ANTHROPIC_API_KEY warning; 4 new report.test.ts SDK-shape cases.
+  - Reactive deviation from Decision 4: AbortController instead of `query.interrupt()` for single-prompt delegations (interrupt is streaming-only per SDK d.ts).
+  - Post-commit reshape: 32KB prompt cap removed; replaced with deferral comment. P1-close doc-debt registered.
+  - 26th consecutive zero-fire on async-discipline rules.
 - **T-0019.7** — P0 gate close — all 10 ACs VERIFIED (CONFIRMED 2026-05-23; gate-close commit)
   - Trivial doc-only insert; ~3 min Clyde-time. Two milestones.md cell edits + project-state.md status / in-progress / recently-completed / handoff updates.
   - AC-10 transitioned IMPLEMENTED → **VERIFIED** with MANUAL-VERIFIED-AT-GATE per orchestrator + human gate decision. T-0007 unit-tested the rotation with synthetic midnight; async-sink-queue architecture protects against rotation-during-write race. Natural confirmation expected at first midnight-crossing daemon run during P1.
