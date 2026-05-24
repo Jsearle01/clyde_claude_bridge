@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@claude-bridge/shared": "*",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "diff": "^9.0.0",
+    "ignore": "^5.3.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.0"
