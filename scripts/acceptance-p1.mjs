@@ -9,190 +9,18 @@
 // via CLAUDE_BRIDGE_URL / CLAUDE_BRIDGE_TOKEN env vars.
 
 import process from "node:process";
-import { spawn } from "node:child_process";
-import {
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-  readFileSync,
-  existsSync,
-  mkdirSync,
-} from "node:fs";
-import { tmpdir, platform } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { setTimeout as sleep } from "node:timers/promises";
+import { readFileSync, existsSync } from "node:fs";
 import { connect, callTool, listTools } from "./mcp-delegate-client.mjs";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = dirname(__dirname);
-const DAEMON_MAIN = join(REPO_ROOT, "packages/daemon/dist/main.js");
-
-const INERT_TOKEN = "cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const READY_WAIT_MS = 20_000;
-const POLL_INTERVAL_MS = 250;
-
-// Augment PATH with a well-known cloudflared location (Windows). Same
-// pattern as P0's acceptance harness.
-function ensureCloudflaredOnPath() {
-  if (process.platform === "win32") {
-    const cfDir = "C:\\Program Files (x86)\\cloudflared";
-    if (existsSync(join(cfDir, "cloudflared.exe"))) {
-      process.env.PATH = `${cfDir};${process.env.PATH ?? ""}`;
-    }
-  }
-}
-
-// ---- Temp env setup ----
-
-function setupTempEnv() {
-  const tmpRoot = mkdtempSync(join(tmpdir(), "cb-p1-accept-"));
-  const homeDir = join(tmpRoot, "home");
-  const workspaceDir = join(tmpRoot, "workspace");
-  // Pre-create the config dir so the daemon's first-run init writes there.
-  const configDir =
-    platform() === "win32"
-      ? join(homeDir, "claude-bridge")
-      : join(homeDir, ".claude-bridge");
-  mkdirSync(configDir, { recursive: true });
-  mkdirSync(workspaceDir, { recursive: true });
-  return {
-    tmpRoot,
-    homeDir,
-    workspaceDir,
-    configDir,
-    configPath: join(configDir, "config.json"),
-    auditPath: join(configDir, "audit.jsonl"),
-    logPath: join(configDir, "daemon.log"),
-    ipcSocket: join(configDir, "daemon.sock"),
-  };
-}
-
-function cleanupTempEnv(env) {
-  try {
-    rmSync(env.tmpRoot, { recursive: true, force: true });
-  } catch {
-    // best-effort
-  }
-}
-
-function writeConfig(env, opts = {}) {
-  const cfg = {
-    version: 1,
-    daemon: {
-      bind_host: "127.0.0.1",
-      bind_port: opts.bind_port ?? 7423,
-      ipc_socket: env.ipcSocket,
-    },
-    auth: { token: opts.token ?? INERT_TOKEN },
-    tunnel: {
-      provider: "cloudflared",
-      binary: "cloudflared",
-      args_extra: [],
-    },
-    audit: { path: env.auditPath, retention_days: 30 },
-    log: { path: env.logPath, level: "info" },
-  };
-  if (opts.workspace !== false) {
-    cfg.workspace = {
-      id: "local#test",
-      abs_path: env.workspaceDir,
-      default_mode: "agentic",
-    };
-  }
-  if (opts.stub_behavior) {
-    cfg.stub_behavior = opts.stub_behavior;
-  }
-  writeFileSync(env.configPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
-  return cfg;
-}
-
-// ---- Daemon lifecycle ----
-
-async function startDaemon(env, opts = {}) {
-  ensureCloudflaredOnPath();
-  const child = spawn(
-    process.execPath,
-    [DAEMON_MAIN, ...(opts.allowStubConfig !== false ? ["--allow-stub-config"] : [])],
-    {
-      env: {
-        ...process.env,
-        HOME: env.homeDir,
-        APPDATA: env.homeDir,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      detached: false,
-    },
-  );
-
-  let stdoutBuf = "";
-  let stderrBuf = "";
-  let ready = false;
-  let tunnelUrl = null;
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    stdoutBuf += chunk;
-    if (!ready && stdoutBuf.includes("\nready\n") || stdoutBuf.startsWith("ready\n")) {
-      ready = true;
-    }
-    const m = /Tunnel:\s+(https?:\/\/\S+)/.exec(stdoutBuf);
-    if (m) tunnelUrl = m[1];
-  });
-  child.stderr.on("data", (chunk) => {
-    stderrBuf += chunk;
-  });
-
-  const deadline = Date.now() + READY_WAIT_MS;
-  while (Date.now() < deadline && !ready) {
-    if (child.exitCode !== null) {
-      throw new Error(
-        `daemon exited early (code ${child.exitCode}); stderr: ${stderrBuf}`,
-      );
-    }
-    await sleep(POLL_INTERVAL_MS);
-  }
-  if (!ready) {
-    child.kill("SIGTERM");
-    throw new Error(
-      `daemon did not signal ready within ${READY_WAIT_MS}ms; stderr: ${stderrBuf}`,
-    );
-  }
-
-  // Daemon emitted ready; cloudflared may still be initializing. Use the
-  // localhost MCP URL (always reachable once ready) instead of the tunnel.
-  const cfg = JSON.parse(readFileSync(env.configPath, "utf8"));
-  const url = `http://${cfg.daemon.bind_host}:${cfg.daemon.bind_port}`;
-  return { child, url, token: cfg.auth.token, tunnelUrl, stdoutBuf, stderrBuf };
-}
-
-async function stopDaemon(handle) {
-  if (!handle?.child || handle.child.exitCode !== null) return;
-  return new Promise((resolve) => {
-    handle.child.once("exit", () => resolve());
-    handle.child.kill("SIGTERM");
-    // SIGKILL fallback after 10s
-    setTimeout(() => {
-      if (handle.child.exitCode === null) {
-        handle.child.kill("SIGKILL");
-      }
-    }, 10_000).unref();
-  });
-}
-
-// ---- AC helpers ----
-
-function pass(message, evidence) {
-  return { pass: true, message, evidence };
-}
-function fail(message, evidence) {
-  return { pass: false, message, evidence };
-}
-
-function extractResult(callResult) {
-  return callResult.result.structuredContent ?? callResult.result;
-}
+import {
+  setupTempEnv,
+  cleanupTempEnv,
+  writeConfig,
+  startDaemon,
+  stopDaemon,
+  pass,
+  fail,
+  extractResult,
+} from "./lib/harness-common.mjs";
 
 // Drain helper: poll each job_id with wait_ms until terminal or budget
 // elapsed. Used between ACs in the same daemon-run group so cumulative
@@ -466,7 +294,7 @@ async function ac12_noWorkspace(client) {
 async function runGroup1_noWorkspace(env) {
   console.log("\n--- Group 1: no-workspace daemon (AC-12) ---");
   writeConfig(env, { workspace: false });
-  const handle = await startDaemon(env);
+  const handle = await startDaemon(env, { allowStubConfig: true });
   try {
     const client = await connect({ url: handle.url, token: handle.token });
     try {
@@ -485,7 +313,7 @@ async function runGroup1_noWorkspace(env) {
 async function runGroup2_defaultBehavior(env) {
   console.log("\n--- Group 2: default-behavior daemon (AC-1, AC-15) ---");
   writeConfig(env);
-  const handle = await startDaemon(env);
+  const handle = await startDaemon(env, { allowStubConfig: true });
   try {
     const client = await connect({ url: handle.url, token: handle.token });
     try {
@@ -515,7 +343,7 @@ async function runGroup3_delayPartialBehavior(env) {
       ],
     },
   });
-  const handle = await startDaemon(env);
+  const handle = await startDaemon(env, { allowStubConfig: true });
   try {
     const client = await connect({ url: handle.url, token: handle.token });
     try {

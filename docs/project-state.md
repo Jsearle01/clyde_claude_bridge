@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-24
-**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-010 (cross-platform live SMOKE on Windows + WSL Ubuntu) COMPLETE, awaiting verdict. 5/5 SMOKE PASS on both platforms after a reactive read_only hardening (added `disallowedTools` for write tools + `ExitPlanMode` to prevent the SDK's plan→default mode flip from letting writes through). Steady-state operating mode under methodology v0.4.
+**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-011 (Phase 11 MCP-path SMOKE harness for AC-5/6/8) COMPLETE, awaiting verdict. Windows live SMOKE: 3/3 PASS through the MCP wire against the real SDK; mid-run discovery of a harness brittleness (poll error envelope masquerading as terminal status) hardened by an `unwrapOrThrow` helper. T-P1-005 harness still 9/9 PASS after shared-lib extraction. Steady-state operating mode under methodology v0.4.
 **SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`)
 **P1-close doc-debt (informal):**
 - Update `02-p1-delegation.md` / `p1-build-plan.md` references from `@anthropic-ai/claude-code` → `@anthropic-ai/claude-agent-sdk`.
@@ -25,13 +25,21 @@
 ## Task queue
 
 ### In progress
-- T-P1-010 — Phase 10 cross-platform live SMOKE validation (Windows + WSL Ubuntu); 5/5 SMOKE PASS on both platforms; reactive `disallowedTools` hardening for `read_only` mode (COMPLETE, awaiting verdict)
+- T-P1-011 — Phase 11 acceptance harness MCP-path SMOKE expansion (`scripts/acceptance-p1-smoke.mjs` for AC-5/6/8 via MCP wire); shared-lib extraction at `scripts/lib/harness-common.mjs` (~190 lines surface, both harnesses import from it); Windows 3/3 PASS; harness brittleness fix (`unwrapOrThrow` helper) (COMPLETE, awaiting verdict)
 
 ### Pending (ordered, mapped from `p1-build-plan.md` phases)
-- T-P1-011+ — Phase 11 acceptance harness expansion (cover ACs 5/6/8/9 in `scripts/acceptance-p1.mjs` via the same SMOKE shapes now that the runner is validated)
-- (Phases 12-14 per `docs/design/p1-build-plan.md` §Task order)
+- T-P1-012+ — Phase 12 WSL Ubuntu cross-platform run of both `acceptance-p1.sh` and `acceptance-p1-smoke.sh`
+- (Phases 13-14 per `docs/design/p1-build-plan.md` §Task order)
 
 ### Recently completed
+- **T-P1-011** — Phase 11 acceptance harness MCP-path SMOKE for AC-5/6/8 (COMPLETE, awaiting verdict; 2026-05-24)
+  - Surface: 1 new lib (`scripts/lib/harness-common.mjs` ~190 lines), 1 new harness (`scripts/acceptance-p1-smoke.mjs` ~230 lines), 2 new wrappers (`acceptance-p1-smoke.ps1`, `acceptance-p1-smoke.sh` stub for Phase 12), refactor of `scripts/acceptance-p1.mjs` to import shared primitives. Net code change in `scripts/`: +570 / −187 lines (shared lib + new harness offset by deduplication of original).
+  - **MCP-path SMOKE results (Windows, live API):** AC-5 PASS in 10.2s (agentic happy path; hello.txt created; transcript 7 lines); AC-6 PASS in 37.8s (read_only refusal; status=complete; workspace unchanged); AC-8 PASS in 6.3s wall (cancel-to-terminal 2.2s of the 15s budget; well within tolerance).
+  - **Reactive harness brittleness fix mid-task:** first SMOKE run had AC-6 PASS in 38ms with `status=undefined` — a `poll_delegation` call with `wait_ms: 90000` was rejected at the `PollInputSchema` boundary (schema caps at 60000), and the error envelope slipped past the original assertion. Two-part fix: (a) lowered `AC6_WAIT_MS` to the schema cap (60000); (b) added `unwrapOrThrow(callResult, where)` helper that hard-fails when `isError === true`, so future schema rejections can never masquerade as terminal status. Replaced every `extractResult(await callTool(...))` call in the SMOKE harness with `unwrapOrThrow(...)`.
+  - **Shared-lib extraction decision:** dispatch named >50 lines as a consultation trigger. Reusable surface was ~190 lines, clearly above threshold; the call was unambiguous and the refactor of `acceptance-p1.mjs` to import from it was mechanical (one-line replacements at function-call sites). Verified afterward: T-P1-005 harness still 9/9 PASS post-refactor.
+  - ACs MCP-VERIFIED via this run (previously MECH-VERIFIED via direct unit tests at T-P1-009/010): AC-5, AC-6, AC-8. AC-9 (cross-platform) remains Phase 12 scope for the MCP path.
+  - Lint clean across all 3 workspaces. Daemon full-suite green: 280 pass + 13 skip (unchanged).
+  - 28th consecutive zero-fire on async-discipline rules.
 - **T-P1-010** — Phase 10 cross-platform live SMOKE (COMPLETE, awaiting verdict; 2026-05-24)
   - SMOKE results table: 5 tests × 2 platforms = 10 runs, all PASS. Windows totals: 5/5 in ~80s (smoke#1=13.0s, #2=37.5s, #3=10.9s, #4=6.5s, #5=11.2s). WSL Ubuntu totals: 5/5 in ~67s (#1=9.1s, #2=31.7s, #3=11.7s, #4=6.2s, #5=7.0s).
   - **Reactive deviation** (in-scope for SMOKE-uncovered defect): Windows smoke #2 (read_only) failed on first pass — Claude in plan mode called `ExitPlanMode`, which the SDK auto-approved and flipped permissionMode to `default`; the file would have been written on the next turn if max_turns hadn't run out first. Real read_only enforcement gap, not a brittle test. Hardened `SdkJobRunner` by adding `disallowedTools: ["Write","Edit","MultiEdit","NotebookEdit","ExitPlanMode"]` when `mode === "read_only"`, so writes are impossible regardless of any mode flips. Test #2's assertion relaxed from error-category match to the semantic contract ("no file may be created in the workspace"). All 5/5 PASS on both platforms after the fix.
