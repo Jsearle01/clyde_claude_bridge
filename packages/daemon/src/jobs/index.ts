@@ -8,3 +8,9 @@ export {
   type JobRunState,
   type JobView,
 } from "./types.js";
+export {
+  assembleReport,
+  parseTranscript,
+  type ReportAssemblyInput,
+  type TranscriptDigest,
+} from "./report.js";

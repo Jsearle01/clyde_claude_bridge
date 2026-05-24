@@ -53,8 +53,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 4 — Tool surface | T-P1-004 | COMPLETE |
 | Phase 5 — Acceptance harness skeleton | T-P1-005 | COMPLETE |
 | Phase 6 — Transcript writer | T-P1-006 | COMPLETE |
-| Phase 7 — Snapshot + diff | T-P1-007 | COMPLETE, awaiting verdict |
-| Phase 8 — Report assembler | — | not started |
+| Phase 7 — Snapshot + diff | T-P1-007 | COMPLETE |
+| Phase 8 — Report assembler | T-P1-008 | COMPLETE, awaiting verdict |
 | Phase 9 — Claude Code SDK integration | — | not started |
 | Phase 10 — Cancellation cross-platform | — | not started |
 | Phase 11 — Acceptance harness expansion | — | not started |
