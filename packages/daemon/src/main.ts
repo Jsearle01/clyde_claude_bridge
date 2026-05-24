@@ -244,7 +244,10 @@ async function main(): Promise<void> {
   // 5.8. Job runner. SdkJobRunner is the default (T-P1-009); StubJobRunner
   // remains available behind --allow-stub-config + stub_behavior for the
   // T-P1-005 acceptance harness.
-  // P1-only stub gating; remove at P2.
+  // Acceptance-harness-only stub gating; remove at P2 close once the
+  // StubJobRunner path is retired (originally said "remove at P2," kept as
+  // "remove at P2 close" through T-P1-014 doc-debt sweep since P2 opens
+  // post-gate).
   const allowStubConfig = process.argv.includes("--allow-stub-config");
   if (config.stub_behavior !== undefined && !allowStubConfig) {
     throw new Error(

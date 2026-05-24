@@ -48,8 +48,8 @@ import type { WorkspaceRegistry } from "../workspace/registry.js";
 const INTERRUPT_TIMEOUT_MS = 10_000;
 
 // Bash command deny patterns sourced from `docs/design/00-overview.md`
-// §"Bash deny list". P1-only — P2 layers per-workspace .claude-bridge.json
-// overrides on top.
+// §"Bash deny list". P1 hardcoded set — P2 will layer per-workspace
+// .claude-bridge.json overrides on top of this base.
 const BASH_DENY_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
   { pattern: /\brm\s+(-[rRf]+\s+)*\/(?:\s|$)/, reason: "rm of root filesystem" },
   { pattern: /\bdd\s+.*of=\/dev\//, reason: "dd to device file" },

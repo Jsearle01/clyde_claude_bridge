@@ -7,7 +7,7 @@ Phases here align with the gate sequence in `00-overview.md`. Each phase is a bo
 | Phase | Description | Status | Design doc |
 |-------|-------------|--------|------------|
 | P0 | Bus validation | **GATE-CLOSED** 2026-05-23 (all 10 ACs VERIFIED) | `01-p0-bus.md` |
-| P1 | Headless delegation | IN PROGRESS (Phase 1 — Shared types) | `02-p1-delegation.md` |
+| P1 | Headless delegation | **GATE-CLOSED** 2026-05-24 (all 16 ACs MECH/MCP/INFER-VERIFIED; both harnesses pass on Windows + WSL) | `02-p1-delegation.md` |
 | P2 | VS Code extension | NOT STARTED | Written after P1 ships |
 | P3 | Polish (last-shell, named tunnels, autostart) | NOT STARTED | Written after P2 ships |
 | P4 | Stretch (co-agent, multi-window, streaming) | NOT STARTED | Written after P3 ships |
@@ -59,8 +59,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 10 — Cancellation cross-platform + live SMOKE on Win + WSL | T-P1-010 | COMPLETE |
 | Phase 11 — Acceptance harness MCP-path SMOKE expansion | T-P1-011 | COMPLETE |
 | Phase 12 — WSL cross-platform run | T-P1-012 | COMPLETE |
-| Phase 13 — Runbook + walkthrough | T-P1-013 | COMPLETE, awaiting verdict (runbook +301 lines: prerequisites, installation, workspace block, operating delegations, P1 troubleshooting items, uninstallation; walkthrough +189 lines: P1 delegation surface narrative with 11 sub-sections + diagram + P2 deferral notes) |
-| Phase 14 — P1 gate close | — | not started |
+| Phase 13 — Runbook + walkthrough | T-P1-013 | COMPLETE |
+| Phase 14 — P1 gate close | T-P1-014 | COMPLETE, awaiting verdict (11-item doc-debt sweep applied across design docs + code comments; v0.5 methodology tracked in git; P1-close snapshot at `docs/snapshot/orchestrator-context-p1-close.md`; retroactive-notes.md created for T-P1-003 DailyTimer coverage gap) |
 
 Phase 4/5 swap applied during T-P1-001 verdict (tool surface must precede harness so the harness can exercise the MCP path); reflected in `p1-build-plan.md` and `orchestrator-context-p1-open.md`.
 

@@ -29,7 +29,7 @@ The **bridge daemon** is the system's center of gravity. It owns the MCP endpoin
 - Streaming Claude Code conversations into a webview panel
 - Surfacing approval prompts (toast in v1)
 
-**Claude Code** is invoked by the daemon (not the extension) via the `@anthropic-ai/claude-code` SDK, with cwd set to the workspace path. Output streams back through the daemon to both the originating MCP caller (project-Claude) and the extension's webview.
+**Claude Code** is invoked by the daemon (not the extension) via the `@anthropic-ai/claude-agent-sdk` SDK, with cwd set to the workspace path. Output streams back through the daemon to both the originating MCP caller (project-Claude) and the extension's webview.
 
 ## Frozen decisions
 

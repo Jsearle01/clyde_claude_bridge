@@ -11,7 +11,10 @@ import {
   ErrorDetailSchema,
 } from "./delegation.js";
 
-// P1-only; remove at Phase 9.
+// Acceptance-harness-only; remove at P2 close (once the StubJobRunner path
+// is retired). Original marker said "remove at Phase 9" but Phase 9's reduced
+// scope didn't touch this; T-P1-005's acceptance harness still relies on it
+// for mechanical AC coverage and will keep relying through P1 close.
 // Stub-runner behavior payload for the acceptance harness. Daemon honors
 // this only when started with --allow-stub-config (defense against
 // accidental presence in production configs).
@@ -54,9 +57,9 @@ export const ConfigSchema = z
     // P0-equivalent mode — `ping` works; `delegate_to_claude_code` returns
     // 503 no_workspace_configured (AC-12).
     workspace: WorkspaceConfigSchema.optional(),
-    // P1-only; remove at Phase 9.
-    // Stub-runner behavior for the acceptance harness. Daemon refuses to
-    // start with this present unless --allow-stub-config is also set.
+    // Acceptance-harness-only; remove at P2 close (see StubBehaviorSchema
+    // header note). Stub-runner behavior for the acceptance harness. Daemon
+    // refuses to start with this present unless --allow-stub-config is set.
     stub_behavior: StubBehaviorSchema.optional(),
   })
   .strict();

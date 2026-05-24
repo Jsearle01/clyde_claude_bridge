@@ -13,7 +13,7 @@ Phase numbering below indicates build order. The orchestrator may slice each pha
 ## Prerequisites
 
 - P0 GATE-CLOSED. Daemon, tunnel, CLI, audit, MCP server, tool registry all functional and committed.
-- `@anthropic-ai/claude-code` SDK accessible via npm. Version to be pinned at Phase 9; until then, install latest minor and treat the pin as a Phase 9 deliverable.
+- `@anthropic-ai/claude-agent-sdk` SDK accessible via npm. Version to be pinned at Phase 9; until then, install latest minor and treat the pin as a Phase 9 deliverable.
 - Node 20.10+ (already pinned in P0).
 - A real workspace directory for SMOKE acceptance: any git repo with simple structure works. Suggested: a throwaway repo created specifically for P1 testing under `~/projects/p1-sandbox/` or equivalent.
 - A Bearer-compatible MCP client for SMOKE runs. Options: MCP Inspector, Claude Code CLI (`claude mcp add --transport http --header`), Claude Desktop. The acceptance harness will exercise the first of these.
@@ -693,7 +693,7 @@ packages/daemon/src/jobs/runner.ts          # update: SdkJobRunner replaces Stub
 
 **Steps within this phase:**
 
-1. **Install the SDK.** `npm install @anthropic-ai/claude-code -w packages/daemon`. Pin to a specific minor in `package.json`. Record the pinned version in a project-state note for awareness.
+1. **Install the SDK.** `npm install @anthropic-ai/claude-agent-sdk -w packages/daemon`. Pin to a specific minor in `package.json`. Record the pinned version in a project-state note for awareness.
 
 2. **Discover the SDK's actual surface.** Read its README/docs. Inspect the package's TypeScript definitions. Confirm what the daemon needs:
    - Programmatic invocation (function call, not CLI subprocess unless that's the only path)

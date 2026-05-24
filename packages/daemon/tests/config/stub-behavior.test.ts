@@ -1,4 +1,6 @@
-// Tests for the P1-only stub_behavior config gating (T-P1-005).
+// Tests for the acceptance-harness-only stub_behavior config gating
+// (T-P1-005; retained through P1 close and through P2 until the
+// StubJobRunner path is retired).
 // We exercise the schema directly here; the runtime gating in main.ts is
 // trivially correct by construction (if config.stub_behavior !== undefined
 // && !flag → throw). The acceptance harness's daemon-lifecycle path
@@ -16,7 +18,7 @@ const baseConfig = {
   log: { path: "/tmp/daemon.log" },
 };
 
-describe("StubBehaviorSchema (P1-only)", () => {
+describe("StubBehaviorSchema (acceptance-harness only)", () => {
   it("accepts a minimal behavior", () => {
     expect(StubBehaviorSchema.parse({ outcome: "complete" })).toEqual({
       outcome: "complete",
@@ -59,7 +61,7 @@ describe("StubBehaviorSchema (P1-only)", () => {
   });
 });
 
-describe("ConfigSchema.stub_behavior (P1-only)", () => {
+describe("ConfigSchema.stub_behavior (acceptance-harness only)", () => {
   it("accepts a config WITHOUT stub_behavior", () => {
     const r = ConfigSchema.parse(baseConfig);
     expect(r.stub_behavior).toBeUndefined();

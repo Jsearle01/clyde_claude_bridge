@@ -8,7 +8,7 @@
 ## Goals
 
 1. Implement the three delegation tools (`delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`) over the bus proven in P0.
-2. Drive Claude Code via the `@anthropic-ai/claude-code` SDK with cwd set to a configured workspace path, mode flag plumbed through, and transcript captured.
+2. Drive Claude Code via the `@anthropic-ai/claude-agent-sdk` SDK with cwd set to a configured workspace path, mode flag plumbed through, and transcript captured.
 3. Establish the DelegationReport assembly pattern: structured summary returned to the caller, transcript URI for full conversation reference, file/diff/shell deltas computed from workspace state.
 4. Lock the tool signatures (`workspace?` argument, mode enum, report shape) so P2's extension work replaces the stub registry without changing the wire contract.
 5. Validate the mechanism end-to-end with a non-Claude.ai-connector client (MCP Inspector, Claude Code CLI as MCP client, or Claude Desktop) — see "Auth scope" below.
@@ -168,13 +168,18 @@ If SIGTERM does not produce exit within 10s, SIGKILL follows. Report status `can
   job_id: string,                    // "j_" + 12 base32 chars
   status: "queued" | "running",      // "queued" if a prior job is running; "running" if dispatched immediately
   workspace_id: string,              // resolved workspace ID
-  queued_position: number            // 0 if running, 1+ if queued
+  queued_position: number            // FIFO index in pending at enqueue time
+                                     // (impl: pending.length - 1). 0 means
+                                     // "first in pending behind any running
+                                     // job"; the runner's tickle microtask
+                                     // typically claims this immediately, so
+                                     // a subsequent poll sees status=running.
 }
 ```
 
 ### Validation rules
 
-- `prompt` non-empty and capped at 32 KB.
+- `prompt` non-empty. **No size cap in P1**; SDK and Anthropic API enforce their real limits. (A 32 KB cap was originally written into this doc; removed at T-P1-009 as speculative architecture without empirical grounding. Revisit if pathological input surfaces in practice.)
 - `exhibits` total inline content capped at 256 KB. Path-only references are unbounded count-wise but capped at 100 entries.
 - `workspace` if supplied must match a registered workspace ID (in P1's stub registry, this is the single configured entry).
 - `mode` defaults via workspace config.
@@ -342,8 +347,10 @@ P1's implementation: returns the single configured entry for any matching `id` o
 
 Two modes per `00-overview.md`:
 
-- **`read_only`:** SDK invoked with permission mode that disallows file writes and restricts bash to a read-side allowlist. The SDK's own permission flags handle this in P1; P1 does not add a custom enforcement layer.
-- **`agentic`:** SDK invoked with permission mode that allows file writes and bash with a deny-list. P1 relies on the SDK's defaults plus the explicit bash deny patterns from `00-overview.md` passed as configuration.
+- **`read_only`:** SDK invoked with `permissionMode: "plan"` PLUS a hardcoded `disallowedTools: ["Write", "Edit", "MultiEdit", "NotebookEdit", "ExitPlanMode"]`. See the "Read-only enforcement requires belt-and-suspenders" note below for the rationale.
+- **`agentic`:** SDK invoked with `permissionMode: "acceptEdits"`. Bash is allowed; the daemon's `canUseTool` callback enforces the bash deny patterns from `00-overview.md` at dispatch time. No custom layering on top of the SDK's defaults beyond the bash deny patterns.
+
+**Read-only enforcement requires belt-and-suspenders.** SDK's `permissionMode: "plan"` is read-only-tools-only **while in plan mode**, but the `ExitPlanMode` tool flips `permissionMode` to `"default"`, undoing the read-only constraint. Claude can use `ExitPlanMode` to propose a plan; the SDK auto-approves the plan and switches to `"default"` mode; on the next turn, write tools become available and the workspace gets mutated. T-P1-010's live SMOKE caught this — on Windows the test happened to pass only because `max_turns=3` ran out before the post-flip turn; higher `max_turns` would have written the file. Defense: in `read_only` mode the daemon sets `options.disallowedTools = ["Write", "Edit", "MultiEdit", "NotebookEdit", "ExitPlanMode"]`. `disallowedTools` is enforced at the SDK's dispatch layer and survives `permissionMode` flips. Permission mode says "plan"; disallowed-tools list says "and even if plan mode is escaped, these stay forbidden."
 
 The bash deny-list patterns (rm -rf /, dd of=/dev/, sudo, package manager installs, ~/.ssh, ~/.aws) are configured into the SDK invocation. They are enforced by the SDK, not by claude-bridge intercepting commands. If the SDK does not natively support a deny-list of this shape, P1 documents the gap and proposes either (a) shim layer in P2 or (b) restricting agentic mode to environments where the user already trusts the SDK's defaults.
 
@@ -351,7 +358,7 @@ The bash deny-list patterns (rm -rf /, dd of=/dev/, sudo, package manager instal
 
 ## Claude Code SDK integration
 
-The daemon imports `@anthropic-ai/claude-code` and invokes it programmatically. Each delegation produces one SDK invocation.
+The daemon imports `@anthropic-ai/claude-agent-sdk` and invokes it programmatically. Each delegation produces one SDK invocation.
 
 ### Contract the daemon depends on
 
@@ -425,7 +432,11 @@ interface ErrorDetail {
 
 Pre-delegation: daemon takes a workspace snapshot (file paths + content hashes for tracked files; respects `.gitignore` for the file walk). Post-delegation: re-walk, compute diff via git when workspace is a git repo, otherwise structural diff.
 
+**Snapshot caps and binary detection (impl details from T-P1-007).** The file walker caps at 50000 entries; exceeding the cap sets `truncated: true` on the snapshot and the diff propagates the truncation flag downstream into the report. Per-file binary detection reads the first 8 KB and checks for a NUL byte (presence → binary). Binary files are recorded in the snapshot with `is_binary: true` and contribute to `files_modified` by path, but are excluded from `diff` text content per the binary-file decision (Q-P1-5 lean adopted: skip).
+
 `files_created` / `files_modified` / `files_deleted` are derived from the comparison. `diff` is the unified textual diff.
+
+**The `diff` field is opaque display text.** Consumers should not attempt to parse hunks programmatically. Format may vary between the git-path (when both snapshots share a `git_head` and `git diff` is invoked) and the fallback-path (modified files render as creation-style entries with "(before unavailable)" labels via the `diff` npm package's `createPatch`). Treat the field as a human-readable diff suitable for rendering, not a machine-parseable artifact. T-P1-008's report assembler is the consumer of record; it treats the field as opaque and skips malformed trailing lines.
 
 For non-git workspaces or workspaces where git is unavailable, P1 falls back to per-file content diffs assembled into a unified-diff-compatible format. Limit: total diff capped at 256 KB; if exceeded, `diff_truncated: true` and `diff` contains the first 256 KB.
 
@@ -464,11 +475,11 @@ P1 is complete when **all** of the following are true. Each AC is tagged with it
 
 1. **[MECH]** `delegate_to_claude_code` with a valid prompt against the configured workspace returns `{job_id, status, workspace_id, queued_position}` within 500ms.
 
-2. **[MECH]** With no other job running, the returned status is `running`; with a job already running, the returned status is `queued` with `queued_position >= 1`.
+2. **[MECH]** Queue positions correctly reflect enqueue order. `delegate_to_claude_code` returns `queued_position` as the FIFO index in pending at enqueue time (0-indexed): when a job enqueues into an empty pending queue, position 0; when enqueuing behind an existing pending job, position 1+. **Implementation note:** a job that enqueues while no other job is running is claimed by the runner synchronously via `claimNext()` in a microtask, so it transitions from `queued` to `running` before the caller's next poll; this is correct and intentional. The pending-queue index is observable in the immediate delegate response; running-state is observable via subsequent `poll_delegation` calls. (The original design wording — "0 if running, 1+ if queued" — described an aspirational semantic that the actual queue implementation diverged from at T-P1-003 in favor of the simpler FIFO-index-at-enqueue model. T-P1-005's harness caught the divergence; impl semantic preserved as the canonical contract.)
 
 3. **[MECH]** `poll_delegation(job_id, wait_ms=0)` returns the current job status without blocking; for a running job, the response includes `partial` with `turns_so_far`, `last_tool`, `elapsed_ms`.
 
-4. **[MECH]** `poll_delegation(job_id, wait_ms=30000)` blocks until the job reaches a terminal state OR 30s elapses, whichever comes first. Resolution is event-driven (no busy-wait verified by instrumenting the daemon's wakeup mechanism).
+4. **[MECH]** `poll_delegation(job_id, wait_ms=30000)` blocks until the job reaches a terminal state OR 30s elapses, whichever comes first. Resolution is event-driven (no busy-wait verified by instrumenting the daemon's wakeup mechanism). **Note on wait_ms ceiling:** the schema (`PollInputSchema`) caps `wait_ms` at 60000ms; 30000 in this AC is the *canonical client-side default* for typical SMOKE delegations, not the hard ceiling. Clients with delegations expected to exceed 60s should issue multiple polls with shorter wait windows rather than attempt a single long wait — the 60s cap is a defensive bound against unbounded connection hold.
 
 5. **[SMOKE]** A delegation in `agentic` mode against a real Claude Code SDK invocation (using a Bearer-compatible MCP client) completes end-to-end: produces a DelegationReport with `status: "complete"`, non-empty `summary`, accurate `files_created`/`files_modified`/`files_deleted`/`diff`, non-zero `tool_calls_made` and `turns`, valid `transcript_uri` pointing to a readable jsonl file.
 
@@ -514,7 +525,7 @@ Each criterion has a corresponding step in the acceptance harness or the runbook
 
 These are flagged for the design conversation that opens P1's first task, and may be amended as P1 implementation surfaces specifics:
 
-- **Q-P1-1: SDK permission mode mapping.** What flags/options does `@anthropic-ai/claude-code` expose for read_only vs agentic modes? Does the bash deny-list pattern require a shim, or does the SDK accept a passthrough configuration? Resolution likely at T-P1-001 or T-P1-002.
+- **Q-P1-1: SDK permission mode mapping.** What flags/options does `@anthropic-ai/claude-agent-sdk` expose for read_only vs agentic modes? Does the bash deny-list pattern require a shim, or does the SDK accept a passthrough configuration? Resolution likely at T-P1-001 or T-P1-002.
 - **Q-P1-2: Transcript message schema stability.** Is the SDK's streamed message format stable enough to persist as-is? Or should claude-bridge normalize to its own schema? Resolution: prefer pass-through if stable; normalize if not.
 - **Q-P1-3: Partial progress instrumentation.** How does the daemon observe `turns_so_far` and `last_tool` during a running job? The SDK's streamed messages are the source of truth; the daemon maintains a counter as it tees to the transcript file.
 - **Q-P1-4: Default workspace `default_mode`.** Per `00-overview.md`, `agentic` is the default. Confirm P1 ships with this; no opening question.

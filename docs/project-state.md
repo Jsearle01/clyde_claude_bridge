@@ -1,11 +1,11 @@
 # claude-bridge — project state
 
 **Project:** claude-bridge
-**Methodology version:** v0.3
-**Current phase:** P0 (bus validation)
-**Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
+**Methodology version:** v0.5
+**Current phase:** P1 closed; P2 design pending
+**Current integration milestone:** INT-2 closed implicitly via P1 ACs; INT-3 (steady-state multi-workspace UX in VS Code) pending P2
 **Last conversation date:** 2026-05-24
-**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-013 (Phase 13 runbook + walkthrough updates) COMPLETE, awaiting verdict. Runbook extended +301 lines with P1 operator content (prerequisites, installation, workspace block, full operating-delegations section, 4 new troubleshooting items per Decision 3, uninstallation). Walkthrough extended +189 lines with the P1 delegation-surface narrative across 11 sub-sections including a layered architecture diagram and explicit P2 deferral notes. Steady-state operating mode now under **methodology v0.5** (placed at T-P1-012 conclusion).
+**Status:** **P1 GATE-CLOSED 2026-05-24** (alongside P0 still closed). All 16 P1 ACs MECH/MCP/INFER-VERIFIED on Windows + WSL Ubuntu. T-P1-014 COMPLETE, awaiting verdict: 11-item design-doc-debt sweep applied + P1-close snapshot produced at `docs/snapshot/orchestrator-context-p1-close.md` + `docs/snapshot/retroactive-notes.md` created (T-P1-003 DailyTimer coverage gap annotation) + v0.5 methodology now tracked in git. P2 design conversation pending; no kickoff content produced at gate close.
 **SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`)
 **P1-close doc-debt (informal):**
 - Update `02-p1-delegation.md` / `p1-build-plan.md` references from `@anthropic-ai/claude-code` → `@anthropic-ai/claude-agent-sdk`.
@@ -25,12 +25,17 @@
 ## Task queue
 
 ### In progress
-- T-P1-013 — Phase 13 runbook + walkthrough updates; runbook extended +301 lines with P1 operator-facing content; walkthrough extended +189 lines with P1 delegation-surface narrative (COMPLETE, awaiting verdict)
+- T-P1-014 — Phase 14 P1 gate close + 11-item design-doc-debt sweep + P1-close snapshot (COMPLETE, awaiting verdict)
 
-### Pending (ordered, mapped from `p1-build-plan.md` phases)
-- T-P1-014 — Phase 14 P1 gate close (design-doc-debt sweep across `02-p1-delegation.md` + `p1-build-plan.md` + `00-overview.md`; P1 ACs final verification; gate close)
+### Pending
+- (none — P1 closed; P2 design conversation pending, no task drafted yet)
 
 ### Recently completed
+- **T-P1-014** — Phase 14 P1 gate close + design-doc-debt sweep (COMPLETE, awaiting verdict; 2026-05-24)
+  - 11-item design-doc-debt sweep applied. Items 1/3/5/6/7/8/10 in `docs/design/02-p1-delegation.md` (AC-2 FIFO-index semantic; 32KB-cap phrase removed; DiffResult.diff opaque-text contract added; package name renamed `@anthropic-ai/claude-code` → `@anthropic-ai/claude-agent-sdk`; ExitPlanMode + READ_ONLY_DISALLOWED_TOOLS belt-and-suspenders paragraph; wait_ms cap divergence clarification; snapshot 50000-file cap + 8KB NUL-byte binary detection threshold documented). Item 6 also applied in `p1-build-plan.md` and `00-overview.md`. Item 4 updated `P1-only` markers in `packages/shared/src/config.ts` (2 occurrences), `packages/daemon/src/main.ts`, `packages/daemon/src/jobs/sdk-runner.ts`, and `packages/daemon/tests/config/stub-behavior.test.ts` (3 occurrences) to "Acceptance-harness-only; remove at P2 close" — the marker was load-bearing for the T-P1-005 harness which stays through P2. Item 2 surfaced T-P1-003 retroactive annotation; created `docs/snapshot/retroactive-notes.md` (the P1-open snapshot lacked T-P1-003 verdict text). Item 9 datapoint absorbed into the P1-close snapshot's "Performance datapoint" section. Item 11 git-added `docs/claude-orchestrated-methodology-v0_5.md` at its canonical path (walkthrough cross-references unchanged).
+  - **P1-close snapshot produced** at `docs/snapshot/orchestrator-context-p1-close.md` (~280 lines). All 11 required sections present: header + phase summary + 16 AC status + performance datapoint + calibration summary + pattern inventory + methodology version + test surface + cross-platform evidence + open items deferred to P2 + next-phase pointers.
+  - **AC status final:** 16/16 verified. AC-5/6/8 carry both MECH-VERIFIED (unit tests at T-P1-009/010) and MCP-VERIFIED (wire-path harness at T-P1-011/012). AC-9 cross-platform parity verified on both unit-direct and MCP-wire paths.
+  - **No regressions:** build clean; lint clean across 3 workspaces; 280 daemon tests + 13 skipped (5 SMOKE + 8 platform-skip) — unchanged from T-P1-013 baseline. 31st consecutive zero-fire on async-discipline rules.
 - **T-P1-013** — Phase 13 operator runbook + P1 walkthrough extension (COMPLETE, awaiting verdict; 2026-05-24)
   - Pure-doc task; no code changes. First task operating under methodology v0.5.
   - `docs/runbook.md` extended 306 → 607 lines. New sections: Prerequisites, Installation, Workspace block (P1 sub-section under Configuration), Operating delegations (P1) — full coverage of `delegate_to_claude_code` / `poll_delegation` / `cancel_delegation` shapes + DelegationReport field interpretation + audit-trail note. Four new Troubleshooting items per dispatch Decision 3: WSL pre-flight checklist (CC-4), "undici unavailable" warning (CC-5), cloudflared installation per OS, Node engine guidance (CC-6 matrix). New P1 harnesses sub-section under "Running the acceptance harness." New Uninstallation section.
