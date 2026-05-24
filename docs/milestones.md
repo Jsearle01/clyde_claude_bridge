@@ -57,8 +57,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 8 — Report assembler | T-P1-008 | COMPLETE |
 | Phase 9 — Claude Code SDK integration | T-P1-009 | COMPLETE |
 | Phase 10 — Cancellation cross-platform + live SMOKE on Win + WSL | T-P1-010 | COMPLETE |
-| Phase 11 — Acceptance harness MCP-path SMOKE expansion | T-P1-011 | COMPLETE, awaiting verdict (Windows 3/3 PASS for AC-5/6/8 via MCP wire; harness brittleness fixed mid-run; T-P1-005 still 9/9 after shared-lib refactor) |
-| Phase 12 — WSL cross-platform run | — | not started |
+| Phase 11 — Acceptance harness MCP-path SMOKE expansion | T-P1-011 | COMPLETE |
+| Phase 12 — WSL cross-platform run | T-P1-012 | COMPLETE, awaiting verdict (WSL Ubuntu: stub harness 9/9 PASS + SMOKE 3/3 PASS for AC-5/6/8; two platform fixes — Linux cloudflared PATH branch, lazy undici load; Windows still 9/9 post-edits; AC-9 MECH-VERIFIED via MCP path on both platforms) |
 | Phase 13 — Runbook + walkthrough | — | not started |
 | Phase 14 — P1 gate close | — | not started |
 

@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-24
-**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-011 (Phase 11 MCP-path SMOKE harness for AC-5/6/8) COMPLETE, awaiting verdict. Windows live SMOKE: 3/3 PASS through the MCP wire against the real SDK; mid-run discovery of a harness brittleness (poll error envelope masquerading as terminal status) hardened by an `unwrapOrThrow` helper. T-P1-005 harness still 9/9 PASS after shared-lib extraction. Steady-state operating mode under methodology v0.4.
+**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-012 (Phase 12 cross-platform WSL Ubuntu MCP-path validation) COMPLETE, awaiting verdict. Both harnesses run on WSL: StubJobRunner harness 9/9 PASS; SdkJobRunner SMOKE 3/3 PASS through MCP wire against the real SDK. Two reactive platform fixes (Linux cloudflared PATH branch + lazy undici load to survive Node 20.18 engine mismatch). Windows still 9/9 post-fix. AC-9 cross-platform parity MECH-VERIFIED on the MCP path. Steady-state operating mode under methodology v0.4.
 **SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`)
 **P1-close doc-debt (informal):**
 - Update `02-p1-delegation.md` / `p1-build-plan.md` references from `@anthropic-ai/claude-code` → `@anthropic-ai/claude-agent-sdk`.
@@ -25,13 +25,24 @@
 ## Task queue
 
 ### In progress
-- T-P1-011 — Phase 11 acceptance harness MCP-path SMOKE expansion (`scripts/acceptance-p1-smoke.mjs` for AC-5/6/8 via MCP wire); shared-lib extraction at `scripts/lib/harness-common.mjs` (~190 lines surface, both harnesses import from it); Windows 3/3 PASS; harness brittleness fix (`unwrapOrThrow` helper) (COMPLETE, awaiting verdict)
+- T-P1-012 — Phase 12 WSL Ubuntu cross-platform run of both harnesses; 2 reactive platform fixes (Linux cloudflared branch in `harness-common.mjs`; lazy undici load in `mcp-delegate-client.mjs`); WSL stub harness 9/9 PASS, WSL SMOKE 3/3 PASS, Windows still 9/9 (COMPLETE, awaiting verdict)
 
 ### Pending (ordered, mapped from `p1-build-plan.md` phases)
-- T-P1-012+ — Phase 12 WSL Ubuntu cross-platform run of both `acceptance-p1.sh` and `acceptance-p1-smoke.sh`
-- (Phases 13-14 per `docs/design/p1-build-plan.md` §Task order)
+- T-P1-013+ — Phase 13 runbook + walkthrough updates
+- T-P1-014 — Phase 14 P1 gate close
 
 ### Recently completed
+- **T-P1-012** — Phase 12 cross-platform WSL Ubuntu MCP-path validation (COMPLETE, awaiting verdict; 2026-05-24)
+  - WSL prep: `rm -rf node_modules && npm install && npm run build` — clean. T-P1-010's defensive prep pattern works.
+  - **WSL stub harness results:** 9/9 PASS in ~7s wall (AC-1 56ms, AC-3 10ms, AC-4 1513ms, AC-12/15/2/7/13 all PASS; AC-10 21/27 audit entries carry job_id+workspace_id).
+  - **WSL SMOKE harness results:** 3/3 PASS — AC-5 9.3s (Windows 10.2s), AC-6 6.7s (Windows 37.8s; Claude on WSL took the disallowedTools-rejection path much faster), AC-8 5.4s wall with cancel→terminal 1.4s (Windows 2.2s; well within 15s budget).
+  - **Reactive platform fix #1** (in-scope per dispatch's <20-line budget): `ensureCloudflaredOnPath` was Windows-only; added Linux/darwin branch checking `~/cloudflared`, `/usr/local/bin/cloudflared`, `/usr/bin/cloudflared`. Found the WSL user-local `~/cloudflared` from T-0019.6 and added its parent dir to PATH. Daemon's `await tunnelManager.start()` gates `ready\n`, so without this fix WSL harness would time out at the 20s ready-wait. Net +20 lines in `harness-common.mjs`.
+  - **Reactive platform fix #2** (in-scope per dispatch's <20-line budget): undici@^8.3.0 in root devDependencies requires Node ≥ 22.19 (engine warning since T-P1-010); on the WSL user-local Node 20.18, undici crashes at module load with `webidl.util.markAsUncloneable is not a function`. The MCP client's static `import { Agent, setGlobalDispatcher } from "undici"` failed both harnesses on WSL. Fix: lazy `await import("undici")` inside try/catch; if undici fails to load, emit one stderr warning and skip the DNS workaround. Workaround is only load-bearing for `*.trycloudflare.com` URLs (T-0019); harnesses use localhost only. Net +17 lines in `mcp-delegate-client.mjs`.
+  - **Reconciliation:** all 3 SMOKE ACs PASS on both platforms with comparable cancel-to-terminal latencies (Windows 2.2s, WSL 1.4s — well under the dispatch's "2x divergence" trigger). AC-6 wall-time differs (Windows 37.8s, WSL 6.7s) — Claude's path selection in `read_only`+`disallowedTools` is non-deterministic; both paths are within the semantic contract (no file written). Not a concerning divergence.
+  - Windows post-fix spot-check: T-P1-005 harness still 9/9 PASS; lazy-undici-load works identically on Windows (undici 8.3.0 loads cleanly on Node 24).
+  - **AC-9 cross-platform MECH-VERIFIED** via this run: AC-5/6/8 now pass via MCP wire on both Windows AND WSL Ubuntu.
+  - Daemon source unchanged; full daemon suite 280 pass + 13 skip (unchanged); lint clean across all 3 workspaces.
+  - 29th consecutive zero-fire on async-discipline rules.
 - **T-P1-011** — Phase 11 acceptance harness MCP-path SMOKE for AC-5/6/8 (COMPLETE, awaiting verdict; 2026-05-24)
   - Surface: 1 new lib (`scripts/lib/harness-common.mjs` ~190 lines), 1 new harness (`scripts/acceptance-p1-smoke.mjs` ~230 lines), 2 new wrappers (`acceptance-p1-smoke.ps1`, `acceptance-p1-smoke.sh` stub for Phase 12), refactor of `scripts/acceptance-p1.mjs` to import shared primitives. Net code change in `scripts/`: +570 / −187 lines (shared lib + new harness offset by deduplication of original).
   - **MCP-path SMOKE results (Windows, live API):** AC-5 PASS in 10.2s (agentic happy path; hello.txt created; transcript 7 lines); AC-6 PASS in 37.8s (read_only refusal; status=complete; workspace unchanged); AC-8 PASS in 6.3s wall (cancel-to-terminal 2.2s of the 15s budget; well within tolerance).

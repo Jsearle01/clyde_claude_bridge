@@ -34,14 +34,37 @@ export const INERT_TOKEN = "cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 export const READY_WAIT_MS = 20_000;
 export const POLL_INTERVAL_MS = 250;
 
-// Augment PATH with a well-known cloudflared location (Windows). Same
-// pattern as P0's acceptance harness. No-op when cloudflared is not at
-// the canonical install path or when not on Windows.
+// Augment PATH with a well-known cloudflared location. Daemon main.ts
+// awaits `tunnelManager.start()` before emitting `ready\n`, so a
+// cloudflared spawn failure means the daemon never signals ready and
+// the harness times out. Same pattern as P0's acceptance harness on
+// Windows; Linux branch added at T-P1-012 for WSL/Ubuntu coverage
+// (T-0019.6 left `~/cloudflared` as a user-local install, the same
+// shape Phase 12 inherits).
 export function ensureCloudflaredOnPath() {
   if (process.platform === "win32") {
     const cfDir = "C:\\Program Files (x86)\\cloudflared";
     if (existsSync(join(cfDir, "cloudflared.exe"))) {
       process.env.PATH = `${cfDir};${process.env.PATH ?? ""}`;
+    }
+    return;
+  }
+  if (process.platform === "linux" || process.platform === "darwin") {
+    const home = process.env.HOME ?? "";
+    const candidates = [
+      join(home, "cloudflared"),
+      "/usr/local/bin/cloudflared",
+      "/usr/bin/cloudflared",
+    ];
+    for (const c of candidates) {
+      if (existsSync(c)) {
+        const dir = dirname(c);
+        const parts = (process.env.PATH ?? "").split(":");
+        if (!parts.includes(dir)) {
+          process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
+        }
+        return;
+      }
     }
   }
 }

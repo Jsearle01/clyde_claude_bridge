@@ -18,42 +18,62 @@
 
 import process from "node:process";
 import dns from "node:dns";
-import { Agent, setGlobalDispatcher } from "undici";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-dns.setServers(["1.1.1.1", "8.8.8.8"]);
-setGlobalDispatcher(
-  new Agent({
-    connect: {
-      lookup(hostname, options, callback) {
-        // Localhost: skip c-ares; OS resolver knows about 127.0.0.1.
-        if (hostname === "localhost" || hostname === "127.0.0.1") {
-          if (options.all) {
-            callback(null, [{ address: "127.0.0.1", family: 4 }]);
-          } else {
-            callback(null, "127.0.0.1", 4);
-          }
-          return;
-        }
-        dns.resolve4(hostname, (err, addrs) => {
-          if (err) {
-            callback(err);
+// The DNS-via-undici-dispatcher workaround (T-0019) is only load-bearing
+// for `*.trycloudflare.com` URLs whose names haven't propagated to the
+// local resolver. The acceptance harness uses localhost, so the
+// workaround is no-op there. Lazy/optional load so hosts pinned to an
+// older Node (e.g., WSL @ 20.18 where undici@8.x crashes at module load
+// with "webidl.util.markAsUncloneable is not a function") still work
+// for localhost connections. Production use against trycloudflare URLs
+// requires a Node version that satisfies undici's engine constraint.
+let undiciLib = null;
+try {
+  undiciLib = await import("undici");
+} catch (err) {
+  process.stderr.write(
+    `[mcp-client] undici unavailable; DNS workaround disabled — ` +
+    `localhost is fine; trycloudflare hostnames may fail to resolve. ` +
+    `(${err instanceof Error ? err.message : String(err)})\n`,
+  );
+}
+
+if (undiciLib !== null) {
+  dns.setServers(["1.1.1.1", "8.8.8.8"]);
+  undiciLib.setGlobalDispatcher(
+    new undiciLib.Agent({
+      connect: {
+        lookup(hostname, options, callback) {
+          // Localhost: skip c-ares; OS resolver knows about 127.0.0.1.
+          if (hostname === "localhost" || hostname === "127.0.0.1") {
+            if (options.all) {
+              callback(null, [{ address: "127.0.0.1", family: 4 }]);
+            } else {
+              callback(null, "127.0.0.1", 4);
+            }
             return;
           }
-          if (options.all) {
-            callback(
-              null,
-              addrs.map((address) => ({ address, family: 4 })),
-            );
-          } else {
-            callback(null, addrs[0], 4);
-          }
-        });
+          dns.resolve4(hostname, (err, addrs) => {
+            if (err) {
+              callback(err);
+              return;
+            }
+            if (options.all) {
+              callback(
+                null,
+                addrs.map((address) => ({ address, family: 4 })),
+              );
+            } else {
+              callback(null, addrs[0], 4);
+            }
+          });
+        },
       },
-    },
-  }),
-);
+    }),
+  );
+}
 
 // ---- JS API (importable) ----
 
