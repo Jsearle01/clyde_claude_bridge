@@ -433,16 +433,18 @@ async function ac15_inputValidation(client) {
     const r = await callTool(client, "delegate_to_claude_code", c.input);
     if (!r.isError) fails.push(c.name);
   }
-  // Note: prompt over 32KB is NOT enforced by the schema (per T-P1-001's
-  // boundary-only design) — handler doesn't enforce it either. Document
-  // the gap as expected.
+  // Note: prompt size is NOT capped in P1 by design (T-P1-009 follow-up).
+  // The 32KB figure in 02-p1-delegation.md was speculative without
+  // empirical grounding; SDK and Anthropic API enforce their real limits.
+  // The "prompt over 32KB" case is included in the harness for visibility
+  // but its non-rejection is expected and not a failure.
   const significantFails = fails.filter((n) => n !== "prompt over 32KB");
   if (significantFails.length > 0) {
     return fail(`cases not rejected: ${significantFails.join(", ")}`, { fails });
   }
   const note =
     fails.includes("prompt over 32KB")
-      ? " (note: 32KB cap not enforced — schema is boundary-only per T-P1-001 Decision A; handler-level enforcement deferred)"
+      ? " (note: prompt size uncapped in P1 by design; SDK/API enforce real limits)"
       : "";
   return pass(`all input-validation cases rejected at MCP boundary${note}`, {
     rejected_cases: cases.filter((c) => !fails.includes(c.name)).map((c) => c.name),

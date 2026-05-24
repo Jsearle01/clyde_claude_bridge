@@ -5,8 +5,11 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-009 (Claude Agent SDK integration + cancellation) COMPLETE, awaiting verdict. Steady-state operating mode under methodology v0.4.
-**SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`; build plan + design doc still reference old name — P1-close doc-debt sweep)
+**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-009 (Claude Agent SDK integration + cancellation) COMPLETE + orchestrator-side scope reshape on the 32KB prompt cap follow-up (no cap in P1 by design); awaiting verdict on combined commits. Steady-state operating mode under methodology v0.4.
+**SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`)
+**P1-close doc-debt (informal):**
+- Update `02-p1-delegation.md` / `p1-build-plan.md` references from `@anthropic-ai/claude-code` → `@anthropic-ai/claude-agent-sdk`.
+- Update `02-p1-delegation.md` `delegate_to_claude_code` validation rules: remove the "capped at 32 KB" phrase from the prompt-field description (was speculative architecture without empirical grounding; no enforcement in P1 by design per T-P1-009 reshape).
 **Repository:** https://github.com/Jsearle01/clyde_claude_bridge (public, mechanically verified via `gh repo view` at T-P1-001.6)
 
 ## Gate status
@@ -22,7 +25,7 @@
 ## Task queue
 
 ### In progress
-- T-P1-009 — Phase 9 Claude Agent SDK integration (real SdkJobRunner; canUseTool deny enforcement; AbortController cancellation; 32KB prompt cap; report.ts updated for SDK BetaMessage nested-content shape; Phase 10 scope reduced) (COMPLETE, awaiting verdict)
+- T-P1-009 — Phase 9 Claude Agent SDK integration (real SdkJobRunner; canUseTool deny enforcement; AbortController cancellation; report.ts updated for SDK BetaMessage nested-content shape; Phase 10 scope reduced) + 32KB-cap reshape (no cap in P1 by design; deferral comment at delegate.ts) (COMPLETE, awaiting verdict)
 
 ### Pending (ordered, mapped from `p1-build-plan.md` phases)
 - T-P1-002+ — Phase 2 workspace registry stub

@@ -143,17 +143,6 @@ describe("delegate_to_claude_code — input validation (handler-level caps)", ()
     });
   });
 
-  it("rejects prompt > 32KB (handler-level cap; T-P1-009)", async () => {
-    const deps = makeDeps();
-    const tool = makeDelegateTool(deps);
-    const big = "x".repeat(33 * 1024);
-    await expect(
-      tool.handler({ prompt: big }, makeCtx(auditLog)),
-    ).rejects.toMatchObject({
-      code: 400,
-      reason: "prompt_size_exceeded",
-    });
-  });
 });
 
 describe("delegate_to_claude_code — input validation (schema)", () => {
