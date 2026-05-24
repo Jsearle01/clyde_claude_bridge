@@ -37,7 +37,6 @@ export class AuditLog {
   private queue: Promise<void> = Promise.resolve();
   private handlePromise: Promise<FileHandle> | null = null;
   private currentDate: string | null = null;
-  private timer: NodeJS.Timeout | null = null;
   private closed = false;
 
   constructor(
@@ -187,43 +186,23 @@ export class AuditLog {
     }
   }
 
-  startMidnightTimer(): void {
-    if (this.closed) return;
-    const now = this.clock();
-    const tomorrow = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate() + 1,
-        0,
-        0,
-        0,
-        0,
-      ),
-    );
-    const ms = tomorrow.getTime() - now.getTime();
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void (async () => {
-        try {
-          await this.rotate();
-          await this.pruneOld();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          process.stderr.write(`audit: midnight task failed: ${msg}\n`);
-        }
-        if (!this.closed) this.startMidnightTimer();
-      })();
-    }, ms);
+  /** Daily-fire entrypoint registered with `DailyTimer` at startup.
+   * Performs the day-rollover rotate plus retention prune as a single
+   * unit. Errors from either step are surfaced to the daemon's stderr
+   * (the timer's onError hook handles further routing). */
+  async runMidnightTasks(): Promise<void> {
+    try {
+      await this.rotate();
+      await this.pruneOld();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`audit: midnight task failed: ${msg}\n`);
+    }
   }
 
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
     await this.queue;
     if (this.handlePromise !== null) {
       try {

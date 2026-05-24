@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, readFile, writeFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -171,16 +171,12 @@ describe("AuditLog", () => {
     await expect(log.stop()).resolves.toBeUndefined();
   });
 
-  it("stop cancels the midnight timer (11.i)", async () => {
-    vi.useFakeTimers();
-    try {
-      const log = new AuditLog(auditPath, 30);
-      log.startMidnightTimer();
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
-      await log.stop();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+  it("runMidnightTasks performs rotate + pruneOld without throwing (11.i)", async () => {
+    // AuditLog no longer owns the timer (extracted to util/DailyTimer at
+    // T-P1-003); the midnight-fire entrypoint is `runMidnightTasks`.
+    // Timer-cancellation coverage lives in tests/util/daily-timer.test.ts.
+    const log = new AuditLog(auditPath, 30);
+    await expect(log.runMidnightTasks()).resolves.toBeUndefined();
+    await log.stop();
   });
 });

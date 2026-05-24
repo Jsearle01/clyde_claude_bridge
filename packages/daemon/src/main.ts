@@ -27,6 +27,8 @@ import { IpcServer, type IpcHandlers } from "./ipc/server.js";
 import { makeInitialState } from "./state.js";
 import { StubWorkspaceRegistry } from "./workspace/registry.js";
 import { validateWorkspaceConfig } from "./workspace/config.js";
+import { JobQueue } from "./jobs/index.js";
+import { DailyTimer } from "./util/daily-timer.js";
 import {
   writePidFile,
   checkStalePid,
@@ -43,6 +45,7 @@ export interface DaemonComponents {
   mcpServer: McpServer;
   tunnelManager: TunnelManager;
   auditLog: AuditLog;
+  dailyTimer: DailyTimer;
   logger: Logger;
   pidPath: string;
 }
@@ -73,6 +76,10 @@ export async function shutdown(
     { name: "mcp", stop: () => components.mcpServer.stop() },
     { name: "tunnel", stop: () => components.tunnelManager.stop() },
     { name: "audit", stop: () => components.auditLog.stop() },
+    { name: "daily-timer", stop: (): Promise<void> => {
+        components.dailyTimer.stop();
+        return Promise.resolve();
+      } },
   ];
 
   for (const layer of layers) {
@@ -166,7 +173,6 @@ async function main(): Promise<void> {
 
   // 4. Audit log.
   const auditLog = new AuditLog(config.audit.path, config.audit.retention_days);
-  auditLog.startMidnightTimer();
 
   // 5. State + token closure (token is mutable; T-0017 token rotate swaps it).
   const state = makeInitialState(config);
@@ -180,6 +186,29 @@ async function main(): Promise<void> {
   logger.info("workspace registry initialized", {
     workspace_count: workspaceRegistry.list().length,
   });
+
+  // 5.6. Job queue (P1). In-memory single-concurrent queue; 24h retention
+  // via the daily timer below. Threaded into tool factories at Phase 4.
+  const jobQueue = new JobQueue();
+  logger.info("job queue initialized");
+
+  // 5.7. Daily timer. ONE timer per daemon (extracted from T-0007 at
+  // T-P1-003). Audit log rotate/prune + job queue retention sweep both
+  // hang off this single timer.
+  const dailyTimer = new DailyTimer({
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("daily-timer callback failed", { error: msg });
+    },
+  });
+  dailyTimer.add(() => auditLog.runMidnightTasks());
+  dailyTimer.add(() => {
+    const removed = jobQueue.sweep();
+    if (removed > 0) {
+      logger.info("job queue swept", { removed });
+    }
+  });
+  dailyTimer.start();
 
   // 6. Tool registry.
   const registry = new ToolRegistry();
@@ -280,6 +309,7 @@ async function main(): Promise<void> {
     mcpServer,
     tunnelManager,
     auditLog,
+    dailyTimer,
     logger,
     pidPath,
   };

@@ -48,8 +48,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 1 — Shared types | T-P1-001 | COMPLETE (bundled in T-P1-001.5 commit) |
 | (infra) | T-P1-001.5 | P1 design handoff + github.com remote |
 | (infra) | T-P1-001.6 | README factual correction; gh CLI installed + authenticated; T-P1-001.5 AC-6 visibility=PUBLIC mechanically verified |
-| Phase 2 — Workspace registry stub | T-P1-002 | COMPLETE, awaiting verdict |
-| Phase 3 — Job queue + state machine | — | not started |
+| Phase 2 — Workspace registry stub | T-P1-002 | COMPLETE |
+| Phase 3 — Job queue + state machine | T-P1-003 | COMPLETE, awaiting verdict |
 | Phase 4 — Tool surface | — | not started |
 | Phase 5 — Acceptance harness skeleton | — | not started |
 | Phase 6 — Transcript writer | — | not started |
