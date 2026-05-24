@@ -60,7 +60,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 11 — Acceptance harness MCP-path SMOKE expansion | T-P1-011 | COMPLETE |
 | Phase 12 — WSL cross-platform run | T-P1-012 | COMPLETE |
 | Phase 13 — Runbook + walkthrough | T-P1-013 | COMPLETE |
-| Phase 14 — P1 gate close | T-P1-014 | COMPLETE, awaiting verdict (11-item doc-debt sweep applied across design docs + code comments; v0.5 methodology tracked in git; P1-close snapshot at `docs/snapshot/orchestrator-context-p1-close.md`; retroactive-notes.md created for T-P1-003 DailyTimer coverage gap) |
+| Phase 14 — P1 gate close | T-P1-014 | COMPLETE |
+| (post-gate) | T-P1-015 | COMPLETE, awaiting verdict — README refresh reflecting P1 reality (project description, gate table, prerequisites with ANTHROPIC_API_KEY + Node 22 LTS, tool list update including delegation tools, dive-deeper pointers to runbook P1 sections + P1 design doc + P1-close snapshot + v0.5 methodology) |
 
 Phase 4/5 swap applied during T-P1-001 verdict (tool surface must precede harness so the harness can exercise the MCP path); reflected in `p1-build-plan.md` and `orchestrator-context-p1-open.md`.
 

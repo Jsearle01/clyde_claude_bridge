@@ -2,33 +2,34 @@
 
 **Repository:** https://github.com/Jsearle01/clyde_claude_bridge
 
-An MCP bridge that connects Claude.ai project chats to local development workspaces over a Cloudflare tunnel. The bridge daemon hosts a single MCP endpoint, owns the bearer token, writes an audit log, and (in future gates) coordinates job delegation to VS Code workspaces.
+An MCP bridge that connects Claude.ai project chats to local development workspaces over a Cloudflare tunnel. The bridge daemon hosts a single MCP endpoint, owns the bearer token, writes an audit log, and coordinates headless delegations to a Claude Code SDK sub-agent running against a configured workspace. Delegations enqueue, run to completion (or cancel), and return a structured report with diff, files-changed, transcript URI, and shell-command record.
 
-**Project status:** P0 (bus validation) is **GATE-CLOSED** as of 2026-05-23, with all 10 acceptance criteria VERIFIED (8 mechanically via `scripts/acceptance-p0.ps1`; AC-9 via WSL Ubuntu run at T-0019.6; AC-10 manually verified at gate per T-0007 unit tests). The only tool exposed at this gate is `ping` — enough to prove the end-to-end roundtrip Claude.ai → tunnel → daemon → response works with auth. P1 (headless delegation) is in progress; P2 (VS Code extension) is a future gate.
+**Project status:** **P0 GATE-CLOSED 2026-05-23**; **P1 GATE-CLOSED 2026-05-24**. P2 (VS Code extension) is a future gate; design conversation pending. All 10 P0 ACs VERIFIED; all 16 P1 ACs MECH/MCP/INFER-VERIFIED on both Windows and WSL Ubuntu. The current tool surface: `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. See [`docs/snapshot/orchestrator-context-p1-close.md`](docs/snapshot/orchestrator-context-p1-close.md) for the full P1 close snapshot.
 
 ## What is this?
 
 A long-running local daemon publishes one MCP endpoint over a Cloudflare ephemeral tunnel (`*.trycloudflare.com`). An MCP client — MCP Inspector, Claude Code, Claude Desktop, or any HTTP-capable MCP client — connects to that endpoint with a Bearer token. The daemon authenticates, dispatches the request to a registered tool, writes an audit entry, and responds.
 
-P0 ships exactly this surface: one tool (`ping`), one tunnel, one token, one audit log. Subsequent gates add headless job delegation (P1), a VS Code extension for workspace attachment (P2), and operational polish (P3+).
+P0 shipped the bus. P1 shipped the delegation surface: `delegate_to_claude_code` enqueues an SDK-driven Claude Code session against a configured workspace; `poll_delegation` long-polls for completion (event-driven, no busy-wait); `cancel_delegation` aborts via AbortController. The runner is single-concurrent in P1. Read-only delegations enforce a `disallowedTools` belt-and-suspenders to prevent the SDK's plan-mode `ExitPlanMode` escape hatch. Transcripts persist as JSONL at `~/.claude-bridge/transcripts/{job_id}.jsonl`; reports include git/fallback diff, files-created/modified/deleted, shell commands, and truncation reason if any.
 
 The architecture is intentionally layered:
 
 | Gate | Adds | Status |
 |---|---|---|
-| P0 | Bus validation: daemon + tunnel + auth + audit + one tool | GATE-CLOSED 2026-05-23 |
-| P1 | Headless delegation: queued jobs + result streaming | In progress |
-| P2 | VS Code extension: workspace attachment | Not started |
+| P0 | Bus validation: daemon + tunnel + auth + audit + one tool | **GATE-CLOSED** 2026-05-23 |
+| P1 | Headless delegation: queued jobs, SDK integration, snapshot/diff, transcripts, cross-platform | **GATE-CLOSED** 2026-05-24 |
+| P2 | VS Code extension: workspace attachment | Not started; design pending |
 | P3+ | Polish: last-shell routing, named tunnels, autostart | Not started |
 
 ## Prerequisites
 
-- **Node 20.10+** (tested on 20 and 24)
+- **Node 22 LTS recommended.** Hard floor 20.10 for the daemon; 20.19+ silences the SDK engine warning; undici@8 (transitive dev-dep used by the MCP delegate client's DNS workaround) needs ≥22.19. See [`docs/runbook.md`](docs/runbook.md#node-engine-guidance) for the full matrix.
 - **npm 10+**
 - **`cloudflared`** on PATH or configured at `tunnel.binary` in config:
   - Windows: `winget install --id Cloudflare.cloudflared` (or the installer from [cloudflare/cloudflared releases](https://github.com/cloudflare/cloudflared/releases))
   - macOS: `brew install cloudflared`
   - Linux: distribution package manager or the GitHub release tarball
+- **`ANTHROPIC_API_KEY`** in the shell that starts the daemon — required for live delegations (the daemon's child process inherits the env var). Get one from [console.anthropic.com](https://console.anthropic.com). Without the key, `ping` still works; `delegate_to_claude_code` reaches the SDK runner and fails with `error.category: "auth"`. The key is never written to disk by claude-bridge.
 
 ## Install
 
@@ -81,7 +82,7 @@ claude-bridge tunnel restart  # restart cloudflared with a new URL
 
 ## Connecting an MCP client
 
-Recommended for P0 testing: **[MCP Inspector](https://github.com/modelcontextprotocol/inspector)**
+Recommended for testing: **[MCP Inspector](https://github.com/modelcontextprotocol/inspector)**
 
 ```bash
 npx @modelcontextprotocol/inspector
@@ -92,17 +93,22 @@ In the Inspector UI, set:
 - URL: `<tunnel-url>/mcp`
 - Header: `Authorization: Bearer <token>`
 
-Click `Connect`, then `tools/list` should show `ping`. Call it with `{"message": "hello"}` and inspect the response.
+Click `Connect`, then `tools/list` should show four tools: `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. A typical delegation flow: call `delegate_to_claude_code` with `{"prompt": "...", "mode": "agentic"}` to enqueue, then `poll_delegation` with `{"job_id": "...", "wait_ms": 30000}` until the response includes a `report` field. See the [runbook's Operating Delegations section](docs/runbook.md#operating-delegations-p1) for tool semantics and the [P1 walkthrough section](docs/walkthrough.md#p1--delegation-surface-whats-actually-shipped) for end-to-end internals.
 
-**Claude.ai connector UI caveat.** The custom MCP connector in Claude.ai's project settings currently requires OAuth client credentials; static Bearer tokens are not supported. For static-Bearer testing, use MCP Inspector, Claude Code (`claude mcp add --transport http <url>/mcp --header "Authorization: Bearer <token>"`), or Claude Desktop's `mcpServers` config entry. See [`docs/runbook.md`](docs/runbook.md) for full client procedures.
+**Claude.ai connector UI caveat.** The custom MCP connector in Claude.ai's project settings currently requires OAuth client credentials; static Bearer tokens are not supported. For static-Bearer testing, use MCP Inspector, Claude Code (`claude mcp add --transport http <url>/mcp --header "Authorization: Bearer <token>"`), or Claude Desktop's `mcpServers` config entry. OAuth in the daemon is a candidate for the P1-P2 interphase or P2 itself. See [`docs/runbook.md`](docs/runbook.md) for full client procedures.
 
 ## Where to dive deeper
 
-- [`docs/runbook.md`](docs/runbook.md) — operational procedures, troubleshooting (cloudflared, DNS, Windows quirks), AC verification procedures
+- [`docs/runbook.md`](docs/runbook.md) — operator reference: prerequisites, installation, configuration, lifecycle, operating delegations, troubleshooting (WSL pre-flight, undici warning, cloudflared per OS, Node engine matrix), MCP client setup, AC verification procedures, uninstallation
+- [`docs/walkthrough.md`](docs/walkthrough.md) — contributor narrative: steady-state UX target (P2+) followed by the "P1 — Delegation surface" section covering job lifecycle, MCP tools, snapshot/diff, transcripts, report assembly, SDK integration with the `READ_ONLY_DISALLOWED_TOOLS` belt-and-suspenders rationale, acceptance harnesses, CC-1 through CC-6 cross-platform discipline
 - [`docs/design/00-overview.md`](docs/design/00-overview.md) — architecture overview, topology, frozen design decisions
 - [`docs/design/01-p0-bus.md`](docs/design/01-p0-bus.md) — P0 specification and acceptance criteria
-- [`docs/design/p0-build-plan.md`](docs/design/p0-build-plan.md) — concrete file paths and build order
-- [`docs/walkthrough.md`](docs/walkthrough.md) — steady-state UX target (P2)
+- [`docs/design/02-p1-delegation.md`](docs/design/02-p1-delegation.md) — P1 specification: tool schemas, 16 acceptance criteria, modes, snapshot/diff, transcripts
+- [`docs/design/p0-build-plan.md`](docs/design/p0-build-plan.md) — P0 concrete file paths and build order
+- [`docs/design/p1-build-plan.md`](docs/design/p1-build-plan.md) — P1 concrete file paths and build order
+- [`docs/snapshot/orchestrator-context-p0-close.md`](docs/snapshot/orchestrator-context-p0-close.md) — P0 close snapshot
+- [`docs/snapshot/orchestrator-context-p1-close.md`](docs/snapshot/orchestrator-context-p1-close.md) — P1 close snapshot (16 ACs, 14 phases, calibration summary, pattern inventory, P2 deferrals)
+- [`docs/claude-orchestrated-methodology-v0_5.md`](docs/claude-orchestrated-methodology-v0_5.md) — methodology in effect (dual-band reporting, docs-vs-runtime pattern, harness brittleness defense, CC-N artifacts)
 - [`docs/conventions.md`](docs/conventions.md) — TypeScript / ESM / cross-cutting concerns
 
 ## License
