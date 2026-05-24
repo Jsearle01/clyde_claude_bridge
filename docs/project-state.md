@@ -5,7 +5,7 @@
 **Current phase:** P0 (bus validation)
 **Current integration milestone:** INT-1 (first ping roundtrip from Claude.ai project)
 **Last conversation date:** 2026-05-23
-**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-003 (job queue + state machine; DailyTimer extracted from T-0007) COMPLETE, awaiting verdict. Steady-state operating mode under methodology v0.4.
+**Status:** **P0 GATE-CLOSED 2026-05-23**. P1 IN PROGRESS — T-P1-004 (tool surface: delegate/poll/cancel + StubJobRunner) COMPLETE, awaiting verdict. Steady-state operating mode under methodology v0.4.
 **Repository:** https://github.com/Jsearle01/clyde_claude_bridge (public, mechanically verified via `gh repo view` at T-P1-001.6)
 
 ## Gate status
@@ -21,7 +21,7 @@
 ## Task queue
 
 ### In progress
-- T-P1-003 — Phase 3 job queue + state machine + DailyTimer extraction (COMPLETE, awaiting verdict)
+- T-P1-004 — Phase 4 tool surface (delegate/poll/cancel) + StubJobRunner + audit_metadata side-channel (COMPLETE, awaiting verdict)
 
 ### Pending (ordered, mapped from `p1-build-plan.md` phases)
 - T-P1-002+ — Phase 2 workspace registry stub

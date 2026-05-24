@@ -213,7 +213,9 @@ export class McpServer {
       };
     }
 
-    const ctx: ToolContext = {
+    // setAuditMetadata is injected by ToolRegistry.invoke; the McpServer
+    // hands invoke a base ctx without it.
+    const ctx: Omit<ToolContext, "setAuditMetadata"> = {
       request_id: ctxData.request_id,
       remote_addr: ctxData.remote_addr,
       auditLog: this.opts.auditLog,

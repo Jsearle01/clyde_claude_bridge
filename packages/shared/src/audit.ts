@@ -12,4 +12,9 @@ export interface AuditEntry {
   result_bytes: number;
   request_id: string;
   remote_addr: string;
+  // P1: delegation tools populate these; P0 tools (ping) leave them absent.
+  // Side-channel: handlers call ctx.setAuditMetadata(...) and dispatch merges
+  // before append. Backward-compatible — old audit readers ignore unknown keys.
+  job_id?: string;
+  workspace_id?: string;
 }

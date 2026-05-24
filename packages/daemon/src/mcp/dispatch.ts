@@ -13,12 +13,42 @@ import type { Logger } from "../log/logger.js";
 import type { DaemonState } from "../state.js";
 import { hashInput } from "../audit/hash.js";
 
+/** Optional metadata a tool handler may attach to its audit entry.
+ * P1 delegation tools use this to record job_id + workspace_id. P0 tools
+ * (ping) leave it untouched and produce audit entries with these fields
+ * absent. Set via `ctx.setAuditMetadata({...})` from inside the handler;
+ * dispatch reads it after the handler returns and merges into the audit
+ * write. Multiple calls in the same handler overwrite (last write wins). */
+export interface AuditMetadata {
+  job_id?: string;
+  workspace_id?: string;
+}
+
 export interface ToolContext {
   readonly request_id: string;
   readonly remote_addr: string;
   readonly auditLog: AuditLog;
   readonly logger: Logger;
   readonly state: DaemonState;
+  /** Optional in the type so existing P0 ctx-construction sites
+   * (tests, mcp/server.ts) compile without change. The ToolRegistry's
+   * invoke() always wraps the ctx with a real setAuditMetadata before
+   * calling the handler, so inside a handler this is always defined. */
+  setAuditMetadata?(meta: AuditMetadata): void;
+}
+
+/** Thrown by tool handlers for handler-level rejections (400/404/503 etc.).
+ * Dispatch surfaces `code` + `reason` in the audit entry's `reason` field;
+ * the MCP server layer maps them to client-facing error responses. */
+export class ToolHandlerError extends Error {
+  constructor(
+    public readonly code: number,
+    public readonly reason: string,
+    message?: string,
+  ) {
+    super(message ?? `${code} ${reason}`);
+    this.name = "ToolHandlerError";
+  }
 }
 
 export interface ToolDef<I, O> {
@@ -93,12 +123,22 @@ export class ToolRegistry {
   async invoke(
     name: string,
     rawInput: unknown,
-    ctx: ToolContext,
+    ctx: Omit<ToolContext, "setAuditMetadata">,
   ): Promise<unknown> {
     const tool = this.tools.get(name);
     if (tool === undefined) {
       throw new ToolNotFoundError(name);
     }
+
+    // Per-invocation metadata holder. Handlers populate via
+    // ctx.setAuditMetadata; dispatch reads at audit-write time.
+    let captured: AuditMetadata = {};
+    const handlerCtx: ToolContext = {
+      ...ctx,
+      setAuditMetadata: (meta: AuditMetadata): void => {
+        captured = { ...captured, ...meta };
+      },
+    };
 
     const parsed = tool.inputSchema.safeParse(rawInput);
     if (!parsed.success) {
@@ -122,7 +162,7 @@ export class ToolRegistry {
     // operations to 0, which violates AC-5's "non-zero duration_ms" check.
     const startMs = performance.now();
     try {
-      const output = await tool.handler(parsed.data, ctx);
+      const output = await tool.handler(parsed.data, handlerCtx);
       const durationMs = Math.ceil(performance.now() - startMs);
       await this.tryAudit(ctx, {
         ts: new Date().toISOString(),
@@ -133,6 +173,10 @@ export class ToolRegistry {
         result_bytes: serializedLength(output),
         request_id: ctx.request_id,
         remote_addr: ctx.remote_addr,
+        ...(captured.job_id !== undefined ? { job_id: captured.job_id } : {}),
+        ...(captured.workspace_id !== undefined
+          ? { workspace_id: captured.workspace_id }
+          : {}),
       });
       return output;
     } catch (err) {
@@ -150,13 +194,17 @@ export class ToolRegistry {
         result_bytes: 0,
         request_id: ctx.request_id,
         remote_addr: ctx.remote_addr,
+        ...(captured.job_id !== undefined ? { job_id: captured.job_id } : {}),
+        ...(captured.workspace_id !== undefined
+          ? { workspace_id: captured.workspace_id }
+          : {}),
       });
       throw err;
     }
   }
 
   private async tryAudit(
-    ctx: ToolContext,
+    ctx: Omit<ToolContext, "setAuditMetadata">,
     entry: Parameters<AuditLog["append"]>[0],
   ): Promise<void> {
     try {

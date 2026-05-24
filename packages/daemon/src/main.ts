@@ -21,6 +21,10 @@ import { createLogger, type Logger } from "./log/logger.js";
 import { AuditLog } from "./audit/log.js";
 import { ToolRegistry } from "./mcp/dispatch.js";
 import { pingTool } from "./mcp/tools/ping.js";
+import { makeDelegateTool } from "./mcp/tools/delegate.js";
+import { makePollTool } from "./mcp/tools/poll.js";
+import { makeCancelTool } from "./mcp/tools/cancel.js";
+import { StubJobRunner } from "./jobs/runner.js";
 import { McpServer } from "./mcp/server.js";
 import { TunnelManager } from "./tunnel/manager.js";
 import { IpcServer, type IpcHandlers } from "./ipc/server.js";
@@ -210,9 +214,25 @@ async function main(): Promise<void> {
   });
   dailyTimer.start();
 
+  // 5.8. Job runner. Stub for P1 (configurable canned outcomes for
+  // Phase 5's harness); Phase 9 swaps in SdkJobRunner against the same
+  // JobRunner interface without tool-side changes.
+  const jobRunner = new StubJobRunner(jobQueue);
+
   // 6. Tool registry.
   const registry = new ToolRegistry();
   registry.register(pingTool);
+  const toolDeps = {
+    registry: workspaceRegistry,
+    queue: jobQueue,
+    runner: jobRunner,
+  };
+  registry.register(makeDelegateTool(toolDeps));
+  registry.register(makePollTool({ queue: jobQueue }));
+  registry.register(makeCancelTool({ queue: jobQueue, runner: jobRunner }));
+  logger.info("tools registered", {
+    tools: ["ping", "delegate_to_claude_code", "poll_delegation", "cancel_delegation"],
+  });
 
   // 7. MCP server.
   const mcpServer = new McpServer({
