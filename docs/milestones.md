@@ -61,7 +61,8 @@ P1 design at `docs/design/02-p1-delegation.md`. 16 acceptance criteria, tagged p
 | Phase 12 — WSL cross-platform run | T-P1-012 | COMPLETE |
 | Phase 13 — Runbook + walkthrough | T-P1-013 | COMPLETE |
 | Phase 14 — P1 gate close | T-P1-014 | COMPLETE |
-| (post-gate) | T-P1-015 | COMPLETE, awaiting verdict — README refresh reflecting P1 reality (project description, gate table, prerequisites with ANTHROPIC_API_KEY + Node 22 LTS, tool list update including delegation tools, dive-deeper pointers to runbook P1 sections + P1 design doc + P1-close snapshot + v0.5 methodology) |
+| (post-gate) | T-P1-015 | COMPLETE |
+| (pre-P2) | T-P2-000-review | COMPLETE, awaiting verdict — pre-P2 review pass on `03-p2-extension.md` + `p2-build-plan.md`; 2 low-risk corrections applied (config field name singular not plural; Q4 status code consistency); 7 design + 9 build-plan substantive concerns surfaced for orchestrator follow-up; confidence 80-85% ready; recommend short clarification round before T-P2-001 dispatches |
 
 Phase 4/5 swap applied during T-P1-001 verdict (tool surface must precede harness so the harness can exercise the MCP path); reflected in `p1-build-plan.md` and `orchestrator-context-p1-open.md`.
 

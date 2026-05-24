@@ -25,12 +25,21 @@
 ## Task queue
 
 ### In progress
-- T-P1-015 — Post-gate README refresh reflecting P1 reality (COMPLETE, awaiting verdict)
+- T-P2-000-review — pre-P2 review pass on `03-p2-extension.md` + `p2-build-plan.md` (COMPLETE, awaiting verdict)
 
 ### Pending
-- (none — P1 closed; P2 design conversation pending, no task drafted yet)
+- (T-P2-001 dispatch pending orchestrator+user resolution of T-P2-000-review concerns)
 
 ### Recently completed
+- **T-P2-000-review** — pre-P2 review pass (COMPLETE, awaiting verdict; 2026-05-24)
+  - Read `docs/design/03-p2-extension.md` (224 lines) + `docs/design/p2-build-plan.md` (464 lines) end-to-end. Cross-checked against P1 codebase (`packages/shared/src/config.ts`, `packages/daemon/src/ipc/protocol.ts`) and P1 calibration data.
+  - **2 low-risk corrections applied** inline: design-doc Q4 status code now uses `503 extension_offline` for consistency with `503 no_workspace_registered` / `403 user_denied` pattern; build-plan Phase 7 corrected `config.workspaces` → `config.workspace` (P1's actual schema field is singular).
+  - **16 substantive concerns surfaced** for orchestrator follow-up (7 in design doc appendix, 9 in build plan appendix). Top three pre-T-P2-001 blockers: build plan Phase 2's "P0's CLI hello" reference is factually wrong (no hello primitive exists in P0 IPC; introducing one is a real new-protocol-surface scope item); build plan's top-level total estimates ("~12-14 hours" and "~40 min average per task") are off by ~2x against P1 actuals (~16 min/task average; per-phase sum ~5.6h); `v0_6_candidates` field referenced in build plan doesn't exist in `project-state.md` yet (needs initialization before T-P2-001 or as T-P2-001 deliverable).
+  - **Codebase reality findings:** Q1 IPC transport feasible (P0 newline-JSON protocol can be extended); Q2 workspace registration stub matches design's "to be replaced" framing; Q4 inspection tool routing composes cleanly with existing `makeTool()` factory pattern; one factual error (config field name) caught and corrected.
+  - **Empirical predictions:** mostly reasonable against P1 cadence; Phase 2 likely under-predicted (15-20 min) once the actual scope is clear (introducing the hello/versioning concept); Phase 11 may be tight if headless VS Code is chosen vs mock-IPC-client. Per-phase sum (~5.6h midpoint) is ~half the top-level "12-14h" claim.
+  - **Confidence:** docs are 80-85% ready. Short clarification round resolving concerns #1, #2, and #7 lands them at ready; remaining concerns can fold into per-task scope conversations.
+  - **Initial v0.6 candidate from this task:** "review-task report shape" — Form B fits but the audit-trail of corrections + concerns + appendix text is heavy in the report; might benefit from a Form C variant. (Logging here so this initializes the `v0_6_candidates` list for any future v0.6 work; the orchestrator can decide whether to formalize the field structure.)
+  - Build clean (no source code changes); lint clean across 3 workspaces; 280 daemon tests preserved; 33rd consecutive zero-fire on async-discipline rules.
 - **T-P1-015** — Post-gate README refresh (COMPLETE, awaiting verdict; 2026-05-24)
   - README extended 110 → 116 lines (+6 net). Five targeted section updates: (1) project description now mentions delegation surface + report shape; (2) project status updated to P0+P1 GATE-CLOSED with link to P1-close snapshot; (3) "What is this?" reframed to describe the four-tool surface (`ping` + `delegate_to_claude_code` + `poll_delegation` + `cancel_delegation`) with one paragraph on the SDK integration + read_only belt-and-suspenders; (4) gate table updated (P1 → GATE-CLOSED 2026-05-24; P2 → "not started; design pending"); (5) Prerequisites adds Node 22 LTS recommendation (with link to runbook engine matrix) and ANTHROPIC_API_KEY requirement with auth-failure-mode note; (6) Connecting an MCP client section now mentions all four tools + recommends the delegate/poll flow with pointers to runbook + walkthrough; (7) Where-to-dive-deeper section adds P1 design doc, p1-build-plan, P0-close snapshot, P1-close snapshot, and v0.5 methodology to the link list. Existing content (install steps, license, MCP Inspector setup) preserved word-for-word where the P1 reality didn't require updates. All internal links verified to resolve. 32nd consecutive zero-fire on async-discipline rules (no code touched).
 - **T-P1-014** — Phase 14 P1 gate close + design-doc-debt sweep (COMPLETE, awaiting verdict; 2026-05-24)
