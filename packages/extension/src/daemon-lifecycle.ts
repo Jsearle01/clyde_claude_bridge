@@ -82,7 +82,13 @@ export function locateCliBinary(
     tried.push(name);
     const probe = spawnSync(name, ["--version"], {
       stdio: "ignore",
-      shell: false,
+      // CVE-2024-27980: Node's spawn/spawnSync returns EINVAL for .cmd
+      // and .bat on Windows unless shell:true. Required for the .cmd
+      // shim to resolve at all, regardless of bare/explicit/absolute
+      // naming. Args here are literal ("--version") so cmd.exe parsing
+      // is unambiguous; if future args carry user-controlled content
+      // they need explicit quoting at that future call site.
+      shell: process.platform === "win32",
     });
     if (probe.error === undefined && probe.status === 0) {
       return name;
@@ -184,6 +190,10 @@ export async function startDaemon(
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,
       env,
+      // CVE-2024-27980: same workaround as the locateCliBinary probe —
+      // required for spawning a .cmd shim on Windows. Args are literal
+      // ("start") so cmd.exe parsing is unambiguous.
+      shell: process.platform === "win32",
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -123,10 +123,14 @@ describe("locateCliBinary — Windows shim resolution (T-P2-004.5)", () => {
     });
     expect(result).toBe("claude-bridge.cmd");
     expect(spawnSync).toHaveBeenCalledTimes(1);
+    // objectContaining (not strict equality) so the shell option's
+    // platform-conditional value (true on Windows for CVE-2024-27980;
+    // false on Unix) doesn't break the test across hosts. Tests assert
+    // the option-shape we care about; daemon-lifecycle.ts owns the rest.
     expect(spawnSync).toHaveBeenCalledWith(
       "claude-bridge.cmd",
       ["--version"],
-      { stdio: "ignore", shell: false },
+      expect.objectContaining({ stdio: "ignore" }),
     );
   });
 
