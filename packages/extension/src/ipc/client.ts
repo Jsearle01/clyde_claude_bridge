@@ -72,6 +72,15 @@ export class IpcClient {
   // confirm_trust); P3+ may grow this to multiplexed concurrent requests
   // if real demand surfaces.
   private pending: PendingRequest | null = null;
+  // Optional hook fired after each reconnect attempt is scheduled (i.e.,
+  // after the reconnectAttempt counter has just been incremented). Used by
+  // extension.ts (T-P2-005) to surface a user-visible "daemon not running"
+  // notification after N attempts. Single-subscriber model — not
+  // EventEmitter — to keep IpcClient's public API minimal and tests
+  // direct-assignable. Errors thrown by the callback are caught and
+  // swallowed in scheduleReconnect() so subscriber failures cannot
+  // corrupt the reconnect machinery.
+  public onReconnectAttempt?: (attempt: number) => void;
 
   constructor(
     private readonly endpoint: string,
@@ -279,6 +288,17 @@ export class IpcClient {
       RECONNECT_MAX_MS,
     );
     this.reconnectAttempt += 1;
+    // Notify subscribers AFTER the counter increment. Subscriber receives
+    // the new attempt count (1 on the first reconnect, 2 on the second).
+    // Subscriber errors are swallowed; the reconnect machinery must
+    // continue regardless of subscriber behavior. T-P2-005.
+    if (this.onReconnectAttempt !== undefined) {
+      try {
+        this.onReconnectAttempt(this.reconnectAttempt);
+      } catch {
+        // intentional swallow — subscriber failures must not break reconnect
+      }
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.doConnect().catch(() => {

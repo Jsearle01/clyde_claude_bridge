@@ -6,13 +6,17 @@ import {
   beforeEach,
 } from "vitest";
 import { EventEmitter } from "node:events";
+import * as vscode from "vscode";
 import {
   locateCliBinary,
   getApiKey,
   startDaemon,
+  runStartDaemonCommand,
+  makeDaemonNotRunningHandler,
   CliBinaryNotFoundError,
 } from "../src/daemon-lifecycle.js";
 import type { SecretsApi } from "../src/daemon-lifecycle.js";
+import { makeWorkspaceConfig } from "./mocks/vscode.js";
 
 function makeSecretsMock(initial: Record<string, string> = {}): {
   api: SecretsApi;
@@ -390,5 +394,197 @@ describe("startDaemon (T-P2-004)", () => {
       | { env?: Record<string, string> }
       | undefined;
     expect(spawnOpts?.env?.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+});
+
+// T-P2-005: runStartDaemonCommand UI binding tests. Extracted from
+// extension.ts at T-P2-005's second-use moment (palette command +
+// autoStart hook + new daemon-not-running notification button).
+
+describe("runStartDaemonCommand (T-P2-005)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default config: empty cliPath, autoStartDaemon false.
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      makeWorkspaceConfig({ cliPath: "/fake/claude-bridge" }),
+    );
+  });
+
+  it("happy path: maps {ok, pid} to showInformationMessage with 'daemon starting' text", async () => {
+    const secrets = makeSecretsMock();
+    const child = new FakeChild();
+    const spawn = vi.fn(() => child) as never;
+    await runStartDaemonCommand(
+      { secrets: secrets.api },
+      {
+        spawn,
+        envValue: "sk-ant-env",
+        observationWindowMs: 50,
+      },
+    );
+    const info = vi.mocked(vscode.window.showInformationMessage);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]?.[0]).toMatch(/daemon starting/i);
+    expect(info.mock.calls[0]?.[0]).toMatch(/pid 4242/);
+  });
+
+  it("already_running path: maps to showWarningMessage", async () => {
+    const secrets = makeSecretsMock();
+    const child = new FakeChild();
+    const spawn = vi.fn(() => child) as never;
+    const promise = runStartDaemonCommand(
+      { secrets: secrets.api },
+      {
+        spawn,
+        envValue: "sk-ant-env",
+        observationWindowMs: 100,
+      },
+    );
+    setImmediate(() => {
+      child.stderr.emit("data", "Daemon already running (pid 99999)\n");
+      child.emit("exit", 1);
+    });
+    await promise;
+    const warn = vi.mocked(vscode.window.showWarningMessage);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/already running/);
+  });
+
+  it("error path: maps to showErrorMessage with the error reason", async () => {
+    const secrets = makeSecretsMock();
+    const spawn = vi.fn(() => {
+      throw new Error("EACCES: permission denied");
+    }) as never;
+    await runStartDaemonCommand(
+      { secrets: secrets.api },
+      {
+        spawn,
+        envValue: "sk-ant-env",
+      },
+    );
+    const err = vi.mocked(vscode.window.showErrorMessage);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(err.mock.calls[0]?.[0]).toContain("EACCES");
+  });
+});
+
+// T-P2-005: makeDaemonNotRunningHandler threshold + once-per-session +
+// autoStart-suppression tests. Each factory call yields a fresh handler
+// with closure-local guard state (no shared module state across tests).
+
+describe("makeDaemonNotRunningHandler (T-P2-005)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeHandlerWithMocks(opts: {
+    autoStart?: boolean;
+  } = {}): {
+    handler: (attempt: number) => void;
+    showWarning: ReturnType<typeof vi.fn>;
+    runStart: ReturnType<typeof vi.fn>;
+  } {
+    const secrets = makeSecretsMock();
+    const showWarning = vi.fn<
+      (msg: string, ...items: string[]) => Promise<string | undefined>
+    >(() => Promise.resolve(undefined));
+    const runStart = vi.fn(() => Promise.resolve());
+    const handler = makeDaemonNotRunningHandler(
+      { secrets: secrets.api },
+      {
+        getAutoStartSetting: () => opts.autoStart ?? false,
+        showWarningMessage: showWarning,
+        runStartDaemon: runStart as unknown as (
+          ctx: { secrets: SecretsApi },
+        ) => Promise<void>,
+      },
+    );
+    return { handler, showWarning, runStart };
+  }
+
+  it("does not fire on attempts 1 and 2 (below threshold)", () => {
+    const { handler, showWarning } = makeHandlerWithMocks();
+    handler(1);
+    handler(2);
+    expect(showWarning).not.toHaveBeenCalled();
+  });
+
+  it("fires on attempt 3 with expected message text and Start Daemon button", async () => {
+    const { handler, showWarning } = makeHandlerWithMocks();
+    handler(3);
+    // The async-IIFE inside the handler awaits showWarning; flush microtasks.
+    await Promise.resolve();
+    expect(showWarning).toHaveBeenCalledTimes(1);
+    expect(showWarning.mock.calls[0]?.[0]).toContain(
+      "Claude Bridge daemon is not running",
+    );
+    expect(showWarning.mock.calls[0]?.[1]).toBe("Start Daemon");
+  });
+
+  it("does not re-fire on attempts 4, 5, ... (once-per-session guard)", async () => {
+    const { handler, showWarning } = makeHandlerWithMocks();
+    handler(3);
+    await Promise.resolve();
+    handler(4);
+    handler(5);
+    handler(10);
+    expect(showWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire when autoStartDaemon setting is true", async () => {
+    const { handler, showWarning } = makeHandlerWithMocks({ autoStart: true });
+    handler(3);
+    handler(10);
+    await Promise.resolve();
+    expect(showWarning).not.toHaveBeenCalled();
+  });
+
+  it("autoStart setting is read at notification-time (each invocation)", async () => {
+    // Build the handler with a getAutoStartSetting that returns true on
+    // first call and false on second; if the handler caches the value at
+    // factory time, the second fire wouldn't proceed. If it reads on each
+    // call (correct behavior), the first call suppresses and the
+    // subsequent threshold-met call fires.
+    const secrets = makeSecretsMock();
+    let lookupCount = 0;
+    const showWarning = vi.fn<
+      (msg: string, ...items: string[]) => Promise<string | undefined>
+    >(() => Promise.resolve(undefined));
+    const handler = makeDaemonNotRunningHandler(
+      { secrets: secrets.api },
+      {
+        getAutoStartSetting: (): boolean => {
+          lookupCount += 1;
+          return lookupCount === 1; // true first call, false thereafter
+        },
+        showWarningMessage: showWarning,
+        runStartDaemon: vi.fn(() => Promise.resolve()) as never,
+      },
+    );
+    handler(3);
+    expect(showWarning).not.toHaveBeenCalled();
+    handler(4);
+    await Promise.resolve();
+    expect(showWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking Start Daemon invokes runStartDaemon with the context", async () => {
+    const { handler, showWarning, runStart } = makeHandlerWithMocks();
+    showWarning.mockResolvedValueOnce("Start Daemon");
+    handler(3);
+    // Flush via setImmediate so all queued microtasks (showWarning
+    // resolve → await unblock → runStart call) drain. Matches the
+    // daemon-test microtask-flush pattern from T-0012.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(runStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismissing the notification (undefined return) does not invoke runStartDaemon", async () => {
+    const { handler, showWarning, runStart } = makeHandlerWithMocks();
+    showWarning.mockResolvedValueOnce(undefined);
+    handler(3);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(showWarning).toHaveBeenCalledTimes(1);
+    expect(runStart).not.toHaveBeenCalled();
   });
 });

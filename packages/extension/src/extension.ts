@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
 import { IpcClient, discoverDaemonEndpoint } from "./ipc/client.js";
 import { WorkspaceRegistration } from "./registration.js";
-import { startDaemon } from "./daemon-lifecycle.js";
+import {
+  runStartDaemonCommand,
+  makeDaemonNotRunningHandler,
+} from "./daemon-lifecycle.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
   disconnected: "disconnected",
@@ -12,30 +15,6 @@ const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> 
 
 let ipcClient: IpcClient | null = null;
 let registration: WorkspaceRegistration | null = null;
-
-async function runStartDaemonCommand(
-  context: vscode.ExtensionContext,
-): Promise<void> {
-  const config = vscode.workspace.getConfiguration("claudeBridge");
-  const cliPath = config.get<string>("cliPath", "");
-  const result = await startDaemon(
-    { secrets: context.secrets },
-    { cliPath: cliPath === "" ? undefined : cliPath },
-  );
-  if (result.ok) {
-    void vscode.window.showInformationMessage(
-      `Claude Bridge: daemon starting (pid ${result.pid})...`,
-    );
-    return;
-  }
-  if (result.kind === "already_running") {
-    void vscode.window.showWarningMessage(
-      `Claude Bridge: daemon is already running. Use \`claude-bridge stop\` to stop it first.`,
-    );
-    return;
-  }
-  void vscode.window.showErrorMessage(`Claude Bridge: ${result.error}`);
-}
 
 export function activate(context: vscode.ExtensionContext): void {
   ipcClient = new IpcClient(discoverDaemonEndpoint());
@@ -54,6 +33,14 @@ export function activate(context: vscode.ExtensionContext): void {
       void runStartDaemonCommand(context);
     }
   });
+
+  // T-P2-005: after NOTIFICATION_THRESHOLD (3) reconnect attempts,
+  // surface an actionable [Start Daemon] notification. Factory builds a
+  // fresh handler per activate so the once-per-session guard naturally
+  // resets on reactivation. Setting is read at notification-time so
+  // user changes between activation and trigger are honored. Logic +
+  // tests live in daemon-lifecycle.ts.
+  ipcClient.onReconnectAttempt = makeDaemonNotRunningHandler(context);
 
   registration = new WorkspaceRegistration(
     ipcClient,

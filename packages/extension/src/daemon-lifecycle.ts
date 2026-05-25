@@ -266,3 +266,86 @@ function observeEarlyFailure(
     }, windowMs);
   });
 }
+
+// UI binding for the daemon-start flow. Maps the typed `startDaemon()`
+// result to VS Code notifications. Used by three call sites:
+//   - The "Claude Bridge: Start Daemon" palette command (T-P2-004)
+//   - The autoStartDaemon activation hook (T-P2-004)
+//   - The daemon-not-running notification button (T-P2-005)
+// Extracted from extension.ts at T-P2-005's second-use moment so all
+// three call sites share the same mapping. Behavior is identical to the
+// inline version it replaced.
+export async function runStartDaemonCommand(
+  context: { secrets: SecretsApi },
+  deps: StartDaemonDeps = {},
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration("claudeBridge");
+  const cliPath = config.get<string>("cliPath", "");
+  const result = await startDaemon(
+    context,
+    { cliPath: cliPath === "" ? undefined : cliPath },
+    deps,
+  );
+  if (result.ok) {
+    void vscode.window.showInformationMessage(
+      `Claude Bridge: daemon starting (pid ${String(result.pid)})...`,
+    );
+    return;
+  }
+  if (result.kind === "already_running") {
+    void vscode.window.showWarningMessage(
+      "Claude Bridge: daemon is already running. Use `claude-bridge stop` to stop it first.",
+    );
+    return;
+  }
+  void vscode.window.showErrorMessage(`Claude Bridge: ${result.error}`);
+}
+
+// T-P2-005: factory for the IpcClient.onReconnectAttempt callback. Each
+// activation builds a fresh handler with closure-local guard state, so
+// the once-per-session guard naturally resets on extension reactivation
+// without needing a module-scope reset. All UI dependencies are
+// injectable for unit testing.
+const NOTIFICATION_THRESHOLD = 3;
+
+export interface DaemonNotRunningHandlerDeps {
+  getAutoStartSetting?: () => boolean;
+  // PromiseLike covers both VS Code's Thenable return and Promise-returning
+  // test mocks (T-P2-004 SecretStorage precedent).
+  showWarningMessage?: (
+    message: string,
+    ...items: string[]
+  ) => PromiseLike<string | undefined>;
+  runStartDaemon?: (context: { secrets: SecretsApi }) => Promise<void>;
+}
+
+export function makeDaemonNotRunningHandler(
+  context: { secrets: SecretsApi },
+  deps: DaemonNotRunningHandlerDeps = {},
+): (attempt: number) => void {
+  let fired = false; // closure-local once-per-session guard
+  const getAutoStart =
+    deps.getAutoStartSetting ??
+    ((): boolean =>
+      vscode.workspace
+        .getConfiguration("claudeBridge")
+        .get<boolean>("autoStartDaemon", false));
+  const showWarning =
+    deps.showWarningMessage ?? vscode.window.showWarningMessage;
+  const runStart = deps.runStartDaemon ?? runStartDaemonCommand;
+  return (attempt: number): void => {
+    if (attempt < NOTIFICATION_THRESHOLD) return;
+    if (fired) return;
+    if (getAutoStart()) return;
+    fired = true;
+    void (async () => {
+      const choice = await showWarning(
+        "Claude Bridge daemon is not running. Workspace delegations won't work until it's started.",
+        "Start Daemon",
+      );
+      if (choice === "Start Daemon") {
+        await runStart(context);
+      }
+    })();
+  };
+}

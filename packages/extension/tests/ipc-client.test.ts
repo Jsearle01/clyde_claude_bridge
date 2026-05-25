@@ -153,3 +153,104 @@ describe("IpcClient (T-P2-002)", () => {
     expect(client.getConnectionState()).toBe("version_mismatch");
   });
 });
+
+// T-P2-005: onReconnectAttempt callback. Single-subscriber settable
+// field; fires after each scheduleReconnect() counter increment;
+// callback errors are swallowed.
+
+describe("IpcClient.onReconnectAttempt callback (T-P2-005)", () => {
+  it("fires with the incremented attempt count on each reconnect schedule", async () => {
+    vi.useFakeTimers();
+    try {
+      // Each socketFactory invocation must yield a fresh FakeSocket; the
+      // first one fails its hello to trigger handleDisconnect →
+      // scheduleReconnect.
+      const sockets: FakeSocket[] = [];
+      const factory = (): Socket => {
+        const sock = new FakeSocket();
+        sockets.push(sock);
+        return sock as unknown as Socket;
+      };
+      const client = new IpcClient("/fake", { socketFactory: factory });
+      const attempts: number[] = [];
+      client.onReconnectAttempt = (n: number) => attempts.push(n);
+      const connectPromise = client.connect();
+      // First socket: simulate close before hello completes → handleDisconnect.
+      // Use queueMicrotask so the connect promise's listeners are wired first.
+      queueMicrotask(() => {
+        sockets[0]?.emit("close");
+      });
+      await expect(connectPromise).rejects.toThrow();
+      // First reconnect already scheduled; counter == 1.
+      expect(attempts).toEqual([1]);
+      // Advance to the first scheduled reconnect (1s base).
+      await vi.advanceTimersByTimeAsync(1100);
+      // The doConnect() instantiates a 2nd socket; close it to trigger
+      // the next handleDisconnect → scheduleReconnect.
+      sockets[1]?.emit("close");
+      // Wait for the microtask cycle that registers the next timer.
+      await Promise.resolve();
+      expect(attempts).toEqual([1, 2]);
+      await vi.advanceTimersByTimeAsync(2100);
+      sockets[2]?.emit("close");
+      await Promise.resolve();
+      expect(attempts).toEqual([1, 2, 3]);
+      client.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fire on successful connect (counter does not increment on hello_ok)", async () => {
+    const fakeSocket = new FakeSocket();
+    const client = new IpcClient("/fake", {
+      socketFactory: () => fakeSocket as unknown as Socket,
+    });
+    const attempts: number[] = [];
+    client.onReconnectAttempt = (n: number) => attempts.push(n);
+    const connectPromise = client.connect();
+    fakeSocket.simulateConnect();
+    fakeSocket.simulateData(
+      JSON.stringify({
+        kind: "hello_ok",
+        daemon_version: "1.0",
+        min_supported: "1.0",
+      }),
+    );
+    await connectPromise;
+    expect(attempts).toEqual([]);
+    client.disconnect();
+  });
+
+  it("swallows subscriber errors and keeps reconnect machinery alive", async () => {
+    vi.useFakeTimers();
+    try {
+      const sockets: FakeSocket[] = [];
+      const factory = (): Socket => {
+        const sock = new FakeSocket();
+        sockets.push(sock);
+        return sock as unknown as Socket;
+      };
+      const client = new IpcClient("/fake", { socketFactory: factory });
+      let callCount = 0;
+      client.onReconnectAttempt = (): void => {
+        callCount += 1;
+        throw new Error("subscriber blew up");
+      };
+      const connectPromise = client.connect();
+      queueMicrotask(() => sockets[0]?.emit("close"));
+      await expect(connectPromise).rejects.toThrow();
+      // First callback invocation threw — but reconnect must still
+      // schedule the next attempt.
+      expect(callCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1100);
+      sockets[1]?.emit("close");
+      await Promise.resolve();
+      // Subscriber threw again; counter still incremented.
+      expect(callCount).toBe(2);
+      client.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
