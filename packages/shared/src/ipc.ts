@@ -32,9 +32,32 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
       pid: z.number().int(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("register_workspace"),
+      abs_path: z.string(),
+      name: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("confirm_trust"),
+      abs_path: z.string(),
+      name: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("deregister_workspace"),
+      identifier: z.string(),
+    })
+    .strict(),
 ]);
 export type IpcRequest = z.infer<typeof IpcRequestSchema>;
 export type HelloRequest = Extract<IpcRequest, { kind: "hello" }>;
+export type RegisterWorkspaceRequest = Extract<IpcRequest, { kind: "register_workspace" }>;
+export type ConfirmTrustRequest = Extract<IpcRequest, { kind: "confirm_trust" }>;
+export type DeregisterWorkspaceRequest = Extract<IpcRequest, { kind: "deregister_workspace" }>;
 
 export const IpcResponseSchema = z.discriminatedUnion("kind", [
   z
@@ -65,6 +88,23 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      kind: z.literal("register_workspace_ok"),
+      identifier: z.string(),
+      name: z.string(),
+      abs_path: z.string(),
+      trusted_at: z.string(),
+      was_already_trusted: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("register_workspace_needs_trust"),
+      abs_path: z.string(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("deregister_workspace_ok") }).strict(),
+  z
+    .object({
       kind: z.literal("error"),
       message: z.string(),
       // Optional machine-readable reason. Added at T-P2-002 for the hello-
@@ -73,13 +113,29 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
       //
       // Known reason values (informal vocabulary; promote to z.enum in P3+
       // if stabilized):
-      //   "version_mismatch"  - hello-gate version check failed
-      //   "protocol_error"    - protocol-level violation (e.g., non-hello
-      //                         first message before hello completes)
+      //   "version_mismatch"        - hello-gate version check failed
+      //   "protocol_error"          - protocol-level violation (e.g.,
+      //                               non-hello first message before hello
+      //                               completes; deregister of unknown id)
+      //   "path_already_registered" - register_workspace against a path
+      //                               held by another active extension
+      //                               session (pid embedded in message)
       reason: z.string().optional(),
     })
     .strict(),
 ]);
 export type IpcResponse = z.infer<typeof IpcResponseSchema>;
 export type HelloOkResponse = Extract<IpcResponse, { kind: "hello_ok" }>;
+export type RegisterWorkspaceOkResponse = Extract<
+  IpcResponse,
+  { kind: "register_workspace_ok" }
+>;
+export type RegisterWorkspaceNeedsTrustResponse = Extract<
+  IpcResponse,
+  { kind: "register_workspace_needs_trust" }
+>;
+export type DeregisterWorkspaceOkResponse = Extract<
+  IpcResponse,
+  { kind: "deregister_workspace_ok" }
+>;
 export type ErrorResponse = Extract<IpcResponse, { kind: "error" }>;

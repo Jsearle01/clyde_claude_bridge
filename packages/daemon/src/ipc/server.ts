@@ -10,6 +10,7 @@
 
 import { createServer, connect, type Server, type Socket } from "node:net";
 import { unlink, chmod, stat } from "node:fs/promises";
+import { basename } from "node:path";
 import {
   IpcRequestSchema,
   type IpcRequest,
@@ -23,6 +24,8 @@ import {
   NEWLINE,
 } from "./protocol.js";
 import type { Logger } from "../log/logger.js";
+import type { WorkspacesStore } from "../workspace/store.js";
+import { generateIdentifier } from "../workspace/identifier.js";
 
 const WINDOWS_PIPE_PATH = "\\\\.\\pipe\\claude-bridge";
 
@@ -59,6 +62,7 @@ export const IPC_MIN_SUPPORTED = "1.0";
 export interface ConnectionState {
   role: "cli" | "extension";
   version: string;
+  pid: number;
   hello_at: number;
 }
 
@@ -85,26 +89,42 @@ export class IpcSocketBusyError extends Error {
   }
 }
 
+// Per-socket entry in the active workspace registry. Populated on
+// successful register_workspace; cleared on deregister_workspace or
+// socket close. Keyed in the Map by abs_path; pid is the extension's
+// VS Code process id (sent in the hello message via ConnectionState).
+interface ActiveRegistration {
+  socket: Socket;
+  identifier: string;
+  pid: number;
+}
+
 export class IpcServer {
   private readonly address: string;
   private readonly handlers: IpcHandlers;
   private readonly logger: Logger;
+  private readonly workspacesStore: WorkspacesStore | null;
   private server: Server | null = null;
   private closed = false;
   // Per-connection state populated after a successful hello exchange.
   // Until a socket has an entry here, the dispatch path accepts only
   // `kind: "hello"` and rejects everything else with reason "protocol_error".
   private readonly connectionState = new Map<Socket, ConnectionState>();
+  // Active workspace registry — abs_path → holder. Populated on
+  // register_workspace; cleared on deregister or socket close.
+  private readonly activeRegistry = new Map<string, ActiveRegistration>();
 
   constructor(
     socketPath: string,
     handlers: IpcHandlers,
     logger: Logger,
     addressOverride?: string,
+    workspacesStore?: WorkspacesStore,
   ) {
     this.address = addressOverride ?? addressFor(socketPath);
     this.handlers = handlers;
     this.logger = logger;
+    this.workspacesStore = workspacesStore ?? null;
   }
 
   async start(): Promise<void> {
@@ -225,11 +245,13 @@ export class IpcServer {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn("ipc socket error", { error: msg });
       this.connectionState.delete(socket);
+      this.removeActiveRegistrationsForSocket(socket);
       socket.destroy();
     });
 
     socket.on("close", () => {
       this.connectionState.delete(socket);
+      this.removeActiveRegistrationsForSocket(socket);
     });
 
     socket.on("end", () => {
@@ -296,6 +318,7 @@ export class IpcServer {
       this.connectionState.set(socket, {
         role: request.role,
         version: request.version,
+        pid: request.pid,
         hello_at: Date.now(),
       });
       await this.writeResponse(socket, {
@@ -314,6 +337,24 @@ export class IpcServer {
         message: "hello already exchanged on this connection",
         reason: "protocol_error",
       });
+      return;
+    }
+
+    // Workspace requests are handled inline because they need per-socket
+    // access (active registry binding); short-circuit before the standard
+    // handler switch.
+    try {
+      const handled = await this.maybeHandleWorkspaceRequest(socket, state, request);
+      if (handled) return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.writeResponse(socket, { kind: "error", message }).catch(
+        (writeErr: unknown) => {
+          const wmsg =
+            writeErr instanceof Error ? writeErr.message : String(writeErr);
+          this.logger.warn("ipc write error", { error: wmsg });
+        },
+      );
       return;
     }
 
@@ -350,11 +391,177 @@ export class IpcServer {
         const { new_url } = await this.handlers.tunnelRestart();
         return { kind: "tunnel_restart_ok", new_url };
       }
-      case "hello": {
-        // Hello is handled in the gate above; never reaches the switch.
-        throw new Error("unreachable: hello in handleRequest");
+      case "hello":
+      case "register_workspace":
+      case "confirm_trust":
+      case "deregister_workspace": {
+        // These are handled inline in dispatchLine (workspace cases need
+        // per-socket access; hello is handled in the gate above). They
+        // never reach this switch.
+        throw new Error(`unreachable: ${request.kind} in handleRequest`);
       }
     }
+  }
+
+  private removeActiveRegistrationsForSocket(socket: Socket): void {
+    const stalePaths: string[] = [];
+    for (const [path, entry] of this.activeRegistry) {
+      if (entry.socket === socket) stalePaths.push(path);
+    }
+    for (const path of stalePaths) {
+      this.activeRegistry.delete(path);
+    }
+  }
+
+  private findActiveByIdentifier(identifier: string): {
+    abs_path: string;
+    entry: ActiveRegistration;
+  } | null {
+    for (const [abs_path, entry] of this.activeRegistry) {
+      if (entry.identifier === identifier) return { abs_path, entry };
+    }
+    return null;
+  }
+
+  // Returns true when the response was written and the caller should
+  // short-circuit (workspace request handled). Returns false when the
+  // request is not a workspace request and normal dispatch should proceed.
+  private async maybeHandleWorkspaceRequest(
+    socket: Socket,
+    state: ConnectionState,
+    request: IpcRequest,
+  ): Promise<boolean> {
+    if (
+      request.kind !== "register_workspace" &&
+      request.kind !== "confirm_trust" &&
+      request.kind !== "deregister_workspace"
+    ) {
+      return false;
+    }
+
+    if (this.workspacesStore === null) {
+      await this.writeResponse(socket, {
+        kind: "error",
+        message: "workspaces store not configured on this daemon",
+        reason: "protocol_error",
+      });
+      return true;
+    }
+    const store = this.workspacesStore;
+
+    if (request.kind === "register_workspace") {
+      const existing = this.activeRegistry.get(request.abs_path);
+      if (existing !== undefined && existing.socket !== socket) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: `Workspace path already registered by another VS Code window (pid ${existing.pid})`,
+          reason: "path_already_registered",
+        });
+        return true;
+      }
+      const trusted = store.findByPath(request.abs_path);
+      if (trusted !== null) {
+        this.activeRegistry.set(request.abs_path, {
+          socket,
+          identifier: trusted.identifier,
+          pid: this.pidFromState(state),
+        });
+        await this.writeResponse(socket, {
+          kind: "register_workspace_ok",
+          identifier: trusted.identifier,
+          name: trusted.name,
+          abs_path: trusted.abs_path,
+          trusted_at: trusted.trusted_at,
+          was_already_trusted: true,
+        });
+        return true;
+      }
+      await this.writeResponse(socket, {
+        kind: "register_workspace_needs_trust",
+        abs_path: request.abs_path,
+      });
+      return true;
+    }
+
+    if (request.kind === "confirm_trust") {
+      // Re-check active registry (another window may have raced in
+      // between needs_trust and confirm_trust on this socket).
+      const existing = this.activeRegistry.get(request.abs_path);
+      if (existing !== undefined && existing.socket !== socket) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: `Workspace path already registered by another VS Code window (pid ${existing.pid})`,
+          reason: "path_already_registered",
+        });
+        return true;
+      }
+      // Re-check the store (another connection may have written trust).
+      const alreadyTrusted = store.findByPath(request.abs_path);
+      if (alreadyTrusted !== null) {
+        this.activeRegistry.set(request.abs_path, {
+          socket,
+          identifier: alreadyTrusted.identifier,
+          pid: this.pidFromState(state),
+        });
+        await this.writeResponse(socket, {
+          kind: "register_workspace_ok",
+          identifier: alreadyTrusted.identifier,
+          name: alreadyTrusted.name,
+          abs_path: alreadyTrusted.abs_path,
+          trusted_at: alreadyTrusted.trusted_at,
+          was_already_trusted: true,
+        });
+        return true;
+      }
+      // Generate identifier from the on-disk folder name; the request's
+      // `name` is the user-facing label stored in the entry.
+      const folderName = basename(request.abs_path) || "workspace";
+      const identifier = generateIdentifier(folderName, (candidate) => {
+        return store.findByIdentifier(candidate) !== null;
+      });
+      const entry = await store.addTrustedEntry({
+        abs_path: request.abs_path,
+        identifier,
+        name: request.name,
+      });
+      this.activeRegistry.set(request.abs_path, {
+        socket,
+        identifier: entry.identifier,
+        pid: this.pidFromState(state),
+      });
+      await this.writeResponse(socket, {
+        kind: "register_workspace_ok",
+        identifier: entry.identifier,
+        name: entry.name,
+        abs_path: entry.abs_path,
+        trusted_at: entry.trusted_at,
+        was_already_trusted: false,
+      });
+      return true;
+    }
+
+    // deregister_workspace
+    const found = this.findActiveByIdentifier(request.identifier);
+    if (found === null || found.entry.socket !== socket) {
+      await this.writeResponse(socket, {
+        kind: "error",
+        message: `deregister: identifier ${request.identifier} not held by this connection`,
+        reason: "protocol_error",
+      });
+      return true;
+    }
+    this.activeRegistry.delete(found.abs_path);
+    await this.writeResponse(socket, { kind: "deregister_workspace_ok" });
+    return true;
+  }
+
+  // ConnectionState carries pid from the hello message (T-P2-002 ext +
+  // T-P2-003 widening). For extension connections this is the VS Code
+  // process pid; for CLI connections it's whichever shell sent the hello.
+  // Surfaced in path_already_registered error messages so users can find
+  // the holding window in Task Manager.
+  private pidFromState(state: ConnectionState): number {
+    return state.pid;
   }
 
   private writeResponse(socket: Socket, response: IpcResponse): Promise<void> {

@@ -24,3 +24,32 @@ export const WorkspaceConfigSchema = z
   })
   .strict();
 export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
+
+// ----------------------------------------------------------------------
+// P2 workspace store. Backs the daemon's `workspaces.json` file at
+// `~/.claude-bridge/workspaces.json` (created at T-P2-003). Holds the
+// persistent trust + identifier records keyed by abs_path. P2 only writes
+// `trust_state: "trusted"` — denial doesn't write; revocation is P3+ which
+// would add `"revoked"` to the enum.
+
+export const WorkspaceTrustStateSchema = z.enum(["trusted"]);
+export type WorkspaceTrustState = z.infer<typeof WorkspaceTrustStateSchema>;
+
+export const WorkspaceEntrySchema = z
+  .object({
+    abs_path: z.string().min(1),
+    identifier: z.string().min(1),
+    name: z.string().min(1),
+    trust_state: WorkspaceTrustStateSchema,
+    trusted_at: z.string(),
+  })
+  .strict();
+export type WorkspaceEntry = z.infer<typeof WorkspaceEntrySchema>;
+
+export const WorkspaceStoreSchema = z
+  .object({
+    version: z.literal("1"),
+    entries: z.array(WorkspaceEntrySchema),
+  })
+  .strict();
+export type WorkspaceStore = z.infer<typeof WorkspaceStoreSchema>;

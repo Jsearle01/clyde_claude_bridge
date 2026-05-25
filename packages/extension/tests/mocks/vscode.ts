@@ -19,6 +19,14 @@ export const window = {
   showErrorMessage: vi.fn<(message: string) => Promise<undefined>>(
     () => Promise.resolve(undefined),
   ),
+  // Trust prompt uses showWarningMessage with modal:true. Tests override
+  // the return value to simulate "Trust" / "Don't trust" / dismissal.
+  showWarningMessage: vi.fn<
+    (
+      message: string,
+      ...items: (string | { modal?: boolean })[]
+    ) => Promise<string | undefined>
+  >(() => Promise.resolve(undefined)),
 };
 
 export const commands = {
@@ -30,8 +38,20 @@ export const commands = {
   ),
 };
 
+export interface WorkspaceFolder {
+  uri: { fsPath: string };
+  name: string;
+}
+
 export const workspace: {
-  workspaceFolders: { uri: { fsPath: string } }[] | undefined;
+  workspaceFolders: WorkspaceFolder[] | undefined;
 } = {
   workspaceFolders: undefined,
+};
+
+// Test helper for constructing WorkspaceFolder fixtures.
+export const Uri = {
+  file(fsPath: string): { fsPath: string } {
+    return { fsPath };
+  },
 };

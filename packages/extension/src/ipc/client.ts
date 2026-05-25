@@ -55,6 +55,11 @@ export function discoverDaemonEndpoint(): string {
   return join(homedir(), ".claude-bridge", "daemon.sock");
 }
 
+interface PendingRequest {
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+}
+
 export class IpcClient {
   private state: ConnectionStateKind = "disconnected";
   private socket: Socket | null = null;
@@ -62,6 +67,11 @@ export class IpcClient {
   private reconnectAttempt = 0;
   private explicitlyClosed = false;
   private readonly socketFactory: (endpoint: string) => Socket;
+  // Single-flight queue for post-hello requests. T-P2-003 needs at most
+  // one in-flight request at a time (register_workspace then maybe
+  // confirm_trust); P3+ may grow this to multiplexed concurrent requests
+  // if real demand surfaces.
+  private pending: PendingRequest | null = null;
 
   constructor(
     private readonly endpoint: string,
@@ -72,6 +82,29 @@ export class IpcClient {
 
   getConnectionState(): ConnectionStateKind {
     return this.state;
+  }
+
+  // Send a request on the established connection and await the next
+  // response line. Single-flight: rejects if another request is already
+  // pending. P2 callers (registration flow) are strictly sequential so
+  // the constraint is non-blocking; promotion to multiplexed concurrent
+  // requests is a P3+ candidate.
+  request<R>(req: unknown): Promise<R> {
+    return new Promise<R>((resolve, reject) => {
+      if (this.state !== "connected" || this.socket === null) {
+        reject(new Error(`ipc-client: not connected (state=${this.state})`));
+        return;
+      }
+      if (this.pending !== null) {
+        reject(new Error("ipc-client: another request is already in flight"));
+        return;
+      }
+      this.pending = {
+        resolve: (value: unknown) => resolve(value as R),
+        reject,
+      };
+      this.socket.write(JSON.stringify(req) + "\n");
+    });
   }
 
   // Connect to the daemon and complete the hello handshake.
@@ -97,6 +130,7 @@ export class IpcClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.rejectPending(new Error("ipc-client: disconnect requested"));
     if (this.socket !== null) {
       this.socket.removeAllListeners();
       this.socket.destroy();
@@ -134,56 +168,77 @@ export class IpcClient {
 
       sock.on("data", (chunk: string) => {
         buffer += chunk;
-        const idx = buffer.indexOf("\n");
-        if (idx === -1) return;
-        const line = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 1);
+        let idx = buffer.indexOf("\n");
+        while (idx !== -1) {
+          const line = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 1);
 
-        let parsed: { kind?: string; reason?: string; message?: string };
-        try {
-          parsed = JSON.parse(line) as typeof parsed;
-        } catch {
-          settle(() => reject(new Error("ipc-client: malformed JSON from daemon")));
-          sock.destroy();
-          return;
-        }
-
-        if (parsed.kind === "hello_ok") {
-          this.state = "connected";
-          this.reconnectAttempt = 0;
-          settle(() => resolve());
-          return;
-        }
-        if (parsed.kind === "error") {
-          if (parsed.reason === "version_mismatch") {
-            this.state = "version_mismatch";
-            const message = parsed.message ?? "version mismatch";
-            void vscode.window.showErrorMessage(
-              `Claude Bridge: ${message}. Update one of them to continue.`,
-            );
-            settle(() => reject(new Error(message)));
+          let parsed: { kind?: string; reason?: string; message?: string };
+          try {
+            parsed = JSON.parse(line) as typeof parsed;
+          } catch {
+            const malformed = new Error("ipc-client: malformed JSON from daemon");
+            settle(() => reject(malformed));
+            this.rejectPending(malformed);
             sock.destroy();
             return;
           }
-          // Other error during hello (e.g., protocol_error). Reject; let
-          // the reconnect loop handle transient cases.
-          settle(() =>
-            reject(new Error(parsed.message ?? "ipc hello rejected")),
-          );
-          sock.destroy();
-          return;
+
+          // Hello phase: any pre-hello_ok response is one of hello_ok /
+          // error+version_mismatch / error+other. After hello_ok, state
+          // transitions to "connected" and subsequent lines feed the
+          // pending-request queue.
+          if (this.state !== "connected") {
+            if (parsed.kind === "hello_ok") {
+              this.state = "connected";
+              this.reconnectAttempt = 0;
+              settle(() => resolve());
+            } else if (parsed.kind === "error" && parsed.reason === "version_mismatch") {
+              this.state = "version_mismatch";
+              const message = parsed.message ?? "version mismatch";
+              void vscode.window.showErrorMessage(
+                `Claude Bridge: ${message}. Update one of them to continue.`,
+              );
+              settle(() => reject(new Error(message)));
+              sock.destroy();
+              return;
+            } else if (parsed.kind === "error") {
+              settle(() =>
+                reject(new Error(parsed.message ?? "ipc hello rejected")),
+              );
+              sock.destroy();
+              return;
+            } else {
+              settle(() =>
+                reject(
+                  new Error(`ipc-client: unexpected ${parsed.kind ?? "?"} during hello`),
+                ),
+              );
+              sock.destroy();
+              return;
+            }
+          } else {
+            // Post-hello: dispatch to the single-flight pending-request
+            // handler. Lines arriving with no pending request are a
+            // protocol invariant violation; log and drop rather than
+            // crash (P2 doesn't have a server-push channel).
+            if (this.pending !== null) {
+              const p = this.pending;
+              this.pending = null;
+              p.resolve(parsed);
+            }
+            // else: drop silently (no current caller; future server-push
+            // could land here).
+          }
+          idx = buffer.indexOf("\n");
         }
-        // Unexpected message during hello phase.
-        settle(() =>
-          reject(new Error(`ipc-client: unexpected ${parsed.kind ?? "?"} during hello`)),
-        );
-        sock.destroy();
       });
 
       sock.on("error", (err: Error) => {
         if (!settled) {
           settle(() => reject(err));
         }
+        this.rejectPending(err);
         this.handleDisconnect();
       });
 
@@ -191,9 +246,18 @@ export class IpcClient {
         if (!settled) {
           settle(() => reject(new Error("ipc-client: socket closed during hello")));
         }
+        this.rejectPending(new Error("ipc-client: socket closed"));
         this.handleDisconnect();
       });
     });
+  }
+
+  private rejectPending(err: Error): void {
+    if (this.pending !== null) {
+      const p = this.pending;
+      this.pending = null;
+      p.reject(err);
+    }
   }
 
   // On unexpected disconnect (after a successful hello), schedule a

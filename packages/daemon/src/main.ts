@@ -30,6 +30,8 @@ import { SdkJobRunner } from "./jobs/sdk-runner.js";
 import { McpServer } from "./mcp/server.js";
 import { TunnelManager } from "./tunnel/manager.js";
 import { IpcServer, type IpcHandlers } from "./ipc/server.js";
+import { WorkspacesStore } from "./workspace/store.js";
+import { getWorkspacesStorePath } from "./config/paths.js";
 import { makeInitialState } from "./state.js";
 import { StubWorkspaceRegistry } from "./workspace/registry.js";
 import { validateWorkspaceConfig } from "./workspace/config.js";
@@ -379,7 +381,20 @@ async function main(): Promise<void> {
     },
   };
 
-  const ipcServer = new IpcServer(config.daemon.ipc_socket, handlers, logger);
+  // Load the workspaces.json store before the IPC server starts accepting
+  // connections so the first register_workspace request hits a populated
+  // store rather than an uninitialized one. Schema-version mismatch on the
+  // store file throws and the daemon refuses to start (T-P2-003).
+  const workspacesStore = new WorkspacesStore(getWorkspacesStorePath());
+  await workspacesStore.load();
+
+  const ipcServer = new IpcServer(
+    config.daemon.ipc_socket,
+    handlers,
+    logger,
+    undefined,
+    workspacesStore,
+  );
 
   components = {
     ipcServer,

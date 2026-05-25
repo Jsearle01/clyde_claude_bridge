@@ -421,3 +421,208 @@ describe("checkVersion (T-P2-002)", () => {
     expect(checkVersion("0.9", "1.0", "0.9")).not.toBeNull();
   });
 });
+
+// T-P2-003: workspace registration handlers via IPC.
+
+describe("IpcServer workspace registration (T-P2-003)", () => {
+  let tempDir: string;
+  let socketPath: string;
+  let storePath: string;
+  let server: IpcServer | null;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "claude-bridge-wsreg-"));
+    socketPath = join(tempDir, "daemon.sock");
+    storePath = join(tempDir, "workspaces.json");
+    server = null;
+  });
+
+  afterEach(async () => {
+    if (server !== null) await server.stop().catch(() => undefined);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function startServerWithStore(): Promise<{
+    address: string;
+    store: import("../../src/workspace/store.js").WorkspacesStore;
+  }> {
+    const address =
+      process.platform === "win32" ? uniquePipeName() : socketPath;
+    const override = process.platform === "win32" ? address : undefined;
+    const { WorkspacesStore } = await import("../../src/workspace/store.js");
+    const store = new WorkspacesStore(storePath);
+    await store.load();
+    server = new IpcServer(
+      socketPath,
+      makeHandlers(),
+      silentLogger,
+      override,
+      store,
+    );
+    await server.start();
+    return { address, store };
+  }
+
+  it("register_workspace returns needs_trust for unknown path; file unwritten", async () => {
+    const { address } = await startServerWithStore();
+    const raw = await rpc(
+      address,
+      JSON.stringify({
+        kind: "register_workspace",
+        abs_path: "/some/new/path",
+        name: "New Path",
+      }),
+    );
+    const response = JSON.parse(raw) as IpcResponse;
+    expect(response.kind).toBe("register_workspace_needs_trust");
+    // File should not exist yet — needs_trust doesn't write.
+    await expect(
+      (async () => {
+        const { stat: statFn } = await import("node:fs/promises");
+        await statFn(storePath);
+      })(),
+    ).rejects.toThrow();
+  });
+
+  it("confirm_trust after needs_trust writes file with trusted entry", async () => {
+    const { address, store } = await startServerWithStore();
+    const responses = await rpcRaw(
+      address,
+      [
+        HELLO_LINE,
+        JSON.stringify({
+          kind: "register_workspace",
+          abs_path: "/new/path/here",
+          name: "New Here",
+        }),
+        JSON.stringify({
+          kind: "confirm_trust",
+          abs_path: "/new/path/here",
+          name: "New Here",
+        }),
+      ],
+      3,
+    );
+    // [hello_ok, needs_trust, register_workspace_ok]
+    const confirmRaw = responses[2];
+    if (confirmRaw === undefined) throw new Error("expected three responses");
+    const response = JSON.parse(confirmRaw) as IpcResponse;
+    expect(response.kind).toBe("register_workspace_ok");
+    if (response.kind === "register_workspace_ok") {
+      expect(response.identifier).toMatch(/^[a-z0-9-]+-[0-9a-f]{6}$/);
+      expect(response.was_already_trusted).toBe(false);
+    }
+    // Reload store from disk to confirm persistence.
+    const { WorkspacesStore } = await import("../../src/workspace/store.js");
+    const fresh = new WorkspacesStore(storePath);
+    await fresh.load();
+    expect(fresh.findByPath("/new/path/here")?.trust_state).toBe("trusted");
+    void store;
+  });
+
+  it("register_workspace against an existing trusted entry returns ok with was_already_trusted=true", async () => {
+    const { address, store } = await startServerWithStore();
+    await store.addTrustedEntry({
+      abs_path: "/pre/trusted",
+      identifier: "pre-aaaaaa",
+      name: "Pre Trusted",
+    });
+    const raw = await rpc(
+      address,
+      JSON.stringify({
+        kind: "register_workspace",
+        abs_path: "/pre/trusted",
+        name: "Pre Trusted",
+      }),
+    );
+    const response = JSON.parse(raw) as IpcResponse;
+    expect(response.kind).toBe("register_workspace_ok");
+    if (response.kind === "register_workspace_ok") {
+      expect(response.identifier).toBe("pre-aaaaaa");
+      expect(response.was_already_trusted).toBe(true);
+    }
+  });
+
+  it("second register_workspace from a different connection returns path_already_registered", async () => {
+    const { address, store } = await startServerWithStore();
+    await store.addTrustedEntry({
+      abs_path: "/dup/path",
+      identifier: "dup-aaaaaa",
+      name: "Dup",
+    });
+    // First connection registers.
+    await rpc(
+      address,
+      JSON.stringify({
+        kind: "register_workspace",
+        abs_path: "/dup/path",
+        name: "Dup",
+      }),
+    );
+    // Second connection (separate hello prelude) attempts the same path.
+    const raw = await rpc(
+      address,
+      JSON.stringify({
+        kind: "register_workspace",
+        abs_path: "/dup/path",
+        name: "Dup",
+      }),
+    );
+    const response = JSON.parse(raw) as IpcResponse;
+    expect(response.kind).toBe("error");
+    if (response.kind === "error") {
+      expect(response.reason).toBe("path_already_registered");
+      expect(response.message).toMatch(/pid \d+/);
+    }
+  });
+
+  it("deregister_workspace removes from active registry but preserves on-disk entry", async () => {
+    const { address, store } = await startServerWithStore();
+    await store.addTrustedEntry({
+      abs_path: "/dr/path",
+      identifier: "dr-aaaaaa",
+      name: "DR",
+    });
+    // Register + deregister on the same connection.
+    const responses = await rpcRaw(
+      address,
+      [
+        HELLO_LINE,
+        JSON.stringify({
+          kind: "register_workspace",
+          abs_path: "/dr/path",
+          name: "DR",
+        }),
+        JSON.stringify({
+          kind: "deregister_workspace",
+          identifier: "dr-aaaaaa",
+        }),
+      ],
+      3,
+    );
+    // [hello_ok, register_workspace_ok, deregister_workspace_ok]
+    const derR = responses[2];
+    if (derR === undefined) throw new Error("expected three responses");
+    const response = JSON.parse(derR) as IpcResponse;
+    expect(response.kind).toBe("deregister_workspace_ok");
+    // On-disk entry still present.
+    expect(store.findByPath("/dr/path")?.trust_state).toBe("trusted");
+    // A fresh connection should be able to register again (active registry
+    // cleared on the prior deregister).
+    const raw = await rpc(
+      address,
+      JSON.stringify({
+        kind: "register_workspace",
+        abs_path: "/dr/path",
+        name: "DR",
+      }),
+    );
+    const reregResponse = JSON.parse(raw) as IpcResponse;
+    expect(reregResponse.kind).toBe("register_workspace_ok");
+    if (reregResponse.kind === "register_workspace_ok") {
+      // Same identifier reused from on-disk store.
+      expect(reregResponse.identifier).toBe("dr-aaaaaa");
+      expect(reregResponse.was_already_trusted).toBe(true);
+    }
+  });
+});

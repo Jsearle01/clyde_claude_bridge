@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { IpcClient, discoverDaemonEndpoint } from "./ipc/client.js";
+import { WorkspaceRegistration } from "./registration.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
   disconnected: "disconnected",
@@ -9,6 +10,7 @@ const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> 
 };
 
 let ipcClient: IpcClient | null = null;
+let registration: WorkspaceRegistration | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
   ipcClient = new IpcClient(discoverDaemonEndpoint());
@@ -18,22 +20,46 @@ export function activate(context: vscode.ExtensionContext): void {
   // T-P2-005's territory.
   ipcClient.connect().catch(() => undefined);
 
+  registration = new WorkspaceRegistration(
+    ipcClient,
+    vscode.workspace.workspaceFolders?.[0],
+  );
+  // Fire-and-forget. The registration flow's internal wait-for-connect
+  // covers the typical activation-vs-connection race; failure modes
+  // surface via the status command's getState() / getIdentifier().
+  void registration.register();
+
   const showStatus = vscode.commands.registerCommand(
     "claudeBridge.showStatus",
     () => {
       const folder = vscode.workspace.workspaceFolders?.[0];
       const workspacePath = folder ? folder.uri.fsPath : "(no workspace open)";
-      const state = ipcClient?.getConnectionState() ?? "disconnected";
-      const label = STATE_LABELS[state];
+      const daemonState = ipcClient?.getConnectionState() ?? "disconnected";
+      const daemonLabel = STATE_LABELS[daemonState];
+      const regState = registration?.getState() ?? "unregistered";
+      const regId = registration?.getIdentifier() ?? "no identifier";
+      let workspaceLabel: string;
+      if (regState === "duplicate") {
+        const pid = registration?.getExistingPid() ?? 0;
+        workspaceLabel = `duplicate (another VS Code window has this folder; pid ${pid})`;
+      } else if (regState === "trust_denied") {
+        workspaceLabel =
+          "trust denied (re-run command to retry, or close and reopen window)";
+      } else {
+        workspaceLabel = `${regState} (${regId})`;
+      }
       const message =
-        `Claude Bridge extension active. Workspace: ${workspacePath}. ` +
-        `Daemon: ${label}.`;
+        `Claude Bridge extension active. Workspace ${workspacePath} — ${workspaceLabel}. ` +
+        `Daemon: ${daemonLabel}.`;
       void vscode.window.showInformationMessage(message);
     },
   );
   context.subscriptions.push(showStatus);
   context.subscriptions.push({
     dispose: () => {
+      // Best-effort deregister; don't block dispose on the response.
+      void registration?.deregister();
+      registration = null;
       ipcClient?.disconnect();
       ipcClient = null;
     },

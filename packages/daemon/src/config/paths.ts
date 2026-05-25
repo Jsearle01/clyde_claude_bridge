@@ -33,6 +33,10 @@ export function getPidPath(): string {
   return join(getConfigDir(), "daemon.pid");
 }
 
+export function getWorkspacesStorePath(): string {
+  return join(getConfigDir(), "workspaces.json");
+}
+
 export function expandTilde(p: string): string {
   if (p === "~") return getHome();
   if (p.startsWith("~/")) {
