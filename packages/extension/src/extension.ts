@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { IpcClient, discoverDaemonEndpoint } from "./ipc/client.js";
 import { WorkspaceRegistration } from "./registration.js";
+import { startDaemon } from "./daemon-lifecycle.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
   disconnected: "disconnected",
@@ -12,13 +13,47 @@ const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> 
 let ipcClient: IpcClient | null = null;
 let registration: WorkspaceRegistration | null = null;
 
+async function runStartDaemonCommand(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration("claudeBridge");
+  const cliPath = config.get<string>("cliPath", "");
+  const result = await startDaemon(
+    { secrets: context.secrets },
+    { cliPath: cliPath === "" ? undefined : cliPath },
+  );
+  if (result.ok) {
+    void vscode.window.showInformationMessage(
+      `Claude Bridge: daemon starting (pid ${result.pid})...`,
+    );
+    return;
+  }
+  if (result.kind === "already_running") {
+    void vscode.window.showWarningMessage(
+      `Claude Bridge: daemon is already running. Use \`claude-bridge stop\` to stop it first.`,
+    );
+    return;
+  }
+  void vscode.window.showErrorMessage(`Claude Bridge: ${result.error}`);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   ipcClient = new IpcClient(discoverDaemonEndpoint());
   // Don't block activation on connect — if the daemon isn't running,
   // IpcClient surfaces via its reconnect loop and the status command's
   // state read. Daemon-not-running UX with an actionable notification is
   // T-P2-005's territory.
-  ipcClient.connect().catch(() => undefined);
+  ipcClient.connect().catch(() => {
+    // autoStartDaemon: when enabled and initial connect fails, fire
+    // startDaemon once. The CLI handles "already running" gracefully so
+    // races with manually-started daemons surface as a warning, not error.
+    const autoStart = vscode.workspace
+      .getConfiguration("claudeBridge")
+      .get<boolean>("autoStartDaemon", false);
+    if (autoStart) {
+      void runStartDaemonCommand(context);
+    }
+  });
 
   registration = new WorkspaceRegistration(
     ipcClient,
@@ -28,6 +63,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // covers the typical activation-vs-connection race; failure modes
   // surface via the status command's getState() / getIdentifier().
   void registration.register();
+
+  const startDaemonCmd = vscode.commands.registerCommand(
+    "claudeBridge.startDaemon",
+    () => runStartDaemonCommand(context),
+  );
+  context.subscriptions.push(startDaemonCmd);
 
   const showStatus = vscode.commands.registerCommand(
     "claudeBridge.showStatus",

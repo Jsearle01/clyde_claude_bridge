@@ -17,8 +17,27 @@
       {
         "command": "claudeBridge.showStatus",
         "title": "Claude Bridge: Show Status"
+      },
+      {
+        "command": "claudeBridge.startDaemon",
+        "title": "Claude Bridge: Start Daemon"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Claude Bridge",
+      "properties": {
+        "claudeBridge.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the claude-bridge CLI binary. Leave empty to auto-detect on PATH."
+        },
+        "claudeBridge.autoStartDaemon": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically start the daemon when the extension activates and no daemon is running."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "tsc -b",

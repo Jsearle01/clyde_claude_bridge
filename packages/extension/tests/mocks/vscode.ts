@@ -8,8 +8,15 @@ export interface Disposable {
   dispose: () => unknown;
 }
 
+export interface SecretsApi {
+  get: (key: string) => PromiseLike<string | undefined>;
+  store: (key: string, value: string) => PromiseLike<void>;
+  delete: (key: string) => PromiseLike<void>;
+}
+
 export interface ExtensionContext {
   subscriptions: Disposable[];
+  secrets: SecretsApi;
 }
 
 export const window = {
@@ -26,6 +33,15 @@ export const window = {
       message: string,
       ...items: (string | { modal?: boolean })[]
     ) => Promise<string | undefined>
+  >(() => Promise.resolve(undefined)),
+  // API-key prompt uses showInputBox with {password: true}. Tests override
+  // return value to simulate submit / empty / dismiss.
+  showInputBox: vi.fn<
+    (opts?: {
+      password?: boolean;
+      ignoreFocusOut?: boolean;
+      prompt?: string;
+    }) => Promise<string | undefined>
   >(() => Promise.resolve(undefined)),
 };
 
@@ -55,3 +71,28 @@ export const Uri = {
     return { fsPath };
   },
 };
+
+export interface WorkspaceConfiguration {
+  get: <T>(key: string, defaultValue?: T) => T;
+}
+
+// Test helper for the getConfiguration() return value. Default impl
+// returns the supplied default; tests override per case.
+export function makeWorkspaceConfig(
+  values: Record<string, unknown> = {},
+): WorkspaceConfiguration {
+  return {
+    get: <T>(key: string, defaultValue?: T): T => {
+      const v = values[key];
+      return v === undefined ? (defaultValue as T) : (v as T);
+    },
+  };
+}
+
+// Default getConfiguration mock returns an empty config (all keys return
+// their defaults). Tests override via vi.mocked(workspace.getConfiguration)
+// .mockReturnValue(makeWorkspaceConfig({...})).
+const defaultConfig = makeWorkspaceConfig();
+(workspace as unknown as {
+  getConfiguration: ReturnType<typeof vi.fn>;
+}).getConfiguration = vi.fn(() => defaultConfig);
