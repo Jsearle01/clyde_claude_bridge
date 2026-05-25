@@ -20,12 +20,23 @@ import * as vscode from "vscode";
 
 const SECRET_KEY = "claudeBridge.anthropicApiKey";
 const SPAWN_OBSERVATION_WINDOW_MS = 5_000;
-const DEFAULT_BIN_NAME = "claude-bridge";
+
+// Windows requires explicit shim extensions because Node's child_process
+// doesn't reliably resolve bare names via PATHEXT in the VS Code extension
+// host (regardless of why — see v0.6 candidate C-20). Iterating candidates
+// is explicit and avoids the shell:true escape hazard. The bare name is
+// kept at the end of the Windows list as a defensive fallback in case a
+// future host resolves it natively. T-P2-004.5 fix.
+export const CLI_CANDIDATES: readonly string[] =
+  process.platform === "win32"
+    ? ["claude-bridge.cmd", "claude-bridge.exe", "claude-bridge"]
+    : ["claude-bridge"];
 
 export class CliBinaryNotFoundError extends Error {
-  constructor(public readonly searchedPaths: string[]) {
+  constructor(public readonly searchedNames: readonly string[]) {
     super(
-      `claude-bridge CLI binary not found. Checked: ${searchedPaths.join(", ")}`,
+      `claude-bridge CLI binary not found on PATH. Tried: ${searchedNames.join(", ")}. ` +
+        `Set the "claudeBridge.cliPath" setting to override the auto-detection.`,
     );
     this.name = "CliBinaryNotFoundError";
   }
@@ -45,12 +56,18 @@ export class DaemonSpawnFailedError extends Error {
 
 export type LocateCliDeps = {
   spawnSync?: typeof nodeSpawnSync;
+  // Test injection point: defaults to CLI_CANDIDATES (Windows-aware list).
+  // Tests pass explicit platform-shaped lists rather than mutating
+  // process.platform — matches cross-platform-test-inputs pattern.
+  candidates?: readonly string[];
 };
 
-// Returns the binary path to invoke. If `configOverride` is non-empty, it
+// Returns the binary name to invoke. If `configOverride` is non-empty, it
 // wins (no liveness check — spawn will surface a clear error if wrong).
-// Otherwise probes PATH by attempting `claude-bridge --version`. On both-
-// missing, throws CliBinaryNotFoundError listing what was probed.
+// Otherwise iterates platform candidates (CLI_CANDIDATES by default) and
+// returns the first name where `spawnSync(name, ["--version"])` returns
+// status 0. On all-fail, throws CliBinaryNotFoundError with the full list
+// of names that were tried.
 export function locateCliBinary(
   configOverride: string | undefined,
   deps: LocateCliDeps = {},
@@ -59,17 +76,19 @@ export function locateCliBinary(
     return configOverride;
   }
   const spawnSync = deps.spawnSync ?? nodeSpawnSync;
-  const probe = spawnSync(DEFAULT_BIN_NAME, ["--version"], {
-    stdio: "ignore",
-    shell: false,
-  });
-  if (probe.error === undefined && probe.status === 0) {
-    return DEFAULT_BIN_NAME;
+  const candidates = deps.candidates ?? CLI_CANDIDATES;
+  const tried: string[] = [];
+  for (const name of candidates) {
+    tried.push(name);
+    const probe = spawnSync(name, ["--version"], {
+      stdio: "ignore",
+      shell: false,
+    });
+    if (probe.error === undefined && probe.status === 0) {
+      return name;
+    }
   }
-  throw new CliBinaryNotFoundError([
-    "PATH (claude-bridge --version)",
-    "claudeBridge.cliPath setting (empty)",
-  ]);
+  throw new CliBinaryNotFoundError(tried);
 }
 
 // PromiseLike rather than Promise so vscode.SecretStorage (which returns

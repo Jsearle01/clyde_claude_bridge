@@ -84,7 +84,16 @@ export function makeWorkspaceConfig(
   return {
     get: <T>(key: string, defaultValue?: T): T => {
       const v = values[key];
-      return v === undefined ? (defaultValue as T) : (v as T);
+      if (v === undefined) {
+        // The cast narrows T | undefined to T at the return boundary;
+        // recommendedTypeChecked flags it as unnecessary because under
+        // its analysis `defaultValue: T | undefined` may already satisfy
+        // the return type when T = unknown. Inline-disable matches the
+        // sdk-runner.ts precedent for type-aware-rules-vs-generics edges.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+        return defaultValue as T;
+      }
+      return v as T;
     },
   };
 }

@@ -55,41 +55,112 @@ class FakeChild extends EventEmitter {
   }
 }
 
-describe("locateCliBinary (T-P2-004)", () => {
+describe("locateCliBinary (T-P2-004 + T-P2-004.5)", () => {
   it("returns the override path verbatim when configOverride is non-empty", () => {
     expect(locateCliBinary("/custom/claude-bridge")).toBe("/custom/claude-bridge");
   });
 
-  it("auto-detects on PATH when override is empty and probe succeeds", () => {
+  it("Unix candidate list: bare claude-bridge reachable returns 'claude-bridge'", () => {
     const spawnSync = vi.fn(() => ({ status: 0, error: undefined })) as never;
-    expect(locateCliBinary(undefined, { spawnSync })).toBe("claude-bridge");
-    expect(locateCliBinary("", { spawnSync })).toBe("claude-bridge");
+    expect(
+      locateCliBinary(undefined, { spawnSync, candidates: ["claude-bridge"] }),
+    ).toBe("claude-bridge");
+    expect(
+      locateCliBinary("", { spawnSync, candidates: ["claude-bridge"] }),
+    ).toBe("claude-bridge");
   });
 
-  it("throws CliBinaryNotFoundError when override empty and probe fails", () => {
+  it("throws CliBinaryNotFoundError when override empty and all candidates fail", () => {
     const spawnSync = vi.fn(() => ({
       status: null,
       error: new Error("ENOENT"),
     })) as never;
-    expect(() => locateCliBinary(undefined, { spawnSync })).toThrow(
-      CliBinaryNotFoundError,
-    );
+    expect(() =>
+      locateCliBinary(undefined, { spawnSync, candidates: ["claude-bridge"] }),
+    ).toThrow(CliBinaryNotFoundError);
   });
 
-  it("CliBinaryNotFoundError lists what was probed", () => {
+  it("CliBinaryNotFoundError.searchedNames lists all tried candidates + message points at cliPath setting", () => {
     const spawnSync = vi.fn(() => ({
       status: null,
       error: new Error("ENOENT"),
     })) as never;
     try {
-      locateCliBinary(undefined, { spawnSync });
+      locateCliBinary(undefined, {
+        spawnSync,
+        candidates: ["claude-bridge.cmd", "claude-bridge.exe", "claude-bridge"],
+      });
     } catch (err) {
       expect(err).toBeInstanceOf(CliBinaryNotFoundError);
       if (err instanceof CliBinaryNotFoundError) {
-        expect(err.searchedPaths.length).toBeGreaterThan(0);
-        expect(err.message).toContain("PATH");
+        expect(err.searchedNames).toEqual([
+          "claude-bridge.cmd",
+          "claude-bridge.exe",
+          "claude-bridge",
+        ]);
+        expect(err.message).toContain("claude-bridge.cmd");
+        expect(err.message).toContain("claudeBridge.cliPath");
       }
     }
+  });
+});
+
+// T-P2-004.5: Windows .cmd shim resolution.
+// Reproduces the production bug where bare-name `spawnSync("claude-bridge", ...)`
+// failed even though `claude-bridge.cmd` was reachable. Fix iterates platform
+// candidates explicitly rather than relying on Node's PATHEXT auto-resolution.
+
+describe("locateCliBinary — Windows shim resolution (T-P2-004.5)", () => {
+  const winCandidates = ["claude-bridge.cmd", "claude-bridge.exe", "claude-bridge"];
+
+  it("returns claude-bridge.cmd when .cmd shim is reachable (probe stops at first hit)", () => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 0, error: undefined }) as never;
+    const result = locateCliBinary(undefined, {
+      spawnSync,
+      candidates: winCandidates,
+    });
+    expect(result).toBe("claude-bridge.cmd");
+    expect(spawnSync).toHaveBeenCalledTimes(1);
+    expect(spawnSync).toHaveBeenCalledWith(
+      "claude-bridge.cmd",
+      ["--version"],
+      { stdio: "ignore", shell: false },
+    );
+  });
+
+  it("falls through to .exe when .cmd probe fails", () => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: null, error: new Error("ENOENT") })
+      .mockReturnValueOnce({ status: 0, error: undefined }) as never;
+    const result = locateCliBinary(undefined, {
+      spawnSync,
+      candidates: winCandidates,
+    });
+    expect(result).toBe("claude-bridge.exe");
+    expect(spawnSync).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws CliBinaryNotFoundError with full Windows candidate list when all three fail", () => {
+    const spawnSync = vi.fn(() => ({
+      status: null,
+      error: new Error("ENOENT"),
+    })) as never;
+    try {
+      locateCliBinary(undefined, { spawnSync, candidates: winCandidates });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliBinaryNotFoundError);
+      if (err instanceof CliBinaryNotFoundError) {
+        expect(err.searchedNames).toEqual(winCandidates);
+        expect(err.message).toContain("claude-bridge.cmd");
+        expect(err.message).toContain("claude-bridge.exe");
+        expect(err.message).toContain("claude-bridge");
+      }
+    }
+    expect(spawnSync).toHaveBeenCalledTimes(3);
   });
 });
 
