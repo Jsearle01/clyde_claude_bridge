@@ -33,7 +33,7 @@ import { IpcServer, type IpcHandlers } from "./ipc/server.js";
 import { WorkspacesStore } from "./workspace/store.js";
 import { getWorkspacesStorePath } from "./config/paths.js";
 import { makeInitialState } from "./state.js";
-import { StubWorkspaceRegistry } from "./workspace/registry.js";
+import { WorkspaceRegistryImpl } from "./workspace/registry.js";
 import { validateWorkspaceConfig } from "./workspace/config.js";
 import { JobQueue } from "./jobs/index.js";
 import { DailyTimer } from "./util/daily-timer.js";
@@ -212,10 +212,23 @@ async function main(): Promise<void> {
   let currentToken = config.auth.token;
   const getExpectedToken = (): string => currentToken;
 
-  // 5.5. Workspace registry (P1). Stub for P1; P2's extension-backed
-  // registry replaces this without changing the WorkspaceRegistry contract
-  // or any caller. Passed to tool factories via deps in later phases.
-  const workspaceRegistry = new StubWorkspaceRegistry(config.workspace);
+  // 5.5. Workspace registry (P2 — T-P2-007). Backed by workspaces.json
+  // (the persistent trust + identifier store from T-P2-003). The
+  // getActiveRegistry getter is a thunk closing over ipcServerRef (a
+  // forward-declared mutable holder) because ipcServer is constructed
+  // later in this function; thunk returns an empty Map until the IPC
+  // server is wired, which is fine because no caller invokes the getter
+  // at registry-construction time.
+  // Load the store first so the registry's first resolve() can find
+  // pre-existing entries (closes T-P2-006 manual-verification finding
+  // C-23: daemon-restart against pre-populated workspaces.json).
+  const workspacesStore = new WorkspacesStore(getWorkspacesStorePath());
+  await workspacesStore.load();
+  const ipcServerRef: { current: IpcServer | null } = { current: null };
+  const workspaceRegistry = new WorkspaceRegistryImpl(
+    workspacesStore,
+    () => ipcServerRef.current?.getActiveRegistry() ?? new Map(),
+  );
   logger.info("workspace registry initialized", {
     workspace_count: workspaceRegistry.list().length,
   });
@@ -381,12 +394,10 @@ async function main(): Promise<void> {
     },
   };
 
-  // Load the workspaces.json store before the IPC server starts accepting
-  // connections so the first register_workspace request hits a populated
-  // store rather than an uninitialized one. Schema-version mismatch on the
-  // store file throws and the daemon refuses to start (T-P2-003).
-  const workspacesStore = new WorkspacesStore(getWorkspacesStorePath());
-  await workspacesStore.load();
+  // workspacesStore + load() moved earlier (just before the workspace
+  // registry construction at T-P2-007) so the registry can read from a
+  // populated store at startup. IpcServer's existing workspacesStore
+  // reference is unchanged.
 
   const ipcServer = new IpcServer(
     config.daemon.ipc_socket,
@@ -395,6 +406,11 @@ async function main(): Promise<void> {
     undefined,
     workspacesStore,
   );
+  // T-P2-007: wire the registry's getActiveRegistry getter to the
+  // freshly-constructed IPC server. Until this assignment, the registry's
+  // getter returns an empty Map (forward-looking — T-P2-007's resolve()
+  // doesn't read it; P2-008+ may).
+  ipcServerRef.current = ipcServer;
 
   components = {
     ipcServer,

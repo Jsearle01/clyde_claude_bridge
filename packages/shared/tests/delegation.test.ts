@@ -168,9 +168,17 @@ describe("DelegationReportSchema", () => {
 });
 
 describe("DelegateInputSchema", () => {
-  it("accepts minimal input (prompt only)", () => {
-    const ok: DelegateInput = DelegateInputSchema.parse({ prompt: "hi" });
+  it("accepts minimal input (prompt + workspace; T-P2-007 made workspace required)", () => {
+    const ok: DelegateInput = DelegateInputSchema.parse({
+      prompt: "hi",
+      workspace: "local#default",
+    });
     expect(ok.prompt).toBe("hi");
+    expect(ok.workspace).toBe("local#default");
+  });
+
+  it("rejects input missing workspace field (T-P2-007)", () => {
+    expect(DelegateInputSchema.safeParse({ prompt: "hi" }).success).toBe(false);
   });
 
   it("accepts full input", () => {
@@ -188,27 +196,43 @@ describe("DelegateInputSchema", () => {
   });
 
   it("rejects empty prompt", () => {
-    expect(DelegateInputSchema.safeParse({ prompt: "" }).success).toBe(false);
+    expect(
+      DelegateInputSchema.safeParse({ prompt: "", workspace: "w" }).success,
+    ).toBe(false);
   });
 
   it("rejects max_turns out of [1, 200]", () => {
     expect(
-      DelegateInputSchema.safeParse({ prompt: "hi", max_turns: 0 }).success,
+      DelegateInputSchema.safeParse({
+        prompt: "hi",
+        workspace: "w",
+        max_turns: 0,
+      }).success,
     ).toBe(false);
     expect(
-      DelegateInputSchema.safeParse({ prompt: "hi", max_turns: 201 }).success,
+      DelegateInputSchema.safeParse({
+        prompt: "hi",
+        workspace: "w",
+        max_turns: 201,
+      }).success,
     ).toBe(false);
   });
 
   it("rejects extra fields (.strict())", () => {
     expect(
-      DelegateInputSchema.safeParse({ prompt: "hi", bonus: 1 }).success,
+      DelegateInputSchema.safeParse({
+        prompt: "hi",
+        workspace: "w",
+        bonus: 1,
+      }).success,
     ).toBe(false);
   });
 
   it("does NOT enforce a 32KB prompt cap (size policy at handler)", () => {
     const big = "x".repeat(64 * 1024);
-    expect(DelegateInputSchema.safeParse({ prompt: big }).success).toBe(true);
+    expect(
+      DelegateInputSchema.safeParse({ prompt: big, workspace: "w" }).success,
+    ).toBe(true);
   });
 });
 

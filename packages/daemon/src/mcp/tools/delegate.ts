@@ -93,20 +93,15 @@ export function makeDelegateTool(
     // promises — vitest's expect(...).rejects requires a Promise.
     // eslint-disable-next-line @typescript-eslint/require-await
     async handler(input, ctx) {
-      // Workspace resolution
+      // Workspace resolution (T-P2-007: strict rejection on unknown
+      // identifier; the wire schema now requires the workspace field, so
+      // input.workspace is always defined here).
       const workspace = deps.registry.resolve(input.workspace);
       if (workspace === null) {
-        if (deps.registry.list().length === 0) {
-          throw new ToolHandlerError(
-            503,
-            "no_workspace_configured",
-            "no workspace configured in config.json",
-          );
-        }
         throw new ToolHandlerError(
-          404,
-          "workspace_not_found",
-          `workspace not found: ${String(input.workspace)}`,
+          503,
+          "no_workspace_registered",
+          `no workspace registered with identifier '${input.workspace}'`,
         );
       }
 

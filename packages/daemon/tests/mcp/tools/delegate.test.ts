@@ -12,7 +12,8 @@ import {
   makeDelegateTool,
   resolveCwd,
 } from "../../../src/mcp/tools/delegate.js";
-import { StubWorkspaceRegistry } from "../../../src/workspace/registry.js";
+import type { WorkspaceRegistry } from "../../../src/workspace/registry.js";
+import type { Workspace } from "@claude-bridge/shared";
 import { JobQueue } from "../../../src/jobs/queue.js";
 import { StubJobRunner } from "../../../src/jobs/runner.js";
 import { AuditLog } from "../../../src/audit/log.js";
@@ -61,16 +62,33 @@ afterEach(async () => {
   rmSync(auditDir, { recursive: true, force: true });
 });
 
-function makeDeps(opts: { workspaceConfigured?: boolean } = {}) {
-  const cfg = opts.workspaceConfigured !== false
-    ? {
-        id: "local#default",
-        abs_path: workspaceDir,
-        default_mode: "agentic" as const,
-      }
-    : undefined;
+// T-P2-007: small in-memory WorkspaceRegistry test helper. Replaces
+// P1's `StubWorkspaceRegistry` (removed from production). Identical
+// resolve/list/default contract; no file I/O.
+function makeTestRegistry(workspaces: Workspace[]): WorkspaceRegistry {
   return {
-    registry: new StubWorkspaceRegistry(cfg),
+    resolve: (id?: string) =>
+      id === undefined
+        ? null
+        : (workspaces.find((w) => w.id === id) ?? null),
+    list: () => workspaces.slice(),
+    default: () => null,
+  };
+}
+
+function makeDeps(opts: { workspaceConfigured?: boolean } = {}) {
+  const workspaces: Workspace[] =
+    opts.workspaceConfigured !== false
+      ? [
+          {
+            id: "local#default",
+            abs_path: workspaceDir,
+            default_mode: "agentic",
+          },
+        ]
+      : [];
+  return {
+    registry: makeTestRegistry(workspaces),
     queue: new JobQueue(),
     runner: new StubJobRunner(new JobQueue()), // runner's queue independent for tickle no-op
   };
@@ -78,6 +96,7 @@ function makeDeps(opts: { workspaceConfigured?: boolean } = {}) {
 
 const baseInput: DelegateInput = {
   prompt: "do the thing",
+  workspace: "local#default",
 };
 
 describe("delegate_to_claude_code — happy path + workspace resolution", () => {
@@ -91,25 +110,25 @@ describe("delegate_to_claude_code — happy path + workspace resolution", () => 
     expect(out.queued_position).toBe(0);
   });
 
-  it("503 no_workspace_configured when registry empty", async () => {
+  it("503 no_workspace_registered when registry empty (T-P2-007)", async () => {
     const deps = makeDeps({ workspaceConfigured: false });
     const tool = makeDelegateTool(deps);
     await expect(tool.handler(baseInput, makeCtx(auditLog))).rejects.toMatchObject({
       name: "ToolHandlerError",
       code: 503,
-      reason: "no_workspace_configured",
+      reason: "no_workspace_registered",
     });
   });
 
-  it("404 workspace_not_found when explicit workspace doesn't match", async () => {
+  it("503 no_workspace_registered when explicit workspace doesn't match (T-P2-007)", async () => {
     const deps = makeDeps();
     const tool = makeDelegateTool(deps);
     await expect(
       tool.handler({ ...baseInput, workspace: "other#ws" }, makeCtx(auditLog)),
     ).rejects.toMatchObject({
       name: "ToolHandlerError",
-      code: 404,
-      reason: "workspace_not_found",
+      code: 503,
+      reason: "no_workspace_registered",
     });
   });
 });
@@ -151,7 +170,24 @@ describe("delegate_to_claude_code — input validation (schema)", () => {
     const reg = new ToolRegistry();
     reg.register(makeDelegateTool(deps));
     await expect(
-      reg.invoke("delegate_to_claude_code", { prompt: "" }, makeCtx(auditLog)),
+      reg.invoke(
+        "delegate_to_claude_code",
+        { prompt: "", workspace: "local#default" },
+        makeCtx(auditLog),
+      ),
+    ).rejects.toBeInstanceOf(Error);
+  });
+
+  it("schema rejects missing workspace field (T-P2-007: workspace is required)", async () => {
+    const deps = makeDeps();
+    const reg = new ToolRegistry();
+    reg.register(makeDelegateTool(deps));
+    await expect(
+      reg.invoke(
+        "delegate_to_claude_code",
+        { prompt: "hi" },
+        makeCtx(auditLog),
+      ),
     ).rejects.toBeInstanceOf(Error);
   });
 
@@ -162,14 +198,14 @@ describe("delegate_to_claude_code — input validation (schema)", () => {
     await expect(
       reg.invoke(
         "delegate_to_claude_code",
-        { prompt: "hi", max_turns: 0 },
+        { prompt: "hi", workspace: "local#default", max_turns: 0 },
         makeCtx(auditLog),
       ),
     ).rejects.toBeInstanceOf(Error);
     await expect(
       reg.invoke(
         "delegate_to_claude_code",
-        { prompt: "hi", max_turns: 201 },
+        { prompt: "hi", workspace: "local#default", max_turns: 201 },
         makeCtx(auditLog),
       ),
     ).rejects.toBeInstanceOf(Error);

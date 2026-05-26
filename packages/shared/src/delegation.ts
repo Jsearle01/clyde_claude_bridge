@@ -105,7 +105,12 @@ export type DelegationReport = z.infer<typeof DelegationReportSchema>;
 
 export const DelegateInputSchema = z
   .object({
-    workspace: z.string().min(1).optional(),
+    // P2 (T-P2-007): required. P1 made this optional and the daemon's
+    // StubWorkspaceRegistry resolved undefined → the single configured
+    // workspace; P2's multi-workspace registry has no default, so the
+    // wire layer enforces an identifier. Clients that omit the field
+    // get a 400 schema-validation error before reaching the handler.
+    workspace: z.string().min(1),
     prompt: z.string().min(1),
     exhibits: z.array(ExhibitSchema).optional(),
     mode: z.enum(["read_only", "agentic"]).optional(),

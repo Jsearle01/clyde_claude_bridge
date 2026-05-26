@@ -93,7 +93,10 @@ export class IpcSocketBusyError extends Error {
 // successful register_workspace; cleared on deregister_workspace or
 // socket close. Keyed in the Map by abs_path; pid is the extension's
 // VS Code process id (sent in the hello message via ConnectionState).
-interface ActiveRegistration {
+// T-P2-007: exported so the workspace registry can type-import it for
+// a read-only-Map accessor (registry doesn't mutate; just reads
+// connection state across the activeRegistry boundary).
+export interface ActiveRegistration {
   socket: Socket;
   identifier: string;
   pid: number;
@@ -113,6 +116,13 @@ export class IpcServer {
   // Active workspace registry — abs_path → holder. Populated on
   // register_workspace; cleared on deregister or socket close.
   private readonly activeRegistry = new Map<string, ActiveRegistration>();
+
+  // T-P2-007: read-only view onto activeRegistry for the workspace
+  // registry. ReadonlyMap typecast keeps the registry honest — it can
+  // observe connection state but can't mutate IPC server state.
+  public getActiveRegistry(): ReadonlyMap<string, ActiveRegistration> {
+    return this.activeRegistry;
+  }
 
   constructor(
     socketPath: string,

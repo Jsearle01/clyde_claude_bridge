@@ -20,7 +20,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JobQueue } from "../../src/jobs/queue.js";
 import { SdkJobRunner } from "../../src/jobs/sdk-runner.js";
-import { StubWorkspaceRegistry } from "../../src/workspace/registry.js";
+import type { WorkspaceRegistry } from "../../src/workspace/registry.js";
+import type { Workspace } from "@claude-bridge/shared";
+
+// T-P2-007: inline in-memory test registry. Replaces P1's
+// StubWorkspaceRegistry (removed from production). Identical contract.
+function makeTestRegistry(workspaces: Workspace[]): WorkspaceRegistry {
+  return {
+    resolve: (id?: string) =>
+      id === undefined
+        ? null
+        : (workspaces.find((w) => w.id === id) ?? null),
+    list: () => workspaces.slice(),
+    default: () => null,
+  };
+}
 
 const HAS_KEY =
   typeof process.env.ANTHROPIC_API_KEY === "string" &&
@@ -74,11 +88,13 @@ describe.skipIf(!HAS_KEY)("SdkJobRunner — live smoke (ANTHROPIC_API_KEY requir
     execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: workspaceDir });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: workspaceDir });
     queue = new JobQueue();
-    const registry = new StubWorkspaceRegistry({
-      id: "local#smoke",
-      abs_path: workspaceDir,
-      default_mode: "agentic",
-    });
+    const registry = makeTestRegistry([
+      {
+        id: "local#smoke",
+        abs_path: workspaceDir,
+        default_mode: "agentic",
+      },
+    ]);
     runner = new SdkJobRunner(queue, registry, configDir, silentLogger);
   });
 
