@@ -114,8 +114,11 @@ export class WorkspaceRegistration {
     name: string,
   ): Promise<RegistrationResult> {
     if (response.kind === "register_workspace_ok") {
-      this.setState("registered");
+      // T-P2-006.5: identifier must be set before setState("registered")
+      // because onStateChange subscribers (e.g. status bar) read it
+      // synchronously when the callback fires.
       this.identifier = response.identifier ?? null;
+      this.setState("registered");
       return {
         state: "registered",
         identifier: response.identifier ?? "",
@@ -144,8 +147,10 @@ export class WorkspaceRegistration {
         };
       }
       if (confirmResponse.kind === "register_workspace_ok") {
-        this.setState("registered");
+        // T-P2-006.5: identifier must be set before setState("registered")
+        // (see invariant comment at the first ok-branch above).
         this.identifier = confirmResponse.identifier ?? null;
+        this.setState("registered");
         return {
           state: "registered",
           identifier: confirmResponse.identifier ?? "",
@@ -172,8 +177,11 @@ export class WorkspaceRegistration {
     if (response.reason === "path_already_registered") {
       const match = /pid (\d+)/.exec(response.message ?? "");
       const pid = match?.[1] !== undefined ? Number(match[1]) : 0;
-      this.setState("duplicate");
+      // T-P2-006.5: existingPid must be set before setState("duplicate")
+      // because the duplicate-state render path (status bar tooltip)
+      // reads it synchronously via the onStateChange callback.
       this.existingPid = pid;
+      this.setState("duplicate");
       return { state: "duplicate", existing_pid: pid };
     }
     this.setState("unregistered");

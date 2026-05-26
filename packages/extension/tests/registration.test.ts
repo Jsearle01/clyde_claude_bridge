@@ -227,3 +227,95 @@ describe("WorkspaceRegistration.onStateChange callback (T-P2-006)", () => {
     expect(reg.getState()).toBe("registered");
   });
 });
+
+// T-P2-006.5: field-vs-state-ordering invariant. setState fires the
+// onStateChange callback synchronously; class fields the callback reads
+// must be assigned BEFORE setState. T-P2-006 introduced the callback;
+// 3 call sites in registration.ts (the two register_workspace_ok branches
+// and the path_already_registered branch) had setState BEFORE the field
+// assignment, producing stale field reads in subscribers. These tests
+// pin the ordering invariant.
+
+describe("WorkspaceRegistration field-vs-state ordering (T-P2-006.5)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("identifier is set when onStateChange('registered') fires (ok branch)", async () => {
+    const client = makeConnectedClient([
+      {
+        kind: "register_workspace_ok",
+        identifier: "myproject-54ab07",
+        name: "MyProject",
+        abs_path: "/some/path",
+        trusted_at: "2026-05-24T00:00:00.000Z",
+        was_already_trusted: true,
+      },
+    ]);
+    const reg = new WorkspaceRegistration(
+      client,
+      makeFolder("/some/path", "MyProject"),
+    );
+    let identifierAtRegistered: string | null | undefined = undefined;
+    reg.onStateChange = (state) => {
+      if (state === "registered") {
+        identifierAtRegistered = reg.getIdentifier();
+      }
+    };
+    await reg.register();
+    expect(identifierAtRegistered).toBe("myproject-54ab07");
+  });
+
+  it("identifier is set when onStateChange('registered') fires (confirm_trust branch)", async () => {
+    const client = makeConnectedClient([
+      { kind: "register_workspace_needs_trust", abs_path: "/new/path" },
+      {
+        kind: "register_workspace_ok",
+        identifier: "newproject-bbbbbb",
+        name: "New",
+        abs_path: "/new/path",
+        trusted_at: "2026-05-24T00:00:00.000Z",
+        was_already_trusted: false,
+      },
+    ]);
+    const trustPrompt = vi.fn<(p: string) => Promise<"trust" | "deny">>(
+      () => Promise.resolve("trust"),
+    );
+    const reg = new WorkspaceRegistration(
+      client,
+      makeFolder("/new/path", "New"),
+      trustPrompt,
+    );
+    let identifierAtRegistered: string | null | undefined = undefined;
+    reg.onStateChange = (state) => {
+      if (state === "registered") {
+        identifierAtRegistered = reg.getIdentifier();
+      }
+    };
+    await reg.register();
+    expect(identifierAtRegistered).toBe("newproject-bbbbbb");
+  });
+
+  it("existingPid is set when onStateChange('duplicate') fires", async () => {
+    const client = makeConnectedClient([
+      {
+        kind: "error",
+        message:
+          "Workspace path already registered by another VS Code window (pid 12345)",
+        reason: "path_already_registered",
+      },
+    ]);
+    const reg = new WorkspaceRegistration(
+      client,
+      makeFolder("/dup/path", "Dup"),
+    );
+    let pidAtDuplicate: number | null | undefined = undefined;
+    reg.onStateChange = (state) => {
+      if (state === "duplicate") {
+        pidAtDuplicate = reg.getExistingPid();
+      }
+    };
+    await reg.register();
+    expect(pidAtDuplicate).toBe(12345);
+  });
+});
