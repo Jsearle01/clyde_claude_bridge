@@ -120,7 +120,7 @@ export function makeStatusBarMenu(
   const runStart = deps.runStartDaemon ?? runStartDaemonCommand;
   return async (): Promise<void> => {
     const items = composeMenuItems(sources);
-    const selected = (await showQuickPick(items)) as MenuItem | undefined;
+    const selected = await showQuickPick(items);
     if (selected === undefined) return;
     await dispatchAction(selected.action, {
       context,

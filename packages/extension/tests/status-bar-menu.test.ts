@@ -23,9 +23,7 @@ function makeSources(overrides: Partial<{
     reg: "registered" as const,
     identifier: "myproject-aaaaaa",
     existingPid: null,
-    folder: { uri: { fsPath: "/projects/myproject" }, name: "myproject" } as
-      | WorkspaceFolder
-      | undefined,
+    folder: { uri: { fsPath: "/projects/myproject" }, name: "myproject" },
     daemonInfo: undefined as DaemonInfo | undefined,
     ...overrides,
   };
@@ -135,9 +133,9 @@ describe("makeStatusBarMenu dispatch (T-P2-006)", () => {
     const handler = makeStatusBarMenu(sources, fakeContext, {
       showQuickPick: showQuickPick as never,
       showInformationMessage: showInfo as never,
-      executeCommand: executeCommand as never,
+      executeCommand,
       clipboardWriteText,
-      runStartDaemon: runStart as never,
+      runStartDaemon: runStart,
     });
     return { handler, showInfo, executeCommand, clipboardWriteText, runStart };
   }

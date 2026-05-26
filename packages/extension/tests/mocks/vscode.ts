@@ -171,7 +171,7 @@ export function makeStatusBarItemMock(): StatusBarItem {
 (window as unknown as {
   showQuickPick: ReturnType<typeof vi.fn>;
 }).showQuickPick = vi.fn<
-  (items: unknown[]) => Promise<unknown | undefined>
+  (items: unknown[]) => Promise<unknown>
 >(() => Promise.resolve(undefined));
 
 // env.clipboard.writeText. Tests assert on calls.

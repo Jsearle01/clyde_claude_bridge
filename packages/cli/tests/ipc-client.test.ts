@@ -169,9 +169,8 @@ describe("sendIpc — hello version_mismatch (T-P2-002)", () => {
 
   afterEach(async () => {
     if (server !== null) {
-      await new Promise<void>((resolve) =>
-        server!.close(() => resolve()),
-      );
+      const s = server;
+      await new Promise<void>((resolve) => s.close(() => resolve()));
     }
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -191,7 +190,8 @@ describe("sendIpc — hello version_mismatch (T-P2-002)", () => {
         socket.end();
       });
     });
-    await new Promise<void>((resolve) => server!.listen(address, resolve));
+    const srv = server;
+    await new Promise<void>((resolve) => srv.listen(address, resolve));
     await expect(
       sendIpc({ kind: "status" }, { addressOverride: address }),
     ).rejects.toBeInstanceOf(IpcClientVersionMismatchError);

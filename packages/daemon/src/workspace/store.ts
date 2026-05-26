@@ -18,9 +18,11 @@ import { readFile, writeFile, chmod, mkdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   WorkspaceStoreSchema,
+  normalizeAbsPath,
   type WorkspaceEntry,
   type WorkspaceStore,
 } from "@claude-bridge/shared";
+import type { Logger } from "../log/logger.js";
 
 export class WorkspacesStoreVersionUnsupportedError extends Error {
   constructor(
@@ -38,7 +40,10 @@ export class WorkspacesStore {
   private store: WorkspaceStore = { version: "1", entries: [] };
   private loaded = false;
 
-  constructor(private readonly path: string) {}
+  constructor(
+    private readonly path: string,
+    private readonly logger?: Logger,
+  ) {}
 
   async load(): Promise<void> {
     let raw: string;
@@ -62,11 +67,18 @@ export class WorkspacesStore {
     // Zod parse (not safeParse) — surface validation errors loud.
     this.store = WorkspaceStoreSchema.parse(parsed);
     this.loaded = true;
+    // T-P2-007.5: dedupe case-variant abs_path entries that pre-date the
+    // normalization fix. Keeps the earliest-trusted record; rewrites disk.
+    await this.dedupeOnLoad();
   }
 
   findByPath(abs_path: string): WorkspaceEntry | null {
     this.assertLoaded();
-    return this.store.entries.find((e) => e.abs_path === abs_path) ?? null;
+    const key = normalizeAbsPath(abs_path);
+    return (
+      this.store.entries.find((e) => normalizeAbsPath(e.abs_path) === key) ??
+      null
+    );
   }
 
   findByIdentifier(identifier: string): WorkspaceEntry | null {
@@ -92,6 +104,43 @@ export class WorkspacesStore {
   list(): WorkspaceEntry[] {
     this.assertLoaded();
     return [...this.store.entries];
+  }
+
+  private async dedupeOnLoad(): Promise<void> {
+    const byKey = new Map<string, WorkspaceEntry>();
+    const removed: WorkspaceEntry[] = [];
+
+    // Sort ascending by trusted_at so the earliest record claims the key
+    // and later duplicates are removed.
+    const sorted = [...this.store.entries].sort((a, b) =>
+      a.trusted_at.localeCompare(b.trusted_at),
+    );
+
+    for (const entry of sorted) {
+      const key = normalizeAbsPath(entry.abs_path);
+      if (byKey.has(key)) {
+        removed.push(entry);
+      } else {
+        byKey.set(key, entry);
+      }
+    }
+
+    if (removed.length === 0) {
+      return;
+    }
+
+    for (const dup of removed) {
+      const retained = byKey.get(normalizeAbsPath(dup.abs_path));
+      this.logger?.warn("workspaces.json dedupe: removed duplicate entry", {
+        abs_path: dup.abs_path,
+        identifier: dup.identifier,
+        trusted_at: dup.trusted_at,
+        retained_identifier: retained?.identifier,
+      });
+    }
+
+    this.store.entries = Array.from(byKey.values());
+    await this.writeFile();
   }
 
   private async writeFile(): Promise<void> {

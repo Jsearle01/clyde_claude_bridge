@@ -494,9 +494,7 @@ describe("makeDaemonNotRunningHandler (T-P2-005)", () => {
       {
         getAutoStartSetting: () => opts.autoStart ?? false,
         showWarningMessage: showWarning,
-        runStartDaemon: runStart as unknown as (
-          ctx: { secrets: SecretsApi },
-        ) => Promise<void>,
+        runStartDaemon: runStart,
       },
     );
     return { handler, showWarning, runStart };
@@ -558,7 +556,7 @@ describe("makeDaemonNotRunningHandler (T-P2-005)", () => {
           return lookupCount === 1; // true first call, false thereafter
         },
         showWarningMessage: showWarning,
-        runStartDaemon: vi.fn(() => Promise.resolve()) as never,
+        runStartDaemon: vi.fn(() => Promise.resolve()),
       },
     );
     handler(3);

@@ -5,3 +5,4 @@ export * from "./tools.js";
 export * from "./workspace.js";
 export * from "./jobs.js";
 export * from "./delegation.js";
+export * from "./path.js";

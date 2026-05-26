@@ -222,7 +222,7 @@ async function main(): Promise<void> {
   // Load the store first so the registry's first resolve() can find
   // pre-existing entries (closes T-P2-006 manual-verification finding
   // C-23: daemon-restart against pre-populated workspaces.json).
-  const workspacesStore = new WorkspacesStore(getWorkspacesStorePath());
+  const workspacesStore = new WorkspacesStore(getWorkspacesStorePath(), logger);
   await workspacesStore.load();
   const ipcServerRef: { current: IpcServer | null } = { current: null };
   const workspaceRegistry = new WorkspaceRegistryImpl(

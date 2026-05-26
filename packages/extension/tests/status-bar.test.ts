@@ -22,9 +22,7 @@ function makeSources(overrides: Partial<{
     reg: "registered" as const,
     identifier: "myproject-aaaaaa",
     existingPid: null,
-    folder: { uri: { fsPath: "/projects/myproject" }, name: "myproject" } as
-      | WorkspaceFolder
-      | undefined,
+    folder: { uri: { fsPath: "/projects/myproject" }, name: "myproject" },
     daemonInfo: undefined as DaemonInfo | undefined,
     ...overrides,
   };

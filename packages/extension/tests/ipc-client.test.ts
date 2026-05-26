@@ -285,7 +285,7 @@ describe("IpcClient.onStateChange callback (T-P2-006)", () => {
     expect(transitions).toEqual(["connecting", "connected", "disconnected"]);
   });
 
-  it("does not fire on no-op (idempotent) assignment", async () => {
+  it("does not fire on no-op (idempotent) assignment", () => {
     const fakeSocket = new FakeSocket();
     const client = new IpcClient("/fake", {
       socketFactory: () => fakeSocket as unknown as Socket,
