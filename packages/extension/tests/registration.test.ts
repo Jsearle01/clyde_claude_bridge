@@ -163,3 +163,67 @@ describe("WorkspaceRegistration (T-P2-003)", () => {
     expect(reg.getState()).toBe("unregistered");
   });
 });
+
+// T-P2-006: onStateChange callback. Single-subscriber settable field;
+// fires inside setState helper on each transition; idempotent assigns
+// are no-ops; subscriber errors swallowed.
+
+describe("WorkspaceRegistration.onStateChange callback (T-P2-006)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("fires on each state transition with the new state value", async () => {
+    const client = makeConnectedClient([
+      {
+        kind: "register_workspace_ok",
+        identifier: "x-aaaaaa",
+        name: "X",
+        abs_path: "/x",
+        trusted_at: "2026-05-24T00:00:00.000Z",
+        was_already_trusted: true,
+      },
+    ]);
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    const transitions: string[] = [];
+    reg.onStateChange = (s) => transitions.push(s);
+    await reg.register();
+    // Initial state is "unregistered"; register() transitions to
+    // "registering" (fire 1) then to "registered" (fire 2).
+    expect(transitions).toEqual(["registering", "registered"]);
+  });
+
+  it("does not fire on no-op assignment (initial state stays 'unregistered')", async () => {
+    const client = makeConnectedClient([]);
+    const reg = new WorkspaceRegistration(client, undefined);
+    const transitions: string[] = [];
+    reg.onStateChange = (s) => transitions.push(s);
+    // register() with no workspace folder returns {state: "no_workspace"}
+    // and the internal state stays at the initial "unregistered" —
+    // setState("unregistered") is a no-op.
+    await reg.register();
+    expect(transitions).toEqual([]);
+  });
+
+  it("swallows subscriber errors; state machine continues", async () => {
+    const client = makeConnectedClient([
+      {
+        kind: "register_workspace_ok",
+        identifier: "x-aaaaaa",
+        name: "X",
+        abs_path: "/x",
+        trusted_at: "2026-05-24T00:00:00.000Z",
+        was_already_trusted: true,
+      },
+    ]);
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    let callCount = 0;
+    reg.onStateChange = (): void => {
+      callCount += 1;
+      throw new Error("subscriber blew up");
+    };
+    await reg.register();
+    expect(callCount).toBe(2); // registering + registered
+    expect(reg.getState()).toBe("registered");
+  });
+});

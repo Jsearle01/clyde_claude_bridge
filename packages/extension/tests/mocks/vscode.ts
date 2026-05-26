@@ -66,9 +66,14 @@ export const workspace: {
 };
 
 // Test helper for constructing WorkspaceFolder fixtures.
+// parse() returns a minimal Uri-shaped object for vscode.open argument
+// passing in status-bar-menu; tests don't introspect the parsed shape.
 export const Uri = {
   file(fsPath: string): { fsPath: string } {
     return { fsPath };
+  },
+  parse(s: string): { toString(): string } {
+    return { toString: () => s };
   },
 };
 
@@ -105,3 +110,73 @@ const defaultConfig = makeWorkspaceConfig();
 (workspace as unknown as {
   getConfiguration: ReturnType<typeof vi.fn>;
 }).getConfiguration = vi.fn(() => defaultConfig);
+
+// T-P2-006: status bar + markdown + quickpick + clipboard mocks.
+
+export const StatusBarAlignment = {
+  Left: 1,
+  Right: 2,
+} as const;
+
+export class MarkdownString {
+  public value = "";
+  public isTrusted = false;
+  constructor(value?: string) {
+    if (value !== undefined) this.value = value;
+  }
+  appendMarkdown(text: string): this {
+    this.value += text;
+    return this;
+  }
+}
+
+export interface StatusBarItem {
+  text: string;
+  tooltip: string | MarkdownString | undefined;
+  command: string | undefined;
+  alignment: number;
+  priority: number;
+  show: () => void;
+  hide: () => void;
+  dispose: () => void;
+}
+
+export function makeStatusBarItemMock(): StatusBarItem {
+  return {
+    text: "",
+    tooltip: undefined,
+    command: undefined,
+    alignment: StatusBarAlignment.Left,
+    priority: 0,
+    show: vi.fn(),
+    hide: vi.fn(),
+    dispose: vi.fn(),
+  };
+}
+
+// Attach createStatusBarItem onto the existing window object.
+(window as unknown as {
+  createStatusBarItem: ReturnType<typeof vi.fn>;
+}).createStatusBarItem = vi.fn(
+  (alignment?: number, priority?: number): StatusBarItem => {
+    const item = makeStatusBarItemMock();
+    if (alignment !== undefined) item.alignment = alignment;
+    if (priority !== undefined) item.priority = priority;
+    return item;
+  },
+);
+
+// showQuickPick. Tests override return value to simulate selection.
+// Items may be plain strings or QuickPickItem-like objects.
+(window as unknown as {
+  showQuickPick: ReturnType<typeof vi.fn>;
+}).showQuickPick = vi.fn<
+  (items: unknown[]) => Promise<unknown | undefined>
+>(() => Promise.resolve(undefined));
+
+// env.clipboard.writeText. Tests assert on calls.
+export const env = {
+  clipboard: {
+    writeText: vi.fn<(s: string) => Promise<void>>(() => Promise.resolve()),
+  },
+};

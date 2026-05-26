@@ -254,3 +254,77 @@ describe("IpcClient.onReconnectAttempt callback (T-P2-005)", () => {
     }
   });
 });
+
+// T-P2-006: onStateChange callback. Single-subscriber settable field;
+// fires inside setState helper on each transition; idempotent assigns
+// are no-ops; subscriber errors swallowed.
+
+describe("IpcClient.onStateChange callback (T-P2-006)", () => {
+  it("fires on each state transition with the new state value", async () => {
+    const fakeSocket = new FakeSocket();
+    const client = new IpcClient("/fake", {
+      socketFactory: () => fakeSocket as unknown as Socket,
+    });
+    const transitions: string[] = [];
+    client.onStateChange = (s) => transitions.push(s);
+    const connectPromise = client.connect();
+    // doConnect transitions disconnected → connecting (1 fire).
+    fakeSocket.simulateConnect();
+    fakeSocket.simulateData(
+      JSON.stringify({
+        kind: "hello_ok",
+        daemon_version: "1.0",
+        min_supported: "1.0",
+      }),
+    );
+    await connectPromise;
+    // hello_ok transitions connecting → connected (2nd fire).
+    expect(transitions).toEqual(["connecting", "connected"]);
+    client.disconnect();
+    // disconnect() transitions connected → disconnected (3rd fire).
+    expect(transitions).toEqual(["connecting", "connected", "disconnected"]);
+  });
+
+  it("does not fire on no-op (idempotent) assignment", async () => {
+    const fakeSocket = new FakeSocket();
+    const client = new IpcClient("/fake", {
+      socketFactory: () => fakeSocket as unknown as Socket,
+    });
+    const transitions: string[] = [];
+    client.onStateChange = (s) => transitions.push(s);
+    // Two consecutive disconnect() calls: only the first transition
+    // (initial → no-op since starts at "disconnected") is suppressed;
+    // the second disconnect() is also a no-op (still "disconnected").
+    client.disconnect();
+    client.disconnect();
+    expect(transitions).toEqual([]);
+  });
+
+  it("swallows subscriber errors; state machine continues", async () => {
+    const fakeSocket = new FakeSocket();
+    const client = new IpcClient("/fake", {
+      socketFactory: () => fakeSocket as unknown as Socket,
+    });
+    let callCount = 0;
+    client.onStateChange = (): void => {
+      callCount += 1;
+      throw new Error("subscriber blew up");
+    };
+    const connectPromise = client.connect();
+    fakeSocket.simulateConnect();
+    fakeSocket.simulateData(
+      JSON.stringify({
+        kind: "hello_ok",
+        daemon_version: "1.0",
+        min_supported: "1.0",
+      }),
+    );
+    await connectPromise;
+    // Both connecting and connected transitions fired despite throws.
+    expect(callCount).toBe(2);
+    // State machine is still healthy — disconnect transitions cleanly.
+    client.disconnect();
+    expect(callCount).toBe(3);
+    expect(client.getConnectionState()).toBe("disconnected");
+  });
+});

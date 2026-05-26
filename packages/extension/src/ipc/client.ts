@@ -81,6 +81,15 @@ export class IpcClient {
   // swallowed in scheduleReconnect() so subscriber failures cannot
   // corrupt the reconnect machinery.
   public onReconnectAttempt?: (attempt: number) => void;
+  // T-P2-006: fires on each ConnectionStateKind transition. Subscriber
+  // receives the new state value. Idempotent assigns (e.g.,
+  // setState("disconnected") when already "disconnected") are no-ops.
+  // Errors swallowed; the state machine cannot be corrupted by subscribers.
+  // Third instance of the "settable single-subscriber callback field"
+  // pattern (alongside onReconnectAttempt and WorkspaceRegistration.
+  // onStateChange); pattern doc promotion deferred to post-T-P2-006
+  // housekeeping.
+  public onStateChange?: (state: ConnectionStateKind) => void;
 
   constructor(
     private readonly endpoint: string,
@@ -145,12 +154,12 @@ export class IpcClient {
       this.socket.destroy();
       this.socket = null;
     }
-    this.state = "disconnected";
+    this.setState("disconnected");
   }
 
   private doConnect(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this.state = "connecting";
+      this.setState("connecting");
       const sock = this.socketFactory(this.endpoint);
       this.socket = sock;
       sock.setEncoding("utf8");
@@ -199,11 +208,11 @@ export class IpcClient {
           // pending-request queue.
           if (this.state !== "connected") {
             if (parsed.kind === "hello_ok") {
-              this.state = "connected";
+              this.setState("connected");
               this.reconnectAttempt = 0;
               settle(() => resolve());
             } else if (parsed.kind === "error" && parsed.reason === "version_mismatch") {
-              this.state = "version_mismatch";
+              this.setState("version_mismatch");
               const message = parsed.message ?? "version mismatch";
               void vscode.window.showErrorMessage(
                 `Claude Bridge: ${message}. Update one of them to continue.`,
@@ -277,8 +286,23 @@ export class IpcClient {
     this.socket = null;
     if (this.explicitlyClosed) return;
     if (this.state === "version_mismatch") return;
-    this.state = "disconnected";
+    this.setState("disconnected");
     this.scheduleReconnect();
+  }
+
+  // T-P2-006: single source of state mutation. Idempotent assigns are
+  // no-ops (no callback fire); transitions fire onStateChange with the
+  // new state. Subscriber errors swallowed.
+  private setState(next: ConnectionStateKind): void {
+    if (this.state === next) return;
+    this.state = next;
+    if (this.onStateChange !== undefined) {
+      try {
+        this.onStateChange(next);
+      } catch {
+        // intentional swallow — subscriber failures must not break state machine
+      }
+    }
   }
 
   private scheduleReconnect(): void {

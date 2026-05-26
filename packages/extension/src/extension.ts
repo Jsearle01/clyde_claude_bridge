@@ -5,6 +5,8 @@ import {
   runStartDaemonCommand,
   makeDaemonNotRunningHandler,
 } from "./daemon-lifecycle.js";
+import { makeStatusBar, type StatusBarSources } from "./status-bar.js";
+import { makeStatusBarMenu } from "./status-bar-menu.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
   disconnected: "disconnected",
@@ -56,6 +58,35 @@ export function activate(context: vscode.ExtensionContext): void {
     () => runStartDaemonCommand(context),
   );
   context.subscriptions.push(startDaemonCmd);
+
+  // T-P2-006: status bar item + menu command. The status bar reads
+  // aggregate state via two getters; refresh fires on each
+  // ipcClient/registration state transition. Disposed via
+  // context.subscriptions.
+  const statusBarSources: StatusBarSources = {
+    getConnectionState: () => ipcClient?.getConnectionState() ?? "disconnected",
+    getRegistrationState: () => registration?.getState() ?? "unregistered",
+    getRegistrationIdentifier: () => registration?.getIdentifier() ?? null,
+    getRegistrationExistingPid: () => registration?.getExistingPid() ?? null,
+    getWorkspaceFolder: () => vscode.workspace.workspaceFolders?.[0],
+    // T-P2-006 stub: daemon info is not yet wired through IPC.
+    // T-P2-007+ may surface daemon pid/url/uptime once the registry
+    // replacement lands; tooltip degrades gracefully when undefined.
+    getDaemonInfo: () => undefined,
+  };
+  const statusBar = makeStatusBar(statusBarSources);
+  statusBar.refresh();
+  context.subscriptions.push({ dispose: () => statusBar.dispose() });
+
+  ipcClient.onStateChange = () => statusBar.refresh();
+  registration.onStateChange = () => statusBar.refresh();
+
+  const statusBarMenuHandler = makeStatusBarMenu(statusBarSources, context);
+  const statusBarMenuCmd = vscode.commands.registerCommand(
+    "claudeBridge.openStatusBarMenu",
+    statusBarMenuHandler,
+  );
+  context.subscriptions.push(statusBarMenuCmd);
 
   const showStatus = vscode.commands.registerCommand(
     "claudeBridge.showStatus",

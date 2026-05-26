@@ -21,6 +21,10 @@
       {
         "command": "claudeBridge.startDaemon",
         "title": "Claude Bridge: Start Daemon"
+      },
+      {
+        "command": "claudeBridge.openStatusBarMenu",
+        "title": "Claude Bridge: Open Status Bar Menu"
       }
     ],
     "configuration": {

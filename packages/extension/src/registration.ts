@@ -49,6 +49,11 @@ export class WorkspaceRegistration {
   // Inject the trust-prompt for testability. Production callers omit;
   // tests pass a deterministic fake.
   private readonly trustPromptImpl: (abs_path: string) => Promise<"trust" | "deny">;
+  // T-P2-006: fires on each RegistrationState transition. Subscriber
+  // receives the new state. Idempotent assigns are no-ops; errors
+  // swallowed. Parallel to IpcClient.onStateChange (third instance of
+  // the "settable single-subscriber callback field" pattern).
+  public onStateChange?: (state: RegistrationState) => void;
 
   constructor(
     private readonly ipcClient: IpcClient,
@@ -72,13 +77,13 @@ export class WorkspaceRegistration {
 
   async register(): Promise<RegistrationResult> {
     if (this.workspaceFolder === undefined) {
-      this.state = "unregistered";
+      this.setState("unregistered");
       return { state: "no_workspace" };
     }
-    this.state = "registering";
+    this.setState("registering");
     await this.waitForConnected();
     if (this.ipcClient.getConnectionState() !== "connected") {
-      this.state = "unregistered";
+      this.setState("unregistered");
       return {
         state: "error",
         message: `daemon not connected (state=${this.ipcClient.getConnectionState()})`,
@@ -94,7 +99,7 @@ export class WorkspaceRegistration {
         name,
       });
     } catch (err) {
-      this.state = "unregistered";
+      this.setState("unregistered");
       return {
         state: "error",
         message: err instanceof Error ? err.message : String(err),
@@ -109,7 +114,7 @@ export class WorkspaceRegistration {
     name: string,
   ): Promise<RegistrationResult> {
     if (response.kind === "register_workspace_ok") {
-      this.state = "registered";
+      this.setState("registered");
       this.identifier = response.identifier ?? null;
       return {
         state: "registered",
@@ -118,10 +123,10 @@ export class WorkspaceRegistration {
       };
     }
     if (response.kind === "register_workspace_needs_trust") {
-      this.state = "needs_trust";
+      this.setState("needs_trust");
       const choice = await this.trustPromptImpl(abs_path);
       if (choice === "deny") {
-        this.state = "trust_denied";
+        this.setState("trust_denied");
         return { state: "trust_denied" };
       }
       let confirmResponse: IpcResponseShape;
@@ -132,14 +137,14 @@ export class WorkspaceRegistration {
           name,
         });
       } catch (err) {
-        this.state = "unregistered";
+        this.setState("unregistered");
         return {
           state: "error",
           message: err instanceof Error ? err.message : String(err),
         };
       }
       if (confirmResponse.kind === "register_workspace_ok") {
-        this.state = "registered";
+        this.setState("registered");
         this.identifier = confirmResponse.identifier ?? null;
         return {
           state: "registered",
@@ -154,7 +159,7 @@ export class WorkspaceRegistration {
     if (response.kind === "error") {
       return this.classifyErrorResponse(response);
     }
-    this.state = "unregistered";
+    this.setState("unregistered");
     return {
       state: "error",
       message: `unexpected register response kind=${response.kind ?? "?"}`,
@@ -167,11 +172,11 @@ export class WorkspaceRegistration {
     if (response.reason === "path_already_registered") {
       const match = /pid (\d+)/.exec(response.message ?? "");
       const pid = match?.[1] !== undefined ? Number(match[1]) : 0;
-      this.state = "duplicate";
+      this.setState("duplicate");
       this.existingPid = pid;
       return { state: "duplicate", existing_pid: pid };
     }
-    this.state = "unregistered";
+    this.setState("unregistered");
     return {
       state: "error",
       message: response.message ?? "unknown register error",
@@ -182,7 +187,7 @@ export class WorkspaceRegistration {
     if (this.state !== "registered" || this.identifier === null) return;
     const id = this.identifier;
     this.identifier = null;
-    this.state = "unregistered";
+    this.setState("unregistered");
     if (this.ipcClient.getConnectionState() !== "connected") return;
     try {
       await this.ipcClient.request<IpcResponseShape>({
@@ -201,6 +206,20 @@ export class WorkspaceRegistration {
       this.ipcClient.getConnectionState() !== "connected"
     ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  // T-P2-006: single source of state mutation. Idempotent assigns are
+  // no-ops; transitions fire onStateChange. Subscriber errors swallowed.
+  private setState(next: RegistrationState): void {
+    if (this.state === next) return;
+    this.state = next;
+    if (this.onStateChange !== undefined) {
+      try {
+        this.onStateChange(next);
+      } catch {
+        // intentional swallow — subscriber failures must not break state machine
+      }
     }
   }
 }
