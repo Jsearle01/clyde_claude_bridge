@@ -52,12 +52,31 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
       identifier: z.string(),
     })
     .strict(),
+  // T-P2-008: per-workspace approval mode setter
+  z
+    .object({
+      kind: z.literal("set_workspace_mode"),
+      identifier: z.string(),
+      mode: z.enum(["auto", "per_call", "session_bypass"]),
+    })
+    .strict(),
+  // T-P2-008: extension's response to a daemon-initiated approval_request.
+  // Carries no IpcResponse — daemon doesn't ack this one (asymmetric).
+  z
+    .object({
+      kind: z.literal("approval_response"),
+      delegation_id: z.string(),
+      decision: z.enum(["approve", "deny", "approve_session"]),
+    })
+    .strict(),
 ]);
 export type IpcRequest = z.infer<typeof IpcRequestSchema>;
 export type HelloRequest = Extract<IpcRequest, { kind: "hello" }>;
 export type RegisterWorkspaceRequest = Extract<IpcRequest, { kind: "register_workspace" }>;
 export type ConfirmTrustRequest = Extract<IpcRequest, { kind: "confirm_trust" }>;
 export type DeregisterWorkspaceRequest = Extract<IpcRequest, { kind: "deregister_workspace" }>;
+export type SetWorkspaceModeRequest = Extract<IpcRequest, { kind: "set_workspace_mode" }>;
+export type ApprovalResponseRequest = Extract<IpcRequest, { kind: "approval_response" }>;
 
 export const IpcResponseSchema = z.discriminatedUnion("kind", [
   z
@@ -94,6 +113,9 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
       abs_path: z.string(),
       trusted_at: z.string(),
       was_already_trusted: z.boolean(),
+      // T-P2-008: optional approval mode. Older daemons won't send it;
+      // the extension defaults to "per_call" when absent.
+      mode: z.enum(["auto", "per_call", "session_bypass"]).optional(),
     })
     .strict(),
   z
@@ -103,6 +125,8 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("deregister_workspace_ok") }).strict(),
+  // T-P2-008: ack for the set_workspace_mode IPC request
+  z.object({ kind: z.literal("set_workspace_mode_ok") }).strict(),
   z
     .object({
       kind: z.literal("error"),
@@ -139,3 +163,41 @@ export type DeregisterWorkspaceOkResponse = Extract<
   { kind: "deregister_workspace_ok" }
 >;
 export type ErrorResponse = Extract<IpcResponse, { kind: "error" }>;
+export type SetWorkspaceModeOkResponse = Extract<
+  IpcResponse,
+  { kind: "set_workspace_mode_ok" }
+>;
+
+// T-P2-008: daemon-initiated messages. Distinct discriminated union from
+// IpcRequest/IpcResponse because daemon→extension push has no
+// request/response correlation — the daemon-side push wakes a pending
+// approval-await, and the extension's eventual `approval_response` is an
+// independent IpcRequest with the matching `delegation_id`.
+//
+// The extension's data-handler routing distinguishes IpcServerMessage from
+// IpcResponse by attempting IpcServerMessageSchema parse first (smaller
+// union); on parse failure, falls through to IpcResponse parsing. All
+// schemas use `.strict()`, so the parse-or-fail discrimination is reliable.
+export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("approval_request"),
+      delegation_id: z.string(),
+      identifier: z.string(),
+      prompt: z.string(),
+      mode_requested: z.enum(["read_only", "agentic"]),
+      estimated_size: z
+        .object({
+          exhibits_count: z.number().int().nonnegative(),
+          total_inline_bytes: z.number().int().nonnegative(),
+        })
+        .optional(),
+      timestamp: z.string(),
+    })
+    .strict(),
+]);
+export type IpcServerMessage = z.infer<typeof IpcServerMessageSchema>;
+export type ApprovalRequest = Extract<
+  IpcServerMessage,
+  { kind: "approval_request" }
+>;

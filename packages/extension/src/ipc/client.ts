@@ -12,6 +12,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import * as vscode from "vscode";
+import {
+  IpcServerMessageSchema,
+  type ApprovalRequest,
+} from "@claude-bridge/shared";
 
 const WINDOWS_PIPE_PATH = "\\\\.\\pipe\\claude-bridge";
 const IPC_CLIENT_VERSION = "1.0";
@@ -90,6 +94,16 @@ export class IpcClient {
   // onStateChange); pattern doc promotion deferred to post-T-P2-006
   // housekeeping.
   public onStateChange?: (state: ConnectionStateKind) => void;
+  // T-P2-008: fires on each daemon-initiated approval_request. Subscriber
+  // receives the parsed request and is expected to surface a modal +
+  // send the approval_response back via ipcClient.request(). Errors
+  // swallowed (subscriber failures must not break the state machine).
+  // Fourth instance of the "settable single-subscriber callback field"
+  // pattern; pattern doc must include C-26 field-vs-state ordering when
+  // promoted (this callback fires AFTER parse, so no ordering concern
+  // applies here — the callback runs to completion before the next data
+  // chunk is processed).
+  public onApprovalRequest?: (request: ApprovalRequest) => Promise<void>;
 
   constructor(
     private readonly endpoint: string,
@@ -100,6 +114,17 @@ export class IpcClient {
 
   getConnectionState(): ConnectionStateKind {
     return this.state;
+  }
+
+  // T-P2-008: fire-and-forget send. Used for messages that have no
+  // corresponding daemon response (approval_response is the first such
+  // message — daemon resolves the pending awaitApproval but never acks
+  // the response back to the extension).
+  send(message: unknown): void {
+    if (this.state !== "connected" || this.socket === null) {
+      throw new Error(`ipc-client: not connected (state=${this.state})`);
+    }
+    this.socket.write(JSON.stringify(message) + "\n");
   }
 
   // Send a request on the established connection and await the next
@@ -236,17 +261,29 @@ export class IpcClient {
               return;
             }
           } else {
-            // Post-hello: dispatch to the single-flight pending-request
-            // handler. Lines arriving with no pending request are a
-            // protocol invariant violation; log and drop rather than
-            // crash (P2 doesn't have a server-push channel).
-            if (this.pending !== null) {
+            // Post-hello: discriminate IpcServerMessage (daemon-initiated)
+            // from IpcResponse (response to outbound request). Both use
+            // `.strict()` so a non-matching parse fails fast; we try the
+            // smaller union first (T-P2-008 server-message channel).
+            const serverMsg = IpcServerMessageSchema.safeParse(parsed);
+            if (serverMsg.success) {
+              if (serverMsg.data.kind === "approval_request" && this.onApprovalRequest !== undefined) {
+                // Subscriber errors are swallowed — must not corrupt the
+                // line-buffer state machine. Subscriber is responsible
+                // for sending its own approval_response back via
+                // request<R>() (which expects no response — handled by
+                // a write-only path; see ipcClient.write below).
+                void this.onApprovalRequest(serverMsg.data).catch(() => {
+                  // intentional swallow
+                });
+              }
+            } else if (this.pending !== null) {
+              // Standard response-to-pending-request path.
               const p = this.pending;
               this.pending = null;
               p.resolve(parsed);
             }
-            // else: drop silently (no current caller; future server-push
-            // could land here).
+            // else: drop silently.
           }
           idx = buffer.indexOf("\n");
         }

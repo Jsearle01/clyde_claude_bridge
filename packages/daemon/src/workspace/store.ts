@@ -20,6 +20,7 @@ import {
   WorkspaceStoreSchema,
   normalizeAbsPath,
   type WorkspaceEntry,
+  type WorkspaceMode,
   type WorkspaceStore,
 } from "@claude-bridge/shared";
 import type { Logger } from "../log/logger.js";
@@ -104,6 +105,19 @@ export class WorkspacesStore {
   list(): WorkspaceEntry[] {
     this.assertLoaded();
     return [...this.store.entries];
+  }
+
+  // T-P2-008: per-workspace approval mode setter. Updates in-memory + on
+  // disk via the same atomic writeFile path as addTrustedEntry. Throws
+  // when the identifier isn't found (caller should validate first).
+  async setMode(identifier: string, mode: WorkspaceMode): Promise<void> {
+    this.assertLoaded();
+    const entry = this.store.entries.find((e) => e.identifier === identifier);
+    if (entry === undefined) {
+      throw new Error(`setMode: identifier ${identifier} not found`);
+    }
+    entry.mode = mode;
+    await this.writeFile();
   }
 
   private async dedupeOnLoad(): Promise<void> {

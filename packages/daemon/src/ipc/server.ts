@@ -15,6 +15,7 @@ import {
   IpcRequestSchema,
   type IpcRequest,
   type IpcResponse,
+  type IpcServerMessage,
   type StatusPayload,
 } from "@claude-bridge/shared";
 import {
@@ -26,6 +27,7 @@ import {
 import type { Logger } from "../log/logger.js";
 import type { WorkspacesStore } from "../workspace/store.js";
 import { generateIdentifier } from "../workspace/identifier.js";
+import type { ApprovalGate } from "../approval/gate.js";
 
 const WINDOWS_PIPE_PATH = "\\\\.\\pipe\\claude-bridge";
 
@@ -107,6 +109,10 @@ export class IpcServer {
   private readonly handlers: IpcHandlers;
   private readonly logger: Logger;
   private readonly workspacesStore: WorkspacesStore | null;
+  // T-P2-008: optional approval gate. Wired in main.ts. When absent
+  // (legacy daemon-construction without gate), set_workspace_mode and
+  // approval_response requests respond with a protocol_error.
+  private approvalGate: ApprovalGate | null = null;
   private server: Server | null = null;
   private closed = false;
   // Per-connection state populated after a successful hello exchange.
@@ -122,6 +128,35 @@ export class IpcServer {
   // observe connection state but can't mutate IPC server state.
   public getActiveRegistry(): ReadonlyMap<string, ActiveRegistration> {
     return this.activeRegistry;
+  }
+
+  // T-P2-008: post-construction approval-gate wire-up. Called by main.ts
+  // after the gate is constructed (the gate needs the IpcServer in turn
+  // to send approval_request messages, so order is: ipcServer → gate →
+  // ipcServer.setApprovalGate(gate)).
+  public setApprovalGate(gate: ApprovalGate): void {
+    this.approvalGate = gate;
+  }
+
+  // T-P2-008: send a daemon-initiated message to the connection
+  // associated with `identifier`. Throws if no active connection exists
+  // for that workspace. Used by ApprovalGate to deliver approval_request.
+  public sendServerMessage(
+    identifier: string,
+    message: IpcServerMessage,
+  ): Promise<void> {
+    const entry = this.findActiveByIdentifier(identifier);
+    if (entry === null) {
+      return Promise.reject(
+        new Error(`no active extension connection for workspace ${identifier}`),
+      );
+    }
+    return new Promise((resolve, reject) => {
+      entry.entry.socket.write(encodeMessage(message), (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   }
 
   constructor(
@@ -404,7 +439,9 @@ export class IpcServer {
       case "hello":
       case "register_workspace":
       case "confirm_trust":
-      case "deregister_workspace": {
+      case "deregister_workspace":
+      case "set_workspace_mode":
+      case "approval_response": {
         // These are handled inline in dispatchLine (workspace cases need
         // per-socket access; hello is handled in the gate above). They
         // never reach this switch.
@@ -415,11 +452,23 @@ export class IpcServer {
 
   private removeActiveRegistrationsForSocket(socket: Socket): void {
     const stalePaths: string[] = [];
+    const staleIdentifiers: string[] = [];
     for (const [path, entry] of this.activeRegistry) {
-      if (entry.socket === socket) stalePaths.push(path);
+      if (entry.socket === socket) {
+        stalePaths.push(path);
+        staleIdentifiers.push(entry.identifier);
+      }
     }
     for (const path of stalePaths) {
       this.activeRegistry.delete(path);
+    }
+    // T-P2-008: cancel any pending approvals for these workspaces and
+    // clear session-bypass state. The approval gate's cancelByWorkspace
+    // rejects each pending awaitApproval with "extension_reconnected".
+    if (this.approvalGate !== null) {
+      for (const identifier of staleIdentifiers) {
+        this.approvalGate.cancelByWorkspace(identifier, "extension_reconnected");
+      }
     }
   }
 
@@ -441,12 +490,73 @@ export class IpcServer {
     state: ConnectionState,
     request: IpcRequest,
   ): Promise<boolean> {
+    // T-P2-008: approval_response and set_workspace_mode also flow
+    // through this handler. They share the per-socket access pattern
+    // (state validation + workspaces-store + active-registry).
     if (
       request.kind !== "register_workspace" &&
       request.kind !== "confirm_trust" &&
-      request.kind !== "deregister_workspace"
+      request.kind !== "deregister_workspace" &&
+      request.kind !== "set_workspace_mode" &&
+      request.kind !== "approval_response"
     ) {
       return false;
+    }
+    // approval_response is processed in a dedicated path below — it
+    // routes to the gate and writes no response.
+    if (request.kind === "approval_response") {
+      if (this.approvalGate !== null) {
+        this.approvalGate.resolveApproval(
+          request.delegation_id,
+          request.decision,
+        );
+      }
+      return true;
+    }
+    if (request.kind === "set_workspace_mode") {
+      if (this.approvalGate === null) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: "approval gate not configured on this daemon",
+          reason: "protocol_error",
+        });
+        return true;
+      }
+      if (this.workspacesStore === null) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: "workspaces store not configured on this daemon",
+          reason: "protocol_error",
+        });
+        return true;
+      }
+      const entry = this.workspacesStore.findByIdentifier(request.identifier);
+      if (entry === null) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: `no workspace registered with identifier '${request.identifier}'`,
+          reason: "no_workspace_registered",
+        });
+        return true;
+      }
+      // Authorization: only the connection that holds this workspace's
+      // active registration may change its mode. Prevents one extension
+      // from flipping another window's mode.
+      const found = this.findActiveByIdentifier(request.identifier);
+      if (found === null || found.entry.socket !== socket) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: `set_workspace_mode: identifier ${request.identifier} not held by this connection`,
+          reason: "protocol_error",
+        });
+        return true;
+      }
+      await this.approvalGate.setModeForWorkspace(
+        request.identifier,
+        request.mode,
+      );
+      await this.writeResponse(socket, { kind: "set_workspace_mode_ok" });
+      return true;
     }
 
     if (this.workspacesStore === null) {
@@ -483,6 +593,7 @@ export class IpcServer {
           abs_path: trusted.abs_path,
           trusted_at: trusted.trusted_at,
           was_already_trusted: true,
+          mode: trusted.mode ?? "per_call",
         });
         return true;
       }
@@ -520,6 +631,7 @@ export class IpcServer {
           abs_path: alreadyTrusted.abs_path,
           trusted_at: alreadyTrusted.trusted_at,
           was_already_trusted: true,
+          mode: alreadyTrusted.mode ?? "per_call",
         });
         return true;
       }
@@ -546,6 +658,7 @@ export class IpcServer {
         abs_path: entry.abs_path,
         trusted_at: entry.trusted_at,
         was_already_trusted: false,
+        mode: entry.mode ?? "per_call",
       });
       return true;
     }

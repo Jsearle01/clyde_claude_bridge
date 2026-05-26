@@ -35,6 +35,16 @@ export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 export const WorkspaceTrustStateSchema = z.enum(["trusted"]);
 export type WorkspaceTrustState = z.infer<typeof WorkspaceTrustStateSchema>;
 
+// T-P2-008: per-workspace approval mode. Optional in the schema so older
+// workspaces.json files load unchanged; reader logic in the daemon's
+// WorkspacesStore defaults missing values to "per_call".
+export const WorkspaceModeSchema = z.enum([
+  "auto",
+  "per_call",
+  "session_bypass",
+]);
+export type WorkspaceMode = z.infer<typeof WorkspaceModeSchema>;
+
 export const WorkspaceEntrySchema = z
   .object({
     abs_path: z.string().min(1),
@@ -42,6 +52,7 @@ export const WorkspaceEntrySchema = z
     name: z.string().min(1),
     trust_state: WorkspaceTrustStateSchema,
     trusted_at: z.string(),
+    mode: WorkspaceModeSchema.optional(),
   })
   .strict();
 export type WorkspaceEntry = z.infer<typeof WorkspaceEntrySchema>;

@@ -8,6 +8,7 @@
 // selected action.
 
 import * as vscode from "vscode";
+import type { WorkspaceMode } from "@claude-bridge/shared";
 import type { StatusBarSources, DaemonInfo } from "./status-bar.js";
 import { runStartDaemonCommand } from "./daemon-lifecycle.js";
 
@@ -17,7 +18,17 @@ export type MenuAction =
   | { kind: "stop_daemon_hint" }
   | { kind: "open_daemon_url"; url: string }
   | { kind: "copy_identifier"; identifier: string }
-  | { kind: "info_only"; message: string };
+  | { kind: "info_only"; message: string }
+  // T-P2-008: opens a secondary QuickPick to pick a new approval mode.
+  | { kind: "change_approval_mode"; identifier: string; current_mode: WorkspaceMode };
+
+// T-P2-008: apply-mode adapter. The dispatch router calls this after
+// the user selects a new mode in the secondary QuickPick. Implementation
+// in extension.ts wires ipcClient.request + registration.setCurrentMode.
+export type ApplyMode = (
+  identifier: string,
+  mode: WorkspaceMode,
+) => Promise<void>;
 
 export interface MenuItem {
   label: string;
@@ -28,11 +39,15 @@ export interface MenuItem {
 export interface StatusBarMenuDeps {
   showQuickPick?: typeof vscode.window.showQuickPick;
   showInformationMessage?: typeof vscode.window.showInformationMessage;
+  showErrorMessage?: typeof vscode.window.showErrorMessage;
   executeCommand?: typeof vscode.commands.executeCommand;
   clipboardWriteText?: (s: string) => PromiseLike<void>;
   runStartDaemon?: (
     context: vscode.ExtensionContext,
   ) => Promise<void>;
+  // T-P2-008: callback used by the change_approval_mode action to send
+  // set_workspace_mode via IPC and apply the new mode locally on success.
+  applyMode?: ApplyMode;
 }
 
 const STOP_HINT_TEXT =
@@ -70,6 +85,18 @@ export function composeMenuItems(sources: StatusBarSources): MenuItem[] {
         label: "$(clippy) Copy Identifier",
         description: identifier,
         action: { kind: "copy_identifier", identifier },
+      });
+      // T-P2-008: Change approval mode (only when registered, so the
+      // daemon can ack set_workspace_mode against the active identifier).
+      const currentMode = sources.getCurrentMode();
+      items.push({
+        label: "$(gear) Change approval mode",
+        description: `Current: ${currentMode}`,
+        action: {
+          kind: "change_approval_mode",
+          identifier,
+          current_mode: currentMode,
+        },
       });
     }
     // Stop hint (descriptive — no spawn).
@@ -113,11 +140,14 @@ export function makeStatusBarMenu(
   const showQuickPick = deps.showQuickPick ?? vscode.window.showQuickPick;
   const showInfo =
     deps.showInformationMessage ?? vscode.window.showInformationMessage;
+  const showError =
+    deps.showErrorMessage ?? vscode.window.showErrorMessage;
   const executeCommand = deps.executeCommand ?? vscode.commands.executeCommand;
   const clipboardWriteText =
     deps.clipboardWriteText ??
     ((s: string): PromiseLike<void> => vscode.env.clipboard.writeText(s));
   const runStart = deps.runStartDaemon ?? runStartDaemonCommand;
+  const applyMode = deps.applyMode;
   return async (): Promise<void> => {
     const items = composeMenuItems(sources);
     const selected = await showQuickPick(items);
@@ -128,6 +158,9 @@ export function makeStatusBarMenu(
       executeCommand,
       clipboardWriteText,
       showInfo,
+      showError,
+      showQuickPick,
+      applyMode,
     });
   };
 }
@@ -138,7 +171,20 @@ interface DispatchDeps {
   executeCommand: typeof vscode.commands.executeCommand;
   clipboardWriteText: (s: string) => PromiseLike<void>;
   showInfo: typeof vscode.window.showInformationMessage;
+  showError: typeof vscode.window.showErrorMessage;
+  showQuickPick: typeof vscode.window.showQuickPick;
+  applyMode: ApplyMode | undefined;
 }
+
+interface ModeMenuItem extends vscode.QuickPickItem {
+  mode: WorkspaceMode;
+}
+
+const MODE_PICK_ITEMS: ModeMenuItem[] = [
+  { label: "Auto (no prompts)", mode: "auto" },
+  { label: "Per call (default)", mode: "per_call" },
+  { label: "Session bypass", mode: "session_bypass" },
+];
 
 async function dispatchAction(
   action: MenuAction,
@@ -164,6 +210,26 @@ async function dispatchAction(
     case "info_only":
       await deps.showInfo(action.message);
       return;
+    case "change_approval_mode": {
+      const selected = await deps.showQuickPick(MODE_PICK_ITEMS);
+      if (selected === undefined) return;
+      if (selected.mode === action.current_mode) {
+        await deps.showInfo(`Mode already ${selected.mode}.`);
+        return;
+      }
+      if (deps.applyMode === undefined) {
+        await deps.showError("applyMode dep not wired (test harness?)");
+        return;
+      }
+      try {
+        await deps.applyMode(action.identifier, selected.mode);
+        await deps.showInfo(`Approval mode set to ${selected.mode}.`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await deps.showError(`Failed to change mode: ${msg}`);
+      }
+      return;
+    }
   }
 }
 

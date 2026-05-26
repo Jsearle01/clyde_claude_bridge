@@ -17,6 +17,7 @@ function makeSources(overrides: Partial<{
   existingPid: number | null;
   folder: WorkspaceFolder | undefined;
   daemonInfo: DaemonInfo | undefined;
+  currentMode: ReturnType<StatusBarSources["getCurrentMode"]>;
 }>): StatusBarSources {
   const opts = {
     conn: "connected" as const,
@@ -25,6 +26,7 @@ function makeSources(overrides: Partial<{
     existingPid: null,
     folder: { uri: { fsPath: "/projects/myproject" }, name: "myproject" },
     daemonInfo: undefined as DaemonInfo | undefined,
+    currentMode: "per_call" as const,
     ...overrides,
   };
   return {
@@ -34,6 +36,7 @@ function makeSources(overrides: Partial<{
     getRegistrationExistingPid: () => opts.existingPid,
     getWorkspaceFolder: () => opts.folder,
     getDaemonInfo: () => opts.daemonInfo,
+    getCurrentMode: () => opts.currentMode,
   };
 }
 
@@ -205,3 +208,144 @@ describe("makeStatusBarMenu dispatch (T-P2-006)", () => {
     expect(runStart).not.toHaveBeenCalled();
   });
 });
+
+describe("composeMenuItems — change_approval_mode (T-P2-008)", () => {
+  it("includes Change approval mode when registered + connected", () => {
+    const items = composeMenuItems(
+      makeSources({ currentMode: "per_call" }),
+    );
+    const changeMode = items.find(
+      (i) => i.action.kind === "change_approval_mode",
+    );
+    expect(changeMode).toBeDefined();
+    expect(changeMode?.description).toContain("per_call");
+  });
+
+  it("description reflects current mode", () => {
+    const items = composeMenuItems(
+      makeSources({ currentMode: "auto" }),
+    );
+    const changeMode = items.find(
+      (i) => i.action.kind === "change_approval_mode",
+    );
+    expect(changeMode?.description).toContain("auto");
+  });
+
+  it("omits Change approval mode when unregistered", () => {
+    const items = composeMenuItems(
+      makeSources({ reg: "unregistered", identifier: null }),
+    );
+    const kinds = items.map((i) => i.action.kind);
+    expect(kinds).not.toContain("change_approval_mode");
+  });
+
+  it("omits Change approval mode when disconnected", () => {
+    const items = composeMenuItems(
+      makeSources({ conn: "disconnected" }),
+    );
+    const kinds = items.map((i) => i.action.kind);
+    expect(kinds).not.toContain("change_approval_mode");
+  });
+});
+
+describe("makeStatusBarMenu dispatch — change_approval_mode (T-P2-008)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeChangeModeHarness(opts: {
+    currentMode: "auto" | "per_call" | "session_bypass";
+    pickResult: { mode: "auto" | "per_call" | "session_bypass" } | undefined;
+    applyMode?: ReturnType<typeof vi.fn>;
+  }) {
+    const showInfo = vi.fn(() => Promise.resolve(undefined));
+    const showError = vi.fn(() => Promise.resolve(undefined));
+    const executeCommand = vi.fn(() => Promise.resolve(undefined));
+    const clipboardWriteText = vi.fn(() => Promise.resolve());
+    const runStart = vi.fn(() => Promise.resolve());
+    let pickCallCount = 0;
+    const showQuickPick = vi.fn((items: unknown[]) => {
+      pickCallCount += 1;
+      if (pickCallCount === 1) {
+        const arr = items as MenuItem[];
+        const sel = arr.find((i) => i.action.kind === "change_approval_mode");
+        return Promise.resolve(sel);
+      }
+      // Second call: the mode-selection QuickPick.
+      return Promise.resolve(opts.pickResult);
+    });
+    const applyMode = opts.applyMode ?? vi.fn(() => Promise.resolve());
+    const fakeContext = {
+      subscriptions: [],
+      secrets: { get: vi.fn(), store: vi.fn(), delete: vi.fn() },
+    } as unknown as vscode.ExtensionContext;
+    const handler = makeStatusBarMenu(
+      makeSources({ currentMode: opts.currentMode }),
+      fakeContext,
+      {
+        showQuickPick: showQuickPick as never,
+        showInformationMessage: showInfo as never,
+        showErrorMessage: showError as never,
+        executeCommand,
+        clipboardWriteText,
+        runStartDaemon: runStart,
+        applyMode,
+      },
+    );
+    return { handler, showInfo, showError, applyMode };
+  }
+
+  it("selecting a different mode calls applyMode + shows confirmation", async () => {
+    const applyMode = vi.fn(() => Promise.resolve());
+    const { handler, showInfo } = makeChangeModeHarness({
+      currentMode: "per_call",
+      pickResult: { mode: "auto" },
+      applyMode,
+    });
+    await handler();
+    expect(applyMode).toHaveBeenCalledWith("myproject-aaaaaa", "auto");
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining("auto"));
+  });
+
+  it("selecting the current mode is a no-op (shows 'already X')", async () => {
+    const applyMode = vi.fn(() => Promise.resolve());
+    const { handler, showInfo } = makeChangeModeHarness({
+      currentMode: "per_call",
+      pickResult: { mode: "per_call" },
+      applyMode,
+    });
+    await handler();
+    expect(applyMode).not.toHaveBeenCalled();
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining("already"));
+  });
+
+  it("dismissing the secondary QuickPick is silent", async () => {
+    const applyMode = vi.fn(() => Promise.resolve());
+    const { handler, showInfo, showError } = makeChangeModeHarness({
+      currentMode: "per_call",
+      pickResult: undefined,
+      applyMode,
+    });
+    await handler();
+    expect(applyMode).not.toHaveBeenCalled();
+    expect(showInfo).not.toHaveBeenCalled();
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it("applyMode failure surfaces via showErrorMessage", async () => {
+    const applyMode = vi.fn(() => Promise.reject(new Error("daemon refused")));
+    const { handler, showError } = makeChangeModeHarness({
+      currentMode: "per_call",
+      pickResult: { mode: "auto" },
+      applyMode,
+    });
+    await handler();
+    expect(showError).toHaveBeenCalledWith(
+      expect.stringContaining("daemon refused"),
+    );
+  });
+});
+
+// Re-export TRUST_DENIED_HINT for any downstream test consumers (matches
+// the existing pattern of exporting menu text constants).
+void TRUST_DENIED_HINT;

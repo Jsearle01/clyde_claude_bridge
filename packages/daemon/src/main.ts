@@ -38,6 +38,8 @@ import { validateWorkspaceConfig } from "./workspace/config.js";
 import { JobQueue } from "./jobs/index.js";
 import { DailyTimer } from "./util/daily-timer.js";
 import { scanTranscriptOrphans } from "./jobs/transcript-orphan.js";
+import { PendingApprovalRegistry } from "./approval/pending.js";
+import { ApprovalGateImpl } from "./approval/gate.js";
 import {
   writePidFile,
   checkStalePid,
@@ -55,6 +57,7 @@ export interface DaemonComponents {
   tunnelManager: TunnelManager;
   auditLog: AuditLog;
   dailyTimer: DailyTimer;
+  pendingApprovals: PendingApprovalRegistry;
   logger: Logger;
   pidPath: string;
 }
@@ -82,6 +85,11 @@ export async function shutdown(
 
   const layers: Array<{ name: string; stop: () => Promise<void> }> = [
     { name: "ipc", stop: () => components.ipcServer.stop() },
+    // T-P2-008: approval layer between ipc stop and mcp stop. After ipc
+    // stop, no new approval_requests can be queued; before mcp stop, in-
+    // flight approval-awaits must reject so the MCP handlers can throw
+    // daemon_shutting_down instead of timing out 5 min later.
+    { name: "approval", stop: () => components.pendingApprovals.stop() },
     { name: "mcp", stop: () => components.mcpServer.stop() },
     { name: "tunnel", stop: () => components.tunnelManager.stop() },
     { name: "audit", stop: () => components.auditLog.stop() },
@@ -233,6 +241,26 @@ async function main(): Promise<void> {
     workspace_count: workspaceRegistry.list().length,
   });
 
+  // 5.55. Approval gate (P2 — T-P2-008). Composes WorkspacesStore (mode
+  // reader/writer) + PendingApprovalRegistry (in-flight approvals) +
+  // extension-IPC sender (the gate sends approval_request via
+  // ipcServer.sendServerMessage; resolved post-ipcServer construction
+  // through a forward-declared thunk, same pattern as workspaceRegistry's
+  // getActiveRegistry).
+  const pendingApprovals = new PendingApprovalRegistry();
+  const approvalGate = new ApprovalGateImpl(
+    workspacesStore,
+    pendingApprovals,
+    (identifier, request) => {
+      const server = ipcServerRef.current;
+      if (server === null) {
+        return Promise.reject(new Error("ipcServer not yet constructed"));
+      }
+      return server.sendServerMessage(identifier, request);
+    },
+  );
+  logger.info("approval gate initialized");
+
   // 5.6. Job queue (P1). In-memory single-concurrent queue; 24h retention
   // via the daily timer below. Threaded into tool factories at Phase 4.
   const jobQueue = new JobQueue();
@@ -298,6 +326,7 @@ async function main(): Promise<void> {
     registry: workspaceRegistry,
     queue: jobQueue,
     runner: jobRunner,
+    approvalGate,
   };
   registry.register(makeDelegateTool(toolDeps));
   registry.register(makePollTool({ queue: jobQueue }));
@@ -411,6 +440,9 @@ async function main(): Promise<void> {
   // getter returns an empty Map (forward-looking — T-P2-007's resolve()
   // doesn't read it; P2-008+ may).
   ipcServerRef.current = ipcServer;
+  // T-P2-008: wire the approval gate into the IPC server so disconnect-
+  // cleanup can cancel in-flight approvals + clear session-bypass state.
+  ipcServer.setApprovalGate(approvalGate);
 
   components = {
     ipcServer,
@@ -418,6 +450,7 @@ async function main(): Promise<void> {
     tunnelManager,
     auditLog,
     dailyTimer,
+    pendingApprovals,
     logger,
     pidPath,
   };

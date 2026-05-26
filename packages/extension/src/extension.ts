@@ -7,6 +7,7 @@ import {
 } from "./daemon-lifecycle.js";
 import { makeStatusBar, type StatusBarSources } from "./status-bar.js";
 import { makeStatusBarMenu } from "./status-bar-menu.js";
+import { makeApprovalHandler } from "./approval-modal.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
   disconnected: "disconnected",
@@ -73,6 +74,8 @@ export function activate(context: vscode.ExtensionContext): void {
     // T-P2-007+ may surface daemon pid/url/uptime once the registry
     // replacement lands; tooltip degrades gracefully when undefined.
     getDaemonInfo: () => undefined,
+    // T-P2-008: current approval mode for the registered workspace.
+    getCurrentMode: () => registration?.getCurrentMode() ?? "per_call",
   };
   const statusBar = makeStatusBar(statusBarSources);
   statusBar.refresh();
@@ -81,7 +84,35 @@ export function activate(context: vscode.ExtensionContext): void {
   ipcClient.onStateChange = () => statusBar.refresh();
   registration.onStateChange = () => statusBar.refresh();
 
-  const statusBarMenuHandler = makeStatusBarMenu(statusBarSources, context);
+  // T-P2-008: wire the approval-modal handler so daemon-initiated
+  // approval_request messages surface as a modal in VS Code.
+  ipcClient.onApprovalRequest = makeApprovalHandler(ipcClient);
+
+  const statusBarMenuHandler = makeStatusBarMenu(statusBarSources, context, {
+    // T-P2-008: applyMode sends set_workspace_mode via IPC; on success
+    // updates the registration's local currentMode and refreshes the
+    // status bar so the menu's next open reflects the new value.
+    applyMode: async (identifier, mode) => {
+      const client = ipcClient;
+      const reg = registration;
+      if (client === null || reg === null) {
+        throw new Error("ipc client or registration not initialized");
+      }
+      const response = await client.request<{
+        kind?: string;
+        message?: string;
+      }>({
+        kind: "set_workspace_mode",
+        identifier,
+        mode,
+      });
+      if (response.kind !== "set_workspace_mode_ok") {
+        throw new Error(response.message ?? "set_workspace_mode failed");
+      }
+      reg.setCurrentMode(mode);
+      statusBar.refresh();
+    },
+  });
   const statusBarMenuCmd = vscode.commands.registerCommand(
     "claudeBridge.openStatusBarMenu",
     statusBarMenuHandler,

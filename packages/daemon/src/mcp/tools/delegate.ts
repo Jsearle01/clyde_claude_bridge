@@ -15,9 +15,17 @@ import { ToolHandlerError, type ToolDef } from "../dispatch.js";
 import type { JobQueue } from "../../jobs/queue.js";
 import type { JobRunner } from "../../jobs/runner.js";
 import type { WorkspaceRegistry } from "../../workspace/registry.js";
+import type { ApprovalGate } from "../../approval/gate.js";
+import {
+  awaitApprovalForDelegation,
+  generateDelegationId,
+  truncateForApproval,
+} from "../../approval/gate.js";
+import { ApprovalRejectedError } from "../../approval/pending.js";
 
 const MAX_EXHIBITS = 100;
 const MAX_INLINE_BYTES = 256 * 1024;
+const APPROVAL_PROMPT_TRUNCATION = 500;
 // No prompt size cap in P1; SDK and Anthropic API enforce real limits.
 // Add a cap here if pathological input surfaces in practice. The 32KB
 // figure in 02-p1-delegation.md validation rules was speculative
@@ -28,6 +36,7 @@ export interface DelegateDeps {
   registry: WorkspaceRegistry;
   queue: JobQueue;
   runner: JobRunner;
+  approvalGate: ApprovalGate;
 }
 
 /** Strict cwd resolution per Decision 1, T-P1-004. Returns the resolved
@@ -89,9 +98,6 @@ export function makeDelegateTool(
     description:
       "Delegate a task to Claude Code running against a registered workspace. Returns a job id for polling.",
     inputSchema: DelegateInputSchema,
-    // async so synchronous throws (ToolHandlerError) become rejected
-    // promises — vitest's expect(...).rejects requires a Promise.
-    // eslint-disable-next-line @typescript-eslint/require-await
     async handler(input, ctx) {
       // Workspace resolution (T-P2-007: strict rejection on unknown
       // identifier; the wire schema now requires the workspace field, so
@@ -131,6 +137,71 @@ export function makeDelegateTool(
       // Mode + cwd resolution
       const mode = input.mode ?? workspace.default_mode;
       const cwd = resolveCwd(workspace.abs_path, input.working_directory);
+
+      // T-P2-008: approval gate. Inserts after all validation, before
+      // enqueue. The gate decides whether to skip (auto mode), prompt
+      // the user, or pass-through (session-bypassed). Decision flows back
+      // into the gate; only "deny"/error short-circuits this handler.
+      try {
+        const decision = await awaitApprovalForDelegation(
+          deps.approvalGate,
+          workspace.id,
+          {
+            kind: "approval_request",
+            delegation_id: generateDelegationId(),
+            identifier: workspace.id,
+            prompt: truncateForApproval(input.prompt, APPROVAL_PROMPT_TRUNCATION),
+            mode_requested: mode,
+            estimated_size: {
+              exhibits_count: exhibits.length,
+              total_inline_bytes: totalInlineBytes,
+            },
+            timestamp: new Date().toISOString(),
+          },
+        );
+        if (decision === "deny") {
+          throw new ToolHandlerError(
+            403,
+            "delegation_denied",
+            "user denied the delegation",
+          );
+        }
+        // "approve" or "approve_session" — proceed. (markSessionBypassed
+        // for the latter is handled inside awaitApprovalForDelegation.)
+      } catch (err) {
+        if (err instanceof ToolHandlerError) throw err;
+        if (err instanceof ApprovalRejectedError) {
+          if (err.reason === "timeout") {
+            throw new ToolHandlerError(
+              408,
+              "approval_timeout",
+              "user did not approve within 5 minutes",
+            );
+          }
+          if (err.reason === "shutdown") {
+            throw new ToolHandlerError(
+              503,
+              "daemon_shutting_down",
+              "daemon is shutting down; approval cancelled",
+            );
+          }
+          if (err.reason === "extension_reconnected") {
+            throw new ToolHandlerError(
+              408,
+              "approval_extension_reconnected",
+              "extension reconnected mid-approval; please retry",
+            );
+          }
+          if (err.reason === "workspace_deregistered") {
+            throw new ToolHandlerError(
+              503,
+              "workspace_no_longer_registered",
+              "workspace deregistered mid-approval",
+            );
+          }
+        }
+        throw err;
+      }
 
       // Enqueue
       const { job, queued_position } = deps.queue.enqueue({

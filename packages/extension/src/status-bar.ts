@@ -8,6 +8,7 @@
 // for the connection × registration cross-product table.
 
 import * as vscode from "vscode";
+import type { WorkspaceMode } from "@claude-bridge/shared";
 import type { ConnectionStateKind } from "./ipc/client.js";
 import type { RegistrationState } from "./registration.js";
 
@@ -27,6 +28,10 @@ export interface StatusBarSources {
   // T-P2-006 stubs return undefined; T-P2-007+ may wire actual daemon
   // info via IPC.
   getDaemonInfo(): DaemonInfo | undefined;
+  // T-P2-008: current approval mode for the registered workspace.
+  // Status-bar menu reads this to display "Change approval mode (current:
+  // X)". Returns "per_call" default when no workspace registered.
+  getCurrentMode(): WorkspaceMode;
 }
 
 export interface StatusBarDeps {

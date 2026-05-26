@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,11 @@ import { StubJobRunner } from "../../../src/jobs/runner.js";
 import { AuditLog } from "../../../src/audit/log.js";
 import type { Logger } from "../../../src/log/logger.js";
 import type { DaemonState } from "../../../src/state.js";
+import type { ApprovalGate } from "../../../src/approval/gate.js";
+import {
+  PendingApprovalRegistry,
+  ApprovalRejectedError,
+} from "../../../src/approval/pending.js";
 
 const silentLogger: Logger = {
   debug: () => undefined,
@@ -76,7 +81,36 @@ function makeTestRegistry(workspaces: Workspace[]): WorkspaceRegistry {
   };
 }
 
-function makeDeps(opts: { workspaceConfigured?: boolean } = {}) {
+// T-P2-008: stub approval gate. Defaults to "auto" so existing tests
+// pass through without prompting; tests that need other modes override
+// via overrides param.
+function makeStubGate(mode: "auto" | "per_call" | "session_bypass" = "auto"): ApprovalGate {
+  const pending = new PendingApprovalRegistry();
+  const sessionBypassed = new Set<string>();
+  let currentMode = mode;
+  return {
+    getModeForWorkspace: () => currentMode,
+    isSessionBypassed: (id) => sessionBypassed.has(id),
+    markSessionBypassed: (id) => sessionBypassed.add(id),
+    clearSessionBypass: (id) => sessionBypassed.delete(id),
+    requestApproval: (req) => {
+      // Default behavior: pending forever until test calls resolve via
+      // returned helper. Tests that don't override should use "auto" mode
+      // so this path doesn't fire.
+      return pending.awaitApproval(req);
+    },
+    setModeForWorkspace: (_id, m) => {
+      currentMode = m;
+      return Promise.resolve();
+    },
+    resolveApproval: (id, dec) => pending.resolve(id, dec),
+    cancelByWorkspace: (id, reason) => pending.cancelByWorkspace(id, reason),
+    pendingSize: () => pending.size(),
+    stop: () => pending.stop(),
+  };
+}
+
+function makeDeps(opts: { workspaceConfigured?: boolean; mode?: "auto" | "per_call" | "session_bypass"; gate?: ApprovalGate } = {}) {
   const workspaces: Workspace[] =
     opts.workspaceConfigured !== false
       ? [
@@ -91,6 +125,7 @@ function makeDeps(opts: { workspaceConfigured?: boolean } = {}) {
     registry: makeTestRegistry(workspaces),
     queue: new JobQueue(),
     runner: new StubJobRunner(new JobQueue()), // runner's queue independent for tickle no-op
+    approvalGate: opts.gate ?? makeStubGate(opts.mode),
   };
 }
 
@@ -259,6 +294,108 @@ describe("resolveCwd", () => {
     // Workspace exists; subdir does not. Realpath would ENOENT; allowed
     // since textual check passes — the SDK can choose to create it.
     expect(() => resolveCwd(root, "will-be-created")).not.toThrow();
+  });
+});
+
+describe("delegate_to_claude_code — approval gate (T-P2-008)", () => {
+  it("auto mode skips the gate; delegation enqueues directly", async () => {
+    const gate = makeStubGate("auto");
+    const requestSpy = vi.fn(gate.requestApproval);
+    const wrapped: ApprovalGate = { ...gate, requestApproval: requestSpy };
+    const deps = makeDeps({ gate: wrapped });
+    const tool = makeDelegateTool(deps);
+    const out = await tool.handler(baseInput, makeCtx(auditLog));
+    expect(out.status).toBe("queued");
+    expect(requestSpy).not.toHaveBeenCalled();
+  });
+
+  it("per_call mode invokes the gate; approve flows through to enqueue", async () => {
+    const gate: ApprovalGate = {
+      ...makeStubGate("per_call"),
+      requestApproval: vi.fn(() => Promise.resolve("approve")),
+    };
+    const deps = makeDeps({ gate });
+    const tool = makeDelegateTool(deps);
+    const out = await tool.handler(baseInput, makeCtx(auditLog));
+    expect(out.status).toBe("queued");
+    expect(gate.requestApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("session_bypass when cached short-circuits the gate", async () => {
+    const gate = makeStubGate("session_bypass");
+    gate.markSessionBypassed("local#default");
+    const requestSpy = vi.fn(gate.requestApproval);
+    const wrapped: ApprovalGate = { ...gate, requestApproval: requestSpy };
+    const deps = makeDeps({ gate: wrapped });
+    const tool = makeDelegateTool(deps);
+    const out = await tool.handler(baseInput, makeCtx(auditLog));
+    expect(out.status).toBe("queued");
+    expect(requestSpy).not.toHaveBeenCalled();
+  });
+
+  it("denial → ToolHandlerError 403 delegation_denied", async () => {
+    const gate: ApprovalGate = {
+      ...makeStubGate("per_call"),
+      requestApproval: () => Promise.resolve("deny"),
+    };
+    const deps = makeDeps({ gate });
+    const tool = makeDelegateTool(deps);
+    await expect(tool.handler(baseInput, makeCtx(auditLog))).rejects.toMatchObject({
+      name: "ToolHandlerError",
+      code: 403,
+      reason: "delegation_denied",
+    });
+  });
+
+  it("timeout → ToolHandlerError 408 approval_timeout", async () => {
+    const gate: ApprovalGate = {
+      ...makeStubGate("per_call"),
+      requestApproval: () => Promise.reject(new ApprovalRejectedError("timeout")),
+    };
+    const deps = makeDeps({ gate });
+    const tool = makeDelegateTool(deps);
+    await expect(tool.handler(baseInput, makeCtx(auditLog))).rejects.toMatchObject({
+      code: 408,
+      reason: "approval_timeout",
+    });
+  });
+
+  it("extension_reconnected → 408 approval_extension_reconnected", async () => {
+    const gate: ApprovalGate = {
+      ...makeStubGate("per_call"),
+      requestApproval: () =>
+        Promise.reject(new ApprovalRejectedError("extension_reconnected")),
+    };
+    const deps = makeDeps({ gate });
+    const tool = makeDelegateTool(deps);
+    await expect(tool.handler(baseInput, makeCtx(auditLog))).rejects.toMatchObject({
+      code: 408,
+      reason: "approval_extension_reconnected",
+    });
+  });
+
+  it("shutdown → 503 daemon_shutting_down", async () => {
+    const gate: ApprovalGate = {
+      ...makeStubGate("per_call"),
+      requestApproval: () => Promise.reject(new ApprovalRejectedError("shutdown")),
+    };
+    const deps = makeDeps({ gate });
+    const tool = makeDelegateTool(deps);
+    await expect(tool.handler(baseInput, makeCtx(auditLog))).rejects.toMatchObject({
+      code: 503,
+      reason: "daemon_shutting_down",
+    });
+  });
+
+  it("approve_session sets session-bypassed mark for subsequent calls", async () => {
+    const gate: ApprovalGate = {
+      ...makeStubGate("per_call"),
+      requestApproval: () => Promise.resolve("approve_session"),
+    };
+    const deps = makeDeps({ gate });
+    const tool = makeDelegateTool(deps);
+    await tool.handler(baseInput, makeCtx(auditLog));
+    expect(gate.isSessionBypassed("local#default")).toBe(true);
   });
 });
 

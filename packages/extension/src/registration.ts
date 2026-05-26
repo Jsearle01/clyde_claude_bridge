@@ -12,6 +12,7 @@
 //   registering    -> unregistered        (other error; surfaced to caller)
 
 import type * as vscode from "vscode";
+import type { WorkspaceMode } from "@claude-bridge/shared";
 import type { IpcClient } from "./ipc/client.js";
 import { showTrustPrompt } from "./trust-prompt.js";
 
@@ -38,6 +39,8 @@ interface IpcResponseShape {
   abs_path?: string;
   trusted_at?: string;
   was_already_trusted?: boolean;
+  // T-P2-008: optional mode from register_workspace_ok response.
+  mode?: WorkspaceMode;
   message?: string;
   reason?: string;
 }
@@ -46,6 +49,12 @@ export class WorkspaceRegistration {
   private state: RegistrationState = "unregistered";
   private identifier: string | null = null;
   private existingPid: number | null = null;
+  // T-P2-008: per-workspace approval mode. Read from register_workspace_ok
+  // response (daemon defaults missing to "per_call"). Updated via
+  // setCurrentMode after a successful set_workspace_mode IPC round-trip.
+  // Separate field from RegistrationState — mode changes don't transition
+  // the registration lifecycle, just the approval policy.
+  private currentMode: WorkspaceMode = "per_call";
   // Inject the trust-prompt for testability. Production callers omit;
   // tests pass a deterministic fake.
   private readonly trustPromptImpl: (abs_path: string) => Promise<"trust" | "deny">;
@@ -73,6 +82,18 @@ export class WorkspaceRegistration {
 
   getExistingPid(): number | null {
     return this.existingPid;
+  }
+
+  // T-P2-008: per-workspace approval mode read accessor + writer. Reader
+  // is consumed by the status-bar menu's "Change approval mode" item.
+  // Writer is called from the menu's dispatch path after a successful
+  // set_workspace_mode IPC round-trip.
+  getCurrentMode(): WorkspaceMode {
+    return this.currentMode;
+  }
+
+  setCurrentMode(mode: WorkspaceMode): void {
+    this.currentMode = mode;
   }
 
   async register(): Promise<RegistrationResult> {
@@ -116,8 +137,10 @@ export class WorkspaceRegistration {
     if (response.kind === "register_workspace_ok") {
       // T-P2-006.5: identifier must be set before setState("registered")
       // because onStateChange subscribers (e.g. status bar) read it
-      // synchronously when the callback fires.
+      // synchronously when the callback fires. T-P2-008: same invariant
+      // applies to currentMode (status-bar menu reads it).
       this.identifier = response.identifier ?? null;
+      this.currentMode = response.mode ?? "per_call";
       this.setState("registered");
       return {
         state: "registered",
@@ -148,8 +171,10 @@ export class WorkspaceRegistration {
       }
       if (confirmResponse.kind === "register_workspace_ok") {
         // T-P2-006.5: identifier must be set before setState("registered")
-        // (see invariant comment at the first ok-branch above).
+        // (see invariant comment at the first ok-branch above). T-P2-008:
+        // same for currentMode.
         this.identifier = confirmResponse.identifier ?? null;
+        this.currentMode = confirmResponse.mode ?? "per_call";
         this.setState("registered");
         return {
           state: "registered",
