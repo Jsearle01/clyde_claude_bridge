@@ -15,6 +15,7 @@ import type * as vscode from "vscode";
 import type { WorkspaceMode } from "@claude-bridge/shared";
 import type { IpcClient } from "./ipc/client.js";
 import { showTrustPrompt } from "./trust-prompt.js";
+import { diag } from "./diag.js";
 
 const CONNECT_WAIT_TIMEOUT_MS = 5_000;
 
@@ -120,6 +121,10 @@ export class WorkspaceRegistration {
         name,
       });
     } catch (err) {
+      diag("registration: error", {
+        error: String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
       this.setState("unregistered");
       return {
         state: "error",
@@ -163,6 +168,10 @@ export class WorkspaceRegistration {
           name,
         });
       } catch (err) {
+        diag("registration: error", {
+          error: String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
         this.setState("unregistered");
         return {
           state: "error",
@@ -246,6 +255,12 @@ export class WorkspaceRegistration {
   // no-ops; transitions fire onStateChange. Subscriber errors swallowed.
   private setState(next: RegistrationState): void {
     if (this.state === next) return;
+    const prev = this.state;
+    diag(`registration: state -> ${next}`, {
+      from: prev,
+      identifier: this.identifier,
+      existingPid: this.existingPid,
+    });
     this.state = next;
     if (this.onStateChange !== undefined) {
       try {

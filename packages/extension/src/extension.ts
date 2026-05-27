@@ -8,6 +8,7 @@ import {
 import { makeStatusBar, type StatusBarSources } from "./status-bar.js";
 import { makeStatusBarMenu } from "./status-bar-menu.js";
 import { makeApprovalHandler } from "./approval-modal.js";
+import { diag } from "./diag.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
   disconnected: "disconnected",
@@ -20,6 +21,10 @@ let ipcClient: IpcClient | null = null;
 let registration: WorkspaceRegistration | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
+  diag("activate: entry", {
+    extensionPath: context.extensionPath,
+    env_debug: process.env.CLAUDE_BRIDGE_DEBUG,
+  });
   ipcClient = new IpcClient(discoverDaemonEndpoint());
   // Don't block activation on connect — if the daemon isn't running,
   // IpcClient surfaces via its reconnect loop and the status command's
@@ -154,6 +159,7 @@ export function activate(context: vscode.ExtensionContext): void {
       ipcClient = null;
     },
   });
+  diag("activate: complete");
 }
 
 export function deactivate(): void {

@@ -16,6 +16,7 @@ import {
   IpcServerMessageSchema,
   type ApprovalRequest,
 } from "@claude-bridge/shared";
+import { diag } from "../diag.js";
 
 const WINDOWS_PIPE_PATH = "\\\\.\\pipe\\claude-bridge";
 const IPC_CLIENT_VERSION = "1.0";
@@ -133,6 +134,11 @@ export class IpcClient {
   // the constraint is non-blocking; promotion to multiplexed concurrent
   // requests is a P3+ candidate.
   request<R>(req: unknown): Promise<R> {
+    const reqShape = req as { kind?: unknown; id?: unknown };
+    diag("ipc: request send", {
+      kind: typeof reqShape.kind === "string" ? reqShape.kind : undefined,
+      id: typeof reqShape.id === "string" || typeof reqShape.id === "number" ? reqShape.id : undefined,
+    });
     return new Promise<R>((resolve, reject) => {
       if (this.state !== "connected" || this.socket === null) {
         reject(new Error(`ipc-client: not connected (state=${this.state})`));
@@ -155,6 +161,7 @@ export class IpcClient {
   // VS Code error notification). Does NOT auto-retry on mismatch — only on
   // disconnect after a successful hello.
   connect(): Promise<void> {
+    diag("ipc: connect entry", { pipePath: this.endpoint, state: this.state });
     this.explicitlyClosed = false;
     if (
       this.state === "connecting" ||
@@ -185,6 +192,7 @@ export class IpcClient {
   private doConnect(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.setState("connecting");
+      diag("ipc: socket creating", { pipePath: this.endpoint });
       const sock = this.socketFactory(this.endpoint);
       this.socket = sock;
       sock.setEncoding("utf8");
@@ -199,6 +207,7 @@ export class IpcClient {
       };
 
       sock.on("connect", () => {
+        diag("ipc: socket connected");
         sock.write(
           JSON.stringify({
             kind: "hello",
@@ -290,6 +299,10 @@ export class IpcClient {
       });
 
       sock.on("error", (err: Error) => {
+        diag("ipc: socket error", {
+          error: String(err),
+          code: (err as { code?: unknown }).code,
+        });
         if (!settled) {
           settle(() => reject(err));
         }
@@ -297,7 +310,8 @@ export class IpcClient {
         this.handleDisconnect();
       });
 
-      sock.on("close", () => {
+      sock.on("close", (hadError: boolean) => {
+        diag("ipc: socket closed", { hadError });
         if (!settled) {
           settle(() => reject(new Error("ipc-client: socket closed during hello")));
         }
