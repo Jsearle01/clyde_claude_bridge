@@ -2,7 +2,6 @@
   "name": "claude-bridge-extension",
   "displayName": "Claude Bridge",
   "private": true,
-  "type": "module",
   "version": "0.1.0",
   "main": "./dist/extension.js",
   "engines": {
@@ -44,7 +43,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "node esbuild.config.mjs && tsc -b",
     "clean": "tsc -b --clean",
     "test": "vitest run",
     "lint": "eslint src tests",
@@ -53,6 +52,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "^3.6.0"
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.24.2"
   }
 }

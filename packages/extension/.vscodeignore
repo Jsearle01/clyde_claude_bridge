@@ -3,6 +3,7 @@ tests/**
 tsconfig.json
 tsconfig.tsbuildinfo
 vitest.config.ts
+esbuild.config.mjs
 **/*.ts
 **/*.map
 .vscode/**
