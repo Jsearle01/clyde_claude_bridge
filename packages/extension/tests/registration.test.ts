@@ -319,3 +319,155 @@ describe("WorkspaceRegistration field-vs-state ordering (T-P2-006.5)", () => {
     expect(pidAtDuplicate).toBe(12345);
   });
 });
+
+// T-P2-008.8 (C-29): registration intent persists across connection
+// retries. State machine no longer transitions to "unregistered" on a
+// transient connection failure; instead, it stays in "registering" and
+// re-fires the register request when onConnectionStateChanged("connected")
+// arrives. Retry counter is tracked for status-bar UX.
+
+describe("WorkspaceRegistration intent persistence (T-P2-008.8 / C-29)", () => {
+  // Mutable connection-state mock: starts disconnected; tests transition
+  // it by calling setConnState() before invoking reg.onConnectionStateChanged().
+  function makeFlakyClient(
+    initialState: "connected" | "disconnected" | "connecting" = "disconnected",
+    responseQueue: unknown[] = [],
+  ): FakeIpcClient & IpcClient & { setConnState: (s: "connected" | "disconnected" | "connecting") => void } {
+    const queue = [...responseQueue];
+    let state: "connected" | "disconnected" | "connecting" = initialState;
+    const client = {
+      getConnectionState: vi.fn(() => state),
+      request: vi.fn(() => {
+        if (state !== "connected") {
+          return Promise.reject(new Error("ipc-client: not connected"));
+        }
+        const next = queue.shift();
+        if (next === undefined) {
+          return Promise.reject(new Error("test: no more queued responses"));
+        }
+        return Promise.resolve(next);
+      }),
+      setConnState: (s: "connected" | "disconnected" | "connecting") => {
+        state = s;
+      },
+    };
+    return client as FakeIpcClient & IpcClient & {
+      setConnState: (s: "connected" | "disconnected" | "connecting") => void;
+    };
+  }
+
+  it("state stays 'registering' across N failed connect attempts", async () => {
+    const client = makeFlakyClient("disconnected");
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    await reg.register();
+    expect(reg.getState()).toBe("registering");
+    // Simulate 5 transient-failure cycles (IpcClient fires onReconnectAttempt
+    // per scheduled reconnect; onStateChange fires only on transitions —
+    // disconnected is the initial state so subsequent "disconnected" assigns
+    // are no-ops from IpcClient's perspective).
+    for (let i = 1; i <= 5; i += 1) {
+      reg.onReconnectAttempt(i);
+    }
+    expect(reg.getState()).toBe("registering");
+    expect(reg.getRetryCount()).toBe(5);
+    // request was never called (never connected).
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("fires register when onConnectionStateChanged('connected') arrives after retries", async () => {
+    const client = makeFlakyClient("disconnected", [
+      {
+        kind: "register_workspace_ok",
+        identifier: "x-aaaaaa",
+        name: "X",
+        abs_path: "/x",
+        trusted_at: "2026-05-28T00:00:00.000Z",
+        was_already_trusted: true,
+      },
+    ]);
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    await reg.register();
+    expect(reg.getState()).toBe("registering");
+    // 5 failures + 1 success.
+    for (let i = 1; i <= 5; i += 1) {
+      reg.onReconnectAttempt(i);
+    }
+    client.setConnState("connected");
+    reg.onConnectionStateChanged("connected");
+    // Wait for the in-flight register to resolve.
+    await new Promise<void>((r) => setImmediate(r));
+    expect(reg.getState()).toBe("registered");
+    expect(reg.getIdentifier()).toBe("x-aaaaaa");
+    expect(client.request).toHaveBeenCalledTimes(1);
+    // Retry counter resets on connect.
+    expect(reg.getRetryCount()).toBe(0);
+  });
+
+  it("retry counter increments on each onReconnectAttempt and fires onRetryCountChange", () => {
+    const client = makeFlakyClient("disconnected");
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    void reg.register();
+    const observed: number[] = [];
+    reg.onRetryCountChange = (n) => observed.push(n);
+    reg.onReconnectAttempt(1);
+    reg.onReconnectAttempt(2);
+    reg.onReconnectAttempt(3);
+    expect(observed).toEqual([1, 2, 3]);
+    expect(reg.getRetryCount()).toBe(3);
+  });
+
+  it("retry counter is NOT updated when state is already 'registered'", async () => {
+    const client = makeConnectedClient([
+      {
+        kind: "register_workspace_ok",
+        identifier: "x-aaaaaa",
+        name: "X",
+        abs_path: "/x",
+        trusted_at: "2026-05-28T00:00:00.000Z",
+        was_already_trusted: true,
+      },
+    ]);
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    await reg.register();
+    expect(reg.getState()).toBe("registered");
+    reg.onReconnectAttempt(7);
+    // State already registered → counter ignored.
+    expect(reg.getRetryCount()).toBe(0);
+  });
+
+  it("onConnectionStateChanged('connected') is a no-op when already registered", async () => {
+    const client = makeConnectedClient([
+      {
+        kind: "register_workspace_ok",
+        identifier: "x-aaaaaa",
+        name: "X",
+        abs_path: "/x",
+        trusted_at: "2026-05-28T00:00:00.000Z",
+        was_already_trusted: true,
+      },
+    ]);
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    await reg.register();
+    reg.onConnectionStateChanged("connected");
+    await new Promise<void>((r) => setImmediate(r));
+    // request fired once for the initial register; the no-op listener
+    // call did not fire a second.
+    expect(client.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("transient request failure stays in 'registering' (no 'unregistered' transition)", async () => {
+    const client = makeFlakyClient("connected", [
+      // First attempt: rejected by the mock request impl (no queued response
+      // after consuming the first — see makeFlakyClient default).
+    ]);
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    const transitions: string[] = [];
+    reg.onStateChange = (s) => transitions.push(s);
+    await reg.register();
+    // Initial trigger transitions: unregistered → registering. Request
+    // rejects → handler returns error result but stays in "registering"
+    // (no "unregistered" transition fires).
+    expect(reg.getState()).toBe("registering");
+    expect(transitions).toEqual(["registering"]);
+  });
+});

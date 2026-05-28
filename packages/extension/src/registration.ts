@@ -2,22 +2,27 @@
 // the daemon via IpcClient.request(); shows the trust modal when the
 // daemon returns needs_trust; sends confirm_trust on user approval.
 //
-// State machine:
-//   unregistered   -> registering (calling register)
-//   registering    -> registered          (daemon returned ok)
-//   registering    -> needs_trust         (daemon returned needs_trust)
-//   needs_trust    -> registered          (user clicked Trust, ok returned)
-//   needs_trust    -> trust_denied        (user clicked Don't trust or dismissed)
-//   registering    -> duplicate           (daemon returned path_already_registered)
-//   registering    -> unregistered        (other error; surfaced to caller)
+// State machine (T-P2-008.8 / C-29 fix — registration intent persists):
+//   unregistered   -> registering     (calling register; also initial activate)
+//   registering    -> registering     (transient connection or daemon failure;
+//                                       state stays, retry on next connect)
+//   registering    -> registered      (daemon returned ok)
+//   registering    -> needs_trust     (daemon returned needs_trust)
+//   registering    -> duplicate       (daemon returned path_already_registered)
+//   needs_trust    -> registered      (user clicked Trust, ok returned)
+//   needs_trust    -> trust_denied    (user clicked Don't trust or dismissed)
+//   registered     -> unregistered    (explicit deregister)
+//
+// IpcClient retries connecting forever (no max retries). When a connection
+// arrives while state === "registering", onConnectionStateChanged fires
+// a fresh register attempt. The retry counter is exposed via getRetryCount
+// for status-bar UX surfacing.
 
 import type * as vscode from "vscode";
 import type { WorkspaceMode } from "@claude-bridge/shared";
-import type { IpcClient } from "./ipc/client.js";
+import type { ConnectionStateKind, IpcClient } from "./ipc/client.js";
 import { showTrustPrompt } from "./trust-prompt.js";
 import { diag } from "./diag.js";
-
-const CONNECT_WAIT_TIMEOUT_MS = 5_000;
 
 export type RegistrationState =
   | "unregistered"
@@ -56,6 +61,16 @@ export class WorkspaceRegistration {
   // Separate field from RegistrationState — mode changes don't transition
   // the registration lifecycle, just the approval policy.
   private currentMode: WorkspaceMode = "per_call";
+  // T-P2-008.8 (C-29 fix): retry counter for UX surfacing. Mirrors
+  // IpcClient.onReconnectAttempt's value while registration is still
+  // "registering". Reset to 0 on successful register or successful connect.
+  // Status bar reads this via getRetryCount().
+  private retryCount = 0;
+  // T-P2-008.8: in-flight register attempt promise. When a register
+  // request is awaiting daemon response, this guards against a second
+  // concurrent attempt from a racing onConnectionStateChanged("connected")
+  // event. Cleared in `.finally`.
+  private inFlight: Promise<RegistrationResult> | null = null;
   // Inject the trust-prompt for testability. Production callers omit;
   // tests pass a deterministic fake.
   private readonly trustPromptImpl: (abs_path: string) => Promise<"trust" | "deny">;
@@ -64,6 +79,10 @@ export class WorkspaceRegistration {
   // swallowed. Parallel to IpcClient.onStateChange (third instance of
   // the "settable single-subscriber callback field" pattern).
   public onStateChange?: (state: RegistrationState) => void;
+  // T-P2-008.8: fires on each retry-count change. Status bar reads
+  // retryCount on refresh; this callback prompts refresh. Single-subscriber
+  // pattern (5th instance), errors swallowed.
+  public onRetryCountChange?: (count: number) => void;
 
   constructor(
     private readonly ipcClient: IpcClient,
@@ -97,19 +116,88 @@ export class WorkspaceRegistration {
     this.currentMode = mode;
   }
 
-  async register(): Promise<RegistrationResult> {
+  // T-P2-008.8: retry counter read accessor — consumed by the status bar.
+  getRetryCount(): number {
+    return this.retryCount;
+  }
+
+  // C-29 fix (T-P2-008.8): registration is the extension's only job; never
+  // give up on transient connection failures. State only leaves
+  // "registering" on success (→ "registered"), an explicit trust outcome
+  // (→ "needs_trust" → "trust_denied" or → "registered"), a duplicate
+  // detection (→ "duplicate"), or explicit deregister (→ "unregistered").
+  // A transient `register_workspace` failure — request throw, daemon-side
+  // error, or daemon-not-yet-connected — keeps state at "registering"; the
+  // next onConnectionStateChanged("connected") event re-fires the attempt.
+  //
+  // register() kicks off the attempt and returns a promise that resolves
+  // when the *current* attempt reaches an outcome (terminal or transient
+  // failure). Callers awaiting register() see the first attempt's result;
+  // the long-running re-attempt loop continues via onConnectionStateChanged.
+  register(): Promise<RegistrationResult> {
     if (this.workspaceFolder === undefined) {
       this.setState("unregistered");
-      return { state: "no_workspace" };
+      return Promise.resolve({ state: "no_workspace" });
     }
     this.setState("registering");
-    await this.waitForConnected();
+    return this.attemptRegisterIfConnected();
+  }
+
+  // T-P2-008.8: connection-state subscriber. Wired by extension.ts to
+  // IpcClient.onStateChange. When connection arrives AND we're still
+  // trying to register (state === "registering"), fire a fresh register
+  // attempt. Idempotent if an attempt is already in flight.
+  onConnectionStateChanged(s: ConnectionStateKind): void {
+    if (s !== "connected") return;
+    if (this.state !== "registering") return;
+    // Connection just established — reset the retry counter so the UX
+    // doesn't show "(retry N)" while the request is in flight.
+    this.setRetryCount(0);
+    diag("registration: re-attempt on connect", { retryCount: this.retryCount });
+    void this.attemptRegisterIfConnected();
+  }
+
+  // T-P2-008.8: reconnect-attempt subscriber. Wired by extension.ts to
+  // IpcClient.onReconnectAttempt. Only the counter is updated — the
+  // re-attempt logic fires on the eventual "connected" transition.
+  onReconnectAttempt(attempt: number): void {
+    if (this.state !== "registering") return;
+    this.setRetryCount(attempt);
+  }
+
+  private setRetryCount(n: number): void {
+    if (this.retryCount === n) return;
+    this.retryCount = n;
+    if (this.onRetryCountChange !== undefined) {
+      try {
+        this.onRetryCountChange(n);
+      } catch {
+        // intentional swallow — subscriber failures must not break state machine
+      }
+    }
+  }
+
+  private attemptRegisterIfConnected(): Promise<RegistrationResult> {
+    if (this.inFlight !== null) return this.inFlight;
     if (this.ipcClient.getConnectionState() !== "connected") {
-      this.setState("unregistered");
-      return {
+      // Not connected yet. Stay in "registering"; the next
+      // onConnectionStateChanged("connected") will fire a fresh attempt.
+      return Promise.resolve({
         state: "error",
         message: `daemon not connected (state=${this.ipcClient.getConnectionState()})`,
-      };
+      });
+    }
+    const attempt = this.doRegister();
+    this.inFlight = attempt;
+    void attempt.finally(() => {
+      this.inFlight = null;
+    });
+    return attempt;
+  }
+
+  private async doRegister(): Promise<RegistrationResult> {
+    if (this.workspaceFolder === undefined) {
+      return { state: "no_workspace" };
     }
     const abs_path = this.workspaceFolder.uri.fsPath;
     const name = this.workspaceFolder.name;
@@ -125,7 +213,8 @@ export class WorkspaceRegistration {
         error: String(err),
         stack: err instanceof Error ? err.stack : undefined,
       });
-      this.setState("unregistered");
+      // C-29 fix: stay in "registering". On the next connection-state
+      // transition to "connected", the listener re-fires this method.
       return {
         state: "error",
         message: err instanceof Error ? err.message : String(err),
@@ -172,7 +261,11 @@ export class WorkspaceRegistration {
           error: String(err),
           stack: err instanceof Error ? err.stack : undefined,
         });
-        this.setState("unregistered");
+        // C-29 fix (T-P2-008.8): confirm_trust IPC failed transiently;
+        // fall back to "registering" so the next connect retries the full
+        // register flow. (UX caveat: the user will see the trust modal
+        // again on retry. Acceptable for correctness; rarely reached.)
+        this.setState("registering");
         return {
           state: "error",
           message: err instanceof Error ? err.message : String(err),
@@ -198,7 +291,9 @@ export class WorkspaceRegistration {
     if (response.kind === "error") {
       return this.classifyErrorResponse(response);
     }
-    this.setState("unregistered");
+    // C-29 fix (T-P2-008.8): unexpected response kind is a transient
+    // failure (likely a wire-version or schema drift); stay in
+    // "registering" so the next connect retries.
     return {
       state: "error",
       message: `unexpected register response kind=${response.kind ?? "?"}`,
@@ -218,7 +313,10 @@ export class WorkspaceRegistration {
       this.setState("duplicate");
       return { state: "duplicate", existing_pid: pid };
     }
-    this.setState("unregistered");
+    // C-29 fix (T-P2-008.8): daemon returned an unrecognized error
+    // (not path_already_registered). Stay in "registering" so the next
+    // connect retries — daemon-side transient inconsistency is the most
+    // likely cause.
     return {
       state: "error",
       message: response.message ?? "unknown register error",
@@ -238,16 +336,6 @@ export class WorkspaceRegistration {
       });
     } catch {
       // Best-effort; nothing to do if the daemon has disappeared.
-    }
-  }
-
-  private async waitForConnected(): Promise<void> {
-    const deadline = Date.now() + CONNECT_WAIT_TIMEOUT_MS;
-    while (
-      Date.now() < deadline &&
-      this.ipcClient.getConnectionState() !== "connected"
-    ) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
   }
 

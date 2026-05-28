@@ -37,6 +37,7 @@ function makeSources(overrides: Partial<{
     getWorkspaceFolder: () => opts.folder,
     getDaemonInfo: () => opts.daemonInfo,
     getCurrentMode: () => opts.currentMode,
+    getRetryCount: () => 0,
   };
 }
 

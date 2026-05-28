@@ -48,7 +48,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // resets on reactivation. Setting is read at notification-time so
   // user changes between activation and trigger are honored. Logic +
   // tests live in daemon-lifecycle.ts.
-  ipcClient.onReconnectAttempt = makeDaemonNotRunningHandler(context);
+  // T-P2-008.8: also tee the attempt count into registration for retry-count
+  // UX surfacing on the status bar (closes C-29).
+  const daemonNotRunningHandler = makeDaemonNotRunningHandler(context);
+  ipcClient.onReconnectAttempt = (attempt: number): void => {
+    daemonNotRunningHandler(attempt);
+    registration?.onReconnectAttempt(attempt);
+  };
 
   registration = new WorkspaceRegistration(
     ipcClient,
@@ -81,13 +87,21 @@ export function activate(context: vscode.ExtensionContext): void {
     getDaemonInfo: () => undefined,
     // T-P2-008: current approval mode for the registered workspace.
     getCurrentMode: () => registration?.getCurrentMode() ?? "per_call",
+    // T-P2-008.8: retry count surfaced during the registering window.
+    getRetryCount: () => registration?.getRetryCount() ?? 0,
   };
   const statusBar = makeStatusBar(statusBarSources);
   statusBar.refresh();
   context.subscriptions.push({ dispose: () => statusBar.dispose() });
 
-  ipcClient.onStateChange = () => statusBar.refresh();
+  // T-P2-008.8: tee IpcClient state into both the status bar (refresh) and
+  // registration (event-driven re-attempt on connect). Closes C-29.
+  ipcClient.onStateChange = (s): void => {
+    statusBar.refresh();
+    registration?.onConnectionStateChanged(s);
+  };
   registration.onStateChange = () => statusBar.refresh();
+  registration.onRetryCountChange = () => statusBar.refresh();
 
   // T-P2-008: wire the approval-modal handler so daemon-initiated
   // approval_request messages surface as a modal in VS Code.

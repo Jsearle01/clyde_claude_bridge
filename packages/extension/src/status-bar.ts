@@ -32,6 +32,11 @@ export interface StatusBarSources {
   // Status-bar menu reads this to display "Change approval mode (current:
   // X)". Returns "per_call" default when no workspace registered.
   getCurrentMode(): WorkspaceMode;
+  // T-P2-008.8: number of IpcClient reconnect attempts the registration
+  // has observed while still trying to register. Status bar surfaces a
+  // "registering (retry N)" indicator when ≥ 1. Returns 0 when no
+  // registration is in flight (e.g., already registered, or no folder).
+  getRetryCount(): number;
 }
 
 export interface StatusBarDeps {
@@ -69,6 +74,7 @@ export function makeStatusBar(
       sources.getRegistrationState(),
       sources.getRegistrationIdentifier(),
       sources.getRegistrationExistingPid(),
+      sources.getRetryCount(),
     );
     item.tooltip = composeStatusBarTooltip(sources);
     item.show();
@@ -88,7 +94,15 @@ export function composeStatusBarText(
   reg: RegistrationState,
   identifier: string | null,
   existingPid: number | null,
+  retryCount: number,
 ): string {
+  // T-P2-008.8 (C-29 UX): when registration is still trying AND we've had
+  // ≥1 reconnect retry, surface the retry count regardless of connection-
+  // state icon. This is the actionable info during the activate-vs-daemon
+  // race window — operator sees progress, not stuckness.
+  if (reg === "registering" && retryCount >= 1) {
+    return `$(sync~spin) connecting (retry ${retryCount})`;
+  }
   if (conn === "version_mismatch") return "$(alert) version mismatch";
   if (conn === "disconnected") return "$(circle-slash) daemon down";
   if (conn === "connecting") return "$(sync~spin) connecting";
@@ -134,6 +148,14 @@ export function composeStatusBarTooltip(
   }
   if (reg === "duplicate" && existingPid !== null) {
     md.appendMarkdown(`**Conflicting window pid:** ${existingPid}\n\n`);
+  }
+  // T-P2-008.8 (C-29 UX): explain the retry indicator when it's showing.
+  const retryCount = sources.getRetryCount();
+  if (reg === "registering" && retryCount >= 1) {
+    md.appendMarkdown(
+      `**Retrying:** waiting for daemon (attempt ${retryCount}). ` +
+        `Registration will fire automatically once the connection is established.\n\n`,
+    );
   }
   md.appendMarkdown("Click for actions.");
   return md;
