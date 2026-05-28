@@ -90,9 +90,11 @@ function makeStubGate(mode: "auto" | "per_call" | "session_bypass" = "auto"): Ap
   let currentMode = mode;
   return {
     getModeForWorkspace: () => currentMode,
-    isSessionBypassed: (id) => sessionBypassed.has(id),
-    markSessionBypassed: (id) => sessionBypassed.add(id),
-    clearSessionBypass: (id) => sessionBypassed.delete(id),
+    // T-P2-008.7: bypass keyed by (sessionId + workspace). Stub mirrors
+    // the production composite-key shape.
+    isSessionBypassed: (sid, id) => sessionBypassed.has(`${sid ?? ""} ${id}`),
+    markSessionBypassed: (sid, id) => sessionBypassed.add(`${sid ?? ""} ${id}`),
+    clearSessionBypass: (sid, id) => sessionBypassed.delete(`${sid ?? ""} ${id}`),
     requestApproval: (req) => {
       // Default behavior: pending forever until test calls resolve via
       // returned helper. Tests that don't override should use "auto" mode
@@ -323,7 +325,9 @@ describe("delegate_to_claude_code — approval gate (T-P2-008)", () => {
 
   it("session_bypass when cached short-circuits the gate", async () => {
     const gate = makeStubGate("session_bypass");
-    gate.markSessionBypassed("local#default");
+    // makeCtx leaves mcp_session_id undefined → handler passes undefined as
+    // the session id; mark the bypass with the same (undefined) session.
+    gate.markSessionBypassed(undefined, "local#default");
     const requestSpy = vi.fn(gate.requestApproval);
     const wrapped: ApprovalGate = { ...gate, requestApproval: requestSpy };
     const deps = makeDeps({ gate: wrapped });
@@ -395,7 +399,8 @@ describe("delegate_to_claude_code — approval gate (T-P2-008)", () => {
     const deps = makeDeps({ gate });
     const tool = makeDelegateTool(deps);
     await tool.handler(baseInput, makeCtx(auditLog));
-    expect(gate.isSessionBypassed("local#default")).toBe(true);
+    // Handler passes ctx.mcp_session_id (undefined in makeCtx) to the gate.
+    expect(gate.isSessionBypassed(undefined, "local#default")).toBe(true);
   });
 });
 

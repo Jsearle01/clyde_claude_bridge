@@ -145,6 +145,7 @@ export function makeDelegateTool(
       try {
         const decision = await awaitApprovalForDelegation(
           deps.approvalGate,
+          ctx.mcp_session_id,
           workspace.id,
           {
             kind: "approval_request",

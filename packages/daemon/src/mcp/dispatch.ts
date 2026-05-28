@@ -27,6 +27,11 @@ export interface AuditMetadata {
 export interface ToolContext {
   readonly request_id: string;
   readonly remote_addr: string;
+  // T-P2-008.7 (C-30): MCP session id (from the Mcp-Session-Id header).
+  // Optional so P0 ctx-construction sites (tests, ping) compile without
+  // change. The approval gate uses it to key session-bypass state by
+  // (mcp_session_id + workspace_id) so bypass never leaks across sessions.
+  readonly mcp_session_id?: string;
   readonly auditLog: AuditLog;
   readonly logger: Logger;
   readonly state: DaemonState;

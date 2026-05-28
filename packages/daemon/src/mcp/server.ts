@@ -44,6 +44,12 @@ const pkg = localRequire("../../package.json") as { version: string };
 interface RequestContextData {
   request_id: string;
   remote_addr: string;
+  // T-P2-008.7 (C-30): the MCP session id from the `Mcp-Session-Id`
+  // request header (SDK stateful mode echoes it on every post-initialize
+  // request). Undefined on the initialize request itself; present on
+  // tools/call. Threaded into ToolContext so the approval gate can key
+  // session-bypass state by (mcp_session_id + workspace_id).
+  mcp_session_id?: string;
 }
 
 // Module-scope ALS — one per process. Each HTTP request runs its async
@@ -166,6 +172,12 @@ export class McpServer {
   ): void {
     const requestId = generateRequestId();
     const remoteAddr = req.socket.remoteAddress ?? "unknown";
+    // T-P2-008.7 (C-30): capture the MCP session id (Node lowercases
+    // header names). Present on tools/call in stateful mode; used to key
+    // approval-gate session-bypass state.
+    const sessionHeader = req.headers["mcp-session-id"];
+    const mcpSessionId =
+      typeof sessionHeader === "string" ? sessionHeader : undefined;
     const startMs = Date.now();
 
     const authResult = authenticate(req, this.opts.getExpectedToken());
@@ -185,7 +197,11 @@ export class McpServer {
     // Authenticated — run the SDK dispatch inside an ALS context so the
     // tools/call handler can read request_id and remote_addr.
     void requestContext.run(
-      { request_id: requestId, remote_addr: remoteAddr },
+      {
+        request_id: requestId,
+        remote_addr: remoteAddr,
+        mcp_session_id: mcpSessionId,
+      },
       () =>
         transport.handleRequest(req, res).catch((err: unknown) => {
           this.opts.logger.warn("mcp transport.handleRequest failed", {
@@ -218,6 +234,7 @@ export class McpServer {
     const ctx: Omit<ToolContext, "setAuditMetadata"> = {
       request_id: ctxData.request_id,
       remote_addr: ctxData.remote_addr,
+      mcp_session_id: ctxData.mcp_session_id,
       auditLog: this.opts.auditLog,
       logger: this.opts.logger,
       state: this.opts.state,

@@ -14,15 +14,27 @@ import type { WorkspacesStore } from "../workspace/store.js";
 
 export interface ApprovalGate {
   getModeForWorkspace(identifier: string): WorkspaceMode;
-  isSessionBypassed(identifier: string): boolean;
-  markSessionBypassed(identifier: string): void;
-  clearSessionBypass(identifier: string): void;
+  // T-P2-008.7 (C-30): session-bypass is keyed by (mcp_session_id +
+  // workspace_id). A bypass set in one MCP session must NOT apply to
+  // another session, and a bypass for one workspace must NOT apply to
+  // another workspace.
+  isSessionBypassed(sessionId: string | undefined, identifier: string): boolean;
+  markSessionBypassed(sessionId: string | undefined, identifier: string): void;
+  clearSessionBypass(sessionId: string | undefined, identifier: string): void;
   requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
   setModeForWorkspace(identifier: string, mode: WorkspaceMode): Promise<void>;
   resolveApproval(delegation_id: string, decision: ApprovalDecision): void;
   cancelByWorkspace(identifier: string, reason: "extension_reconnected" | "workspace_deregistered"): void;
   pendingSize(): number;
   stop(): Promise<void>;
+}
+
+// T-P2-008.7: composite bypass key. The space separator is unambiguous
+// because neither component contains a space (session ids are UUIDs;
+// workspace identifiers are kebab+hex). Undefined session id (non-MCP caller)
+// degrades to an empty-session key — still workspace-isolated.
+function bypassKey(sessionId: string | undefined, identifier: string): string {
+  return `${sessionId ?? ""}::${identifier}`;
 }
 
 // Adapter for sending the approval_request over IPC. Provided by the
@@ -47,16 +59,16 @@ export class ApprovalGateImpl implements ApprovalGate {
     return entry?.mode ?? "per_call";
   }
 
-  isSessionBypassed(identifier: string): boolean {
-    return this.sessionBypassed.has(identifier);
+  isSessionBypassed(sessionId: string | undefined, identifier: string): boolean {
+    return this.sessionBypassed.has(bypassKey(sessionId, identifier));
   }
 
-  markSessionBypassed(identifier: string): void {
-    this.sessionBypassed.add(identifier);
+  markSessionBypassed(sessionId: string | undefined, identifier: string): void {
+    this.sessionBypassed.add(bypassKey(sessionId, identifier));
   }
 
-  clearSessionBypass(identifier: string): void {
-    this.sessionBypassed.delete(identifier);
+  clearSessionBypass(sessionId: string | undefined, identifier: string): void {
+    this.sessionBypassed.delete(bypassKey(sessionId, identifier));
   }
 
   async requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
@@ -98,7 +110,19 @@ export class ApprovalGateImpl implements ApprovalGate {
     reason: "extension_reconnected" | "workspace_deregistered",
   ): void {
     this.pending.cancelByWorkspace(identifier, reason);
-    this.sessionBypassed.delete(identifier);
+    // T-P2-008.7: bypass keys are `<session>::<workspace>`; clear every
+    // entry whose workspace component matches, across all sessions (the
+    // extension for this workspace disconnected — drop its runtime trust).
+    // Collect-then-delete to avoid mutating the Set mid-iteration. Suffix
+    // must match bypassKey's `::` separator exactly.
+    const suffix = `::${identifier}`;
+    const toDelete: string[] = [];
+    for (const key of this.sessionBypassed) {
+      if (key.endsWith(suffix)) toDelete.push(key);
+    }
+    for (const key of toDelete) {
+      this.sessionBypassed.delete(key);
+    }
   }
 
   pendingSize(): number {
@@ -117,6 +141,7 @@ export class ApprovalGateImpl implements ApprovalGate {
 // (cheap: store lookup) and only calls this when the mode is not "auto".
 export async function awaitApprovalForDelegation(
   gate: ApprovalGate,
+  sessionId: string | undefined,
   identifier: string,
   request: ApprovalRequest,
 ): Promise<ApprovalDecision> {
@@ -124,12 +149,19 @@ export async function awaitApprovalForDelegation(
   if (mode === "auto") {
     return "approve";
   }
-  if (mode === "session_bypass" && gate.isSessionBypassed(identifier)) {
+  // C-30 fix (T-P2-008.7): honor a prior "Approve for this session"
+  // regardless of the persistent mode. Previously this check was gated on
+  // `mode === "session_bypass"`, which never held for the default
+  // `per_call` mode — so the bypass that approve_session set was never
+  // consulted and the modal re-fired on every call. Bypass is runtime-only
+  // state keyed by (mcp_session_id + workspace_id); once set, subsequent
+  // calls in the same MCP session for the same workspace skip the modal.
+  if (gate.isSessionBypassed(sessionId, identifier)) {
     return "approve";
   }
   const decision = await gate.requestApproval(request);
   if (decision === "approve_session") {
-    gate.markSessionBypassed(identifier);
+    gate.markSessionBypassed(sessionId, identifier);
   }
   return decision;
 }
