@@ -416,6 +416,28 @@ describe("WorkspaceRegistration intent persistence (T-P2-008.8 / C-29)", () => {
     expect(reg.getRetryCount()).toBe(3);
   });
 
+  // C-26 invariant (field-precedes-setState): subscriber that reads
+  // reg.getRetryCount() from inside the onRetryCountChange callback must
+  // see the post-set counter value, not the pre-set value. Added
+  // T-P2-006-followup as part of pattern-doc codification — the
+  // parameter-based test above proves the arg is correct; this one proves
+  // the field-accessor path is also correct (i.e., `this.retryCount` is
+  // assigned BEFORE the callback fires inside setRetryCount).
+  it("onRetryCountChange subscriber sees correct count via accessor (C-26 invariant)", () => {
+    const client = makeFlakyClient("disconnected");
+    const reg = new WorkspaceRegistration(client, makeFolder("/x", "X"));
+    void reg.register();
+    const accessorReads: number[] = [];
+    reg.onRetryCountChange = () => {
+      accessorReads.push(reg.getRetryCount());
+    };
+    reg.onReconnectAttempt(1);
+    reg.onReconnectAttempt(2);
+    reg.onReconnectAttempt(3);
+    // Accessor reads inside the callback must reflect the just-set value.
+    expect(accessorReads).toEqual([1, 2, 3]);
+  });
+
   it("retry counter is NOT updated when state is already 'registered'", async () => {
     const client = makeConnectedClient([
       {

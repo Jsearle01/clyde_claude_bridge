@@ -327,4 +327,38 @@ describe("IpcClient.onStateChange callback (T-P2-006)", () => {
     expect(callCount).toBe(3);
     expect(client.getConnectionState()).toBe("disconnected");
   });
+
+  // C-26 invariant (field-precedes-setState): the canonical regression
+  // shape for the settable-single-subscriber-callback pattern. A subscriber
+  // that reads class state via `getConnectionState()` from inside the
+  // callback must see the post-transition state, not the pre-transition
+  // state. Added T-P2-006-followup as part of pattern-doc codification.
+  it("onStateChange subscriber sees correct state via accessor (C-26 invariant)", async () => {
+    const fakeSocket = new FakeSocket();
+    const client = new IpcClient("/fake", {
+      socketFactory: () => fakeSocket as unknown as Socket,
+    });
+    const stateAt: Array<{ event: string; viaAccessor: string }> = [];
+    client.onStateChange = (s) => {
+      stateAt.push({ event: s, viaAccessor: client.getConnectionState() });
+    };
+    const connectPromise = client.connect();
+    fakeSocket.simulateConnect();
+    fakeSocket.simulateData(
+      JSON.stringify({
+        kind: "hello_ok",
+        daemon_version: "1.0",
+        min_supported: "1.0",
+      }),
+    );
+    await connectPromise;
+    // Each callback fire observed via accessor must match the event arg.
+    // Pre-fix this.state-after-callback would leak stale state via the
+    // accessor.
+    expect(stateAt.length).toBeGreaterThan(0);
+    for (const entry of stateAt) {
+      expect(entry.viaAccessor).toBe(entry.event);
+    }
+    client.disconnect();
+  });
 });
