@@ -69,6 +69,68 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
       decision: z.enum(["approve", "deny", "approve_session"]),
     })
     .strict(),
+  // T-P2-009 / T-P2-010: extension's responses to daemon-initiated
+  // inspection-tool requests. Asymmetric (no daemon ack); request_id
+  // correlates back to the pending entry in the daemon's extension
+  // router. The third variant — extension_tool_error — is the catch-all
+  // failure path (handler threw inside the extension); the daemon maps
+  // it to 502 extension_error.
+  z
+    .object({
+      kind: z.literal("get_open_editors_response"),
+      request_id: z.string(),
+      editors: z.array(
+        z
+          .object({
+            uri: z.string(),
+            fs_path: z.string(),
+            is_active: z.boolean(),
+            is_dirty: z.boolean(),
+          })
+          .strict(),
+      ),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("get_diagnostics_response"),
+      request_id: z.string(),
+      diagnostics: z.array(
+        z
+          .object({
+            uri: z.string(),
+            fs_path: z.string(),
+            range: z
+              .object({
+                start: z
+                  .object({
+                    line: z.number().int().nonnegative(),
+                    character: z.number().int().nonnegative(),
+                  })
+                  .strict(),
+                end: z
+                  .object({
+                    line: z.number().int().nonnegative(),
+                    character: z.number().int().nonnegative(),
+                  })
+                  .strict(),
+              })
+              .strict(),
+            severity: z.enum(["error", "warning", "info", "hint"]),
+            message: z.string(),
+            source: z.string().optional(),
+          })
+          .strict(),
+      ),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("extension_tool_error"),
+      request_id: z.string(),
+      message: z.string(),
+    })
+    .strict(),
 ]);
 export type IpcRequest = z.infer<typeof IpcRequestSchema>;
 export type HelloRequest = Extract<IpcRequest, { kind: "hello" }>;
@@ -77,6 +139,25 @@ export type ConfirmTrustRequest = Extract<IpcRequest, { kind: "confirm_trust" }>
 export type DeregisterWorkspaceRequest = Extract<IpcRequest, { kind: "deregister_workspace" }>;
 export type SetWorkspaceModeRequest = Extract<IpcRequest, { kind: "set_workspace_mode" }>;
 export type ApprovalResponseRequest = Extract<IpcRequest, { kind: "approval_response" }>;
+// T-P2-009 / T-P2-010: extension-initiated tool responses + the failure
+// envelope. Daemon's extension router correlates by request_id.
+export type GetOpenEditorsResponseMessage = Extract<
+  IpcRequest,
+  { kind: "get_open_editors_response" }
+>;
+export type GetDiagnosticsResponseMessage = Extract<
+  IpcRequest,
+  { kind: "get_diagnostics_response" }
+>;
+export type ExtensionToolErrorMessage = Extract<
+  IpcRequest,
+  { kind: "extension_tool_error" }
+>;
+// Item shapes (named for use in IpcServerMessage types and downstream
+// consumers).
+export type OpenEditor = GetOpenEditorsResponseMessage["editors"][number];
+export type DiagnosticSeverityName = GetDiagnosticsResponseMessage["diagnostics"][number]["severity"];
+export type DiagnosticItem = GetDiagnosticsResponseMessage["diagnostics"][number];
 
 export const IpcResponseSchema = z.discriminatedUnion("kind", [
   z
@@ -195,9 +276,37 @@ export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
       timestamp: z.string(),
     })
     .strict(),
+  // T-P2-009: daemon-initiated request asking the extension to enumerate
+  // its open editor tabs. Extension responds with
+  // get_open_editors_response carrying the same request_id.
+  z
+    .object({
+      kind: z.literal("get_open_editors_request"),
+      request_id: z.string(),
+    })
+    .strict(),
+  // T-P2-010: daemon-initiated request asking the extension for the
+  // current diagnostics. The severities set is the explicit expansion of
+  // the MCP-tool boundary's `severity` threshold (handled daemon-side);
+  // extension never sees the abstraction.
+  z
+    .object({
+      kind: z.literal("get_diagnostics_request"),
+      request_id: z.string(),
+      severities: z.array(z.enum(["error", "warning", "info", "hint"])),
+    })
+    .strict(),
 ]);
 export type IpcServerMessage = z.infer<typeof IpcServerMessageSchema>;
 export type ApprovalRequest = Extract<
   IpcServerMessage,
   { kind: "approval_request" }
+>;
+export type GetOpenEditorsRequest = Extract<
+  IpcServerMessage,
+  { kind: "get_open_editors_request" }
+>;
+export type GetDiagnosticsRequest = Extract<
+  IpcServerMessage,
+  { kind: "get_diagnostics_request" }
 >;

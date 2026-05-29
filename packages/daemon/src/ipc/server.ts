@@ -28,6 +28,7 @@ import type { Logger } from "../log/logger.js";
 import type { WorkspacesStore } from "../workspace/store.js";
 import { generateIdentifier } from "../workspace/identifier.js";
 import type { ApprovalGate } from "../approval/gate.js";
+import type { ExtensionToolRouter } from "../mcp/tools/extension-router.js";
 
 const WINDOWS_PIPE_PATH = "\\\\.\\pipe\\claude-bridge";
 
@@ -113,6 +114,12 @@ export class IpcServer {
   // (legacy daemon-construction without gate), set_workspace_mode and
   // approval_response requests respond with a protocol_error.
   private approvalGate: ApprovalGate | null = null;
+  // T-P2-009 / T-P2-010: optional extension-tool router. Wired in
+  // main.ts. When absent, inbound inspection-tool response/error
+  // envelopes are silently dropped (the daemon has nothing pending to
+  // resolve). The router is also notified on disconnect so any
+  // in-flight inspection request rejects immediately.
+  private extensionRouter: ExtensionToolRouter | null = null;
   private server: Server | null = null;
   private closed = false;
   // Per-connection state populated after a successful hello exchange.
@@ -136,6 +143,15 @@ export class IpcServer {
   // ipcServer.setApprovalGate(gate)).
   public setApprovalGate(gate: ApprovalGate): void {
     this.approvalGate = gate;
+  }
+
+  // T-P2-009 / T-P2-010: post-construction extension-router wire-up.
+  // The router needs IpcServer.sendServerMessage as its send adapter
+  // (wired by main.ts inside the router's constructor), so the router
+  // is constructed after IpcServer but installed back here so the
+  // socket-level dispatch can resolve inbound responses.
+  public setExtensionRouter(router: ExtensionToolRouter): void {
+    this.extensionRouter = router;
   }
 
   // T-P2-008: send a daemon-initiated message to the connection
@@ -441,7 +457,10 @@ export class IpcServer {
       case "confirm_trust":
       case "deregister_workspace":
       case "set_workspace_mode":
-      case "approval_response": {
+      case "approval_response":
+      case "get_open_editors_response":
+      case "get_diagnostics_response":
+      case "extension_tool_error": {
         // These are handled inline in dispatchLine (workspace cases need
         // per-socket access; hello is handled in the gate above). They
         // never reach this switch.
@@ -470,6 +489,14 @@ export class IpcServer {
         this.approvalGate.cancelByWorkspace(identifier, "extension_reconnected");
       }
     }
+    // T-P2-009 / T-P2-010: cancel any in-flight inspection requests so
+    // the calling MCP tool fails fast with 503 rather than waiting for
+    // the 5s timeout. ExtensionToolRouter is identifier-agnostic for now
+    // (one workspace per daemon is the common case); a per-identifier
+    // hook can land if multi-workspace racing becomes common.
+    if (staleIdentifiers.length > 0 && this.extensionRouter !== null) {
+      this.extensionRouter.cancelAll("extension disconnected");
+    }
   }
 
   private findActiveByIdentifier(identifier: string): {
@@ -493,12 +520,18 @@ export class IpcServer {
     // T-P2-008: approval_response and set_workspace_mode also flow
     // through this handler. They share the per-socket access pattern
     // (state validation + workspaces-store + active-registry).
+    // T-P2-009 / T-P2-010: get_*_response and extension_tool_error
+    // envelopes also flow through here — they route to the extension
+    // router and write no response back.
     if (
       request.kind !== "register_workspace" &&
       request.kind !== "confirm_trust" &&
       request.kind !== "deregister_workspace" &&
       request.kind !== "set_workspace_mode" &&
-      request.kind !== "approval_response"
+      request.kind !== "approval_response" &&
+      request.kind !== "get_open_editors_response" &&
+      request.kind !== "get_diagnostics_response" &&
+      request.kind !== "extension_tool_error"
     ) {
       return false;
     }
@@ -511,6 +544,21 @@ export class IpcServer {
           request.decision,
         );
       }
+      return true;
+    }
+    // T-P2-009 / T-P2-010: inspection-tool responses route to the
+    // extension router via request_id correlation. No daemon ack — the
+    // tool's pending promise resolves with the response payload.
+    if (request.kind === "get_open_editors_response") {
+      this.extensionRouter?.resolveResponse(request);
+      return true;
+    }
+    if (request.kind === "get_diagnostics_response") {
+      this.extensionRouter?.resolveResponse(request);
+      return true;
+    }
+    if (request.kind === "extension_tool_error") {
+      this.extensionRouter?.resolveError(request.request_id, request.message);
       return true;
     }
     if (request.kind === "set_workspace_mode") {

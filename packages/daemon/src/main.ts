@@ -25,6 +25,9 @@ import { pingTool } from "./mcp/tools/ping.js";
 import { makeDelegateTool } from "./mcp/tools/delegate.js";
 import { makePollTool } from "./mcp/tools/poll.js";
 import { makeCancelTool } from "./mcp/tools/cancel.js";
+import { makeGetOpenEditorsTool } from "./mcp/tools/get_open_editors.js";
+import { makeGetDiagnosticsTool } from "./mcp/tools/get_diagnostics.js";
+import { ExtensionToolRouter } from "./mcp/tools/extension-router.js";
 import { StubJobRunner, type JobRunner } from "./jobs/runner.js";
 import { SdkJobRunner } from "./jobs/sdk-runner.js";
 import { McpServer } from "./mcp/server.js";
@@ -58,6 +61,7 @@ export interface DaemonComponents {
   auditLog: AuditLog;
   dailyTimer: DailyTimer;
   pendingApprovals: PendingApprovalRegistry;
+  extensionRouter: ExtensionToolRouter;
   logger: Logger;
   pidPath: string;
 }
@@ -90,6 +94,16 @@ export async function shutdown(
     // flight approval-awaits must reject so the MCP handlers can throw
     // daemon_shutting_down instead of timing out 5 min later.
     { name: "approval", stop: () => components.pendingApprovals.stop() },
+    // T-P2-009 / T-P2-010: cancel any in-flight inspection-tool requests
+    // so the MCP handlers fail fast with 503 instead of waiting for the
+    // 5s timeout. Same ordering rationale as the approval layer.
+    {
+      name: "extension-router",
+      stop: (): Promise<void> => {
+        components.extensionRouter.stop();
+        return Promise.resolve();
+      },
+    },
     { name: "mcp", stop: () => components.mcpServer.stop() },
     { name: "tunnel", stop: () => components.tunnelManager.stop() },
     { name: "audit", stop: () => components.auditLog.stop() },
@@ -261,6 +275,19 @@ async function main(): Promise<void> {
   );
   logger.info("approval gate initialized");
 
+  // 5.55b. Extension tool router (P2 — T-P2-009 / T-P2-010). Owns the
+  // request_id correlation + timeout/error mapping for inspection-tool
+  // round-trips. Send adapter is wired through the same forward-declared
+  // ipcServerRef thunk used by the approval gate.
+  const extensionRouter = new ExtensionToolRouter((identifier, request) => {
+    const server = ipcServerRef.current;
+    if (server === null) {
+      return Promise.reject(new Error("ipcServer not yet constructed"));
+    }
+    return server.sendServerMessage(identifier, request);
+  });
+  logger.info("extension tool router initialized");
+
   // 5.6. Job queue (P1). In-memory single-concurrent queue; 24h retention
   // via the daily timer below. Threaded into tool factories at Phase 4.
   const jobQueue = new JobQueue();
@@ -331,8 +358,21 @@ async function main(): Promise<void> {
   registry.register(makeDelegateTool(toolDeps));
   registry.register(makePollTool({ queue: jobQueue }));
   registry.register(makeCancelTool({ queue: jobQueue, runner: jobRunner }));
+  registry.register(
+    makeGetOpenEditorsTool({ registry: workspaceRegistry, extensionRouter }),
+  );
+  registry.register(
+    makeGetDiagnosticsTool({ registry: workspaceRegistry, extensionRouter }),
+  );
   logger.info("tools registered", {
-    tools: ["ping", "delegate_to_claude_code", "poll_delegation", "cancel_delegation"],
+    tools: [
+      "ping",
+      "delegate_to_claude_code",
+      "poll_delegation",
+      "cancel_delegation",
+      "get_open_editors",
+      "get_diagnostics",
+    ],
   });
 
   // 7. MCP server.
@@ -443,6 +483,10 @@ async function main(): Promise<void> {
   // T-P2-008: wire the approval gate into the IPC server so disconnect-
   // cleanup can cancel in-flight approvals + clear session-bypass state.
   ipcServer.setApprovalGate(approvalGate);
+  // T-P2-009 / T-P2-010: wire the extension-tool router so the IPC
+  // dispatch can route inspection-response envelopes back, and so a
+  // socket close cancels in-flight inspection calls with 503.
+  ipcServer.setExtensionRouter(extensionRouter);
 
   components = {
     ipcServer,
@@ -451,6 +495,7 @@ async function main(): Promise<void> {
     auditLog,
     dailyTimer,
     pendingApprovals,
+    extensionRouter,
     logger,
     pidPath,
   };

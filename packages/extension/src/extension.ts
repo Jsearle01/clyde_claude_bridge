@@ -8,6 +8,10 @@ import {
 import { makeStatusBar, type StatusBarSources } from "./status-bar.js";
 import { makeStatusBarMenu } from "./status-bar-menu.js";
 import { makeApprovalHandler } from "./approval-modal.js";
+import {
+  makeGetOpenEditorsHandler,
+  makeGetDiagnosticsHandler,
+} from "./inspection-tools.js";
 import { diag } from "./diag.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
@@ -106,6 +110,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // T-P2-008: wire the approval-modal handler so daemon-initiated
   // approval_request messages surface as a modal in VS Code.
   ipcClient.onApprovalRequest = makeApprovalHandler(ipcClient);
+
+  // T-P2-009 / T-P2-010: wire the inspection-tool handlers. Both are
+  // read-only and bypass the approval gate — daemon never invokes the
+  // gate on these tools' call paths.
+  ipcClient.onGetOpenEditorsRequest = makeGetOpenEditorsHandler(ipcClient);
+  ipcClient.onGetDiagnosticsRequest = makeGetDiagnosticsHandler(ipcClient);
 
   const statusBarMenuHandler = makeStatusBarMenu(statusBarSources, context, {
     // T-P2-008: applyMode sends set_workspace_mode via IPC; on success

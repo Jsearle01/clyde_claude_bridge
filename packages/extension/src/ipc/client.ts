@@ -15,6 +15,8 @@ import * as vscode from "vscode";
 import {
   IpcServerMessageSchema,
   type ApprovalRequest,
+  type GetOpenEditorsRequest,
+  type GetDiagnosticsRequest,
 } from "@claude-bridge/shared";
 import { diag } from "../diag.js";
 
@@ -105,6 +107,22 @@ export class IpcClient {
   // applies here — the callback runs to completion before the next data
   // chunk is processed).
   public onApprovalRequest?: (request: ApprovalRequest) => Promise<void>;
+  // T-P2-009: fires on each daemon-initiated get_open_editors_request.
+  // Subscriber calls the VS Code tab API and sends a
+  // get_open_editors_response back via ipcClient.send(). Errors
+  // swallowed — subscriber failures must not corrupt the line buffer.
+  // Fifth instance of the "settable single-subscriber callback field"
+  // pattern (see settable-single-subscriber-callback.md for promotion
+  // notes). C-26 ordering: the callback fires AFTER parse, so the
+  // "state-precedes-callback" guard does not apply here.
+  public onGetOpenEditorsRequest?: (
+    request: GetOpenEditorsRequest,
+  ) => Promise<void>;
+  // T-P2-010: same shape for get_diagnostics_request. Sixth instance of
+  // the pattern.
+  public onGetDiagnosticsRequest?: (
+    request: GetDiagnosticsRequest,
+  ) => Promise<void>;
 
   constructor(
     private readonly endpoint: string,
@@ -283,6 +301,23 @@ export class IpcClient {
                 // request<R>() (which expects no response — handled by
                 // a write-only path; see ipcClient.write below).
                 void this.onApprovalRequest(serverMsg.data).catch(() => {
+                  // intentional swallow
+                });
+              } else if (
+                serverMsg.data.kind === "get_open_editors_request" &&
+                this.onGetOpenEditorsRequest !== undefined
+              ) {
+                const msg = serverMsg.data;
+                void this.onGetOpenEditorsRequest(msg).catch(() => {
+                  // intentional swallow — handler is responsible for
+                  // sending an extension_tool_error envelope on failure.
+                });
+              } else if (
+                serverMsg.data.kind === "get_diagnostics_request" &&
+                this.onGetDiagnosticsRequest !== undefined
+              ) {
+                const msg = serverMsg.data;
+                void this.onGetDiagnosticsRequest(msg).catch(() => {
                   // intentional swallow
                 });
               }
