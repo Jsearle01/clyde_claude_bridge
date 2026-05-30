@@ -71,6 +71,16 @@ Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this li
 - AC-24 retry full smoke (R1/R2/R3a/R3b) — operator runtime smoke (C-25.c) for T-P2-008.7 (R3b session_bypass) + T-P2-008.8 (race-window registration retry). If retry-N indicator visible during race + eventual register succeeds + R3b modal does NOT re-fire → C-29 closed, C-30 closed empirically, AC-24 closed, P2 critical path resumes (T-P2-009).
 
 ### Recently completed
+- **T-P2-012** — Cross-platform validation Windows + WSL Ubuntu (COMPLETE, awaiting verdict; 2026-05-29) — **closes AC-P2-15**.
+  - **WSL harness: 10/10 PASS on first run.** No platform fixes needed in `packages/*` or in `scripts/acceptance-p2.mjs`. The harness's Windows-pipe-vs-Unix-socket dispatch (`process.platform === "win32"`) was already correct and handled both platforms cleanly.
+  - **Windows harness re-run: 10/10 PASS** on second attempt (first attempt got EADDRINUSE on port 7423 in TIME_WAIT after the user-daemon stop; 5s wait resolved). Parity confirmed across all 10 ACs.
+  - **C-13 grep #2 surfaced:** Node not on default WSL PATH. Located v20.18.0 at `~/node-v20/bin/node` (portable install, not nvm). Pattern noted: T-P1-012's harness also worked around portable Node via `~/cloudflared` PATH augment; same pattern reusable here.
+  - **Two helper scripts added** (~60 lines total): `scripts/run-p2-wsl.sh` (PATH export + dispatch to `node scripts/acceptance-p2.mjs`) and `scripts/verify-vsix-wsl.sh` (AC #4 structural .vsix verify via `python3 -m zipfile -e` to avoid an apt-install of `unzip`). Both are operator tools — kept in `scripts/` rather than baked into the harness so future cross-platform runs don't need to re-derive the PATH dance.
+  - **C-25.2 cross-platform:** WSL `.vsix` unpack → 5 files / valid `package.json` / `grep -c "@claude-bridge/" dist/extension.js → 0`. Same outcome as the Windows verification in T-P2-009/010.
+  - **Elapsed-time parity comparison** (Windows / WSL, ms): AC-P2-3 16/16, P2-4 23/22, P2-5 13/20, P2-7 1/0, P2-8 411/400 (stub-job-runner dominated), P2-9 38/33, P2-10 10/17, P2-11 12/17, P2-12 22/37, P2-14 17/26. All within 2x; no >5x outliers per dispatch's calibration threshold.
+  - **Pure validation; no source-code changes.** Tests existing 685 passing + 16 skipped unchanged. Lint clean (C-25.1 fresh-verified). Workspace-root build clean.
+  - **Operator coordination:** user daemon stopped + restarted twice during the session (once for Windows harness re-run, once at end). Documented in report.
+  - **AC-P2-15 (cross-platform parity) verified.**
 - **T-P2-011** — P2 acceptance harness via mock VS Code extension (COMPLETE, awaiting verdict; 2026-05-29)
   - **New scripts:** `scripts/mock-extension.mjs` (~270 lines; pluggable IPC mock with `onTrustPrompt` / `onApproval` / `getOpenEditors` / `getDiagnostics` behavior config; `setMode()` for set_workspace_mode round-trip; `getReceivedCallLog()` for assertions) + `scripts/acceptance-p2.mjs` (~580 lines; setup/teardown + 10 AC tests). Reuses `scripts/lib/harness-common.mjs` for daemon-lifecycle plumbing (pre-existing from T-P1-011; **C-13 grep #1 finding** — scope didn't shrink because the lifecycle helpers were already general enough; mock-extension is the new surface).
   - **Coverage:** 10 of 15 P2 ACs. Remaining (P2-1/2/6/13/15) covered by operator smoke + T-P2-012.
