@@ -69,6 +69,29 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
       decision: z.enum(["approve", "deny", "approve_session"]),
     })
     .strict(),
+  // T-P3-002: extension acknowledges receipt of an auth_consent_request.
+  // Asymmetric (no daemon ack). Daemon's 3s ack window closes either on
+  // arrival or on timeout. Used to distinguish "extension is offline" from
+  // "user is taking time to decide" — the former returns an offline page
+  // BEFORE the consent record is created (guardrail order); the latter
+  // shows the pending meta-refresh page.
+  z
+    .object({
+      kind: z.literal("auth_consent_ack"),
+      request_id: z.string(),
+    })
+    .strict(),
+  // T-P3-002: extension reports the user's consent decision. Asymmetric.
+  // Late arrivals (after the 30s decision timeout fired) are silently
+  // discarded by the daemon (daemon-authoritative race resolution per
+  // design §3.4).
+  z
+    .object({
+      kind: z.literal("auth_consent_response"),
+      request_id: z.string(),
+      decision: z.enum(["approve", "deny", "dismiss"]),
+    })
+    .strict(),
   // T-P2-009 / T-P2-010: extension's responses to daemon-initiated
   // inspection-tool requests. Asymmetric (no daemon ack); request_id
   // correlates back to the pending entry in the daemon's extension
@@ -294,6 +317,29 @@ export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
       kind: z.literal("get_diagnostics_request"),
       request_id: z.string(),
       severities: z.array(z.enum(["error", "warning", "info", "hint"])),
+    })
+    .strict(),
+  // T-P3-002: daemon asks the extension to surface the OAuth consent
+  // modal. `client_id` + `client_name` are shown in the modal copy;
+  // `redirect_uri` is the registered destination the auth code will be
+  // bound to. Extension responds with auth_consent_ack within 3s and
+  // auth_consent_response within 30s of ack.
+  z
+    .object({
+      kind: z.literal("auth_consent_request"),
+      request_id: z.string(),
+      client_id: z.string(),
+      client_name: z.string(),
+      redirect_uri: z.string(),
+    })
+    .strict(),
+  // T-P3-002: daemon notifies the extension that the 30s decision timer
+  // fired (best-effort modal-close signal). The state machine has already
+  // transitioned to "timeout" daemon-side; the extension closes its modal.
+  z
+    .object({
+      kind: z.literal("auth_consent_timeout"),
+      request_id: z.string(),
     })
     .strict(),
 ]);

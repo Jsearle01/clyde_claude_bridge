@@ -1,23 +1,37 @@
-// T-P3-001: OAuth bootstrap router. Composes the two unauthenticated
-// endpoint handlers (metadata + register) into a single function that
-// McpServer's HTTP listener calls before its Bearer auth check.
+// T-P3-001 + T-P3-002: OAuth router. Composes the unauthenticated
+// endpoint handlers into a single function that McpServer's HTTP
+// listener calls before its Bearer auth check.
 //
 // Returns true when the request matched one of the OAuth routes (caller
 // short-circuits); false when the URL didn't match (caller continues to
 // MCP routing).
+//
+// Matching is exact (`===`) on the URL path component only — anchored
+// from start to end of path; query strings are stripped before compare.
+// Negative tests cover non-OAuth paths to ensure they fall through.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Logger } from "../log/logger.js";
 import type { ClientsStore } from "./clients-store.js";
+import type { ConsentManager } from "./consent.js";
+import { handleAuthorize } from "./authorize.js";
 import { handleMetadata } from "./metadata.js";
 import { handleRegister } from "./register.js";
+import { handleStatus } from "./status.js";
 
 const METADATA_PATH = "/.well-known/oauth-authorization-server";
 const REGISTER_PATH = "/register";
+// T-P3-002: consent flow endpoints.
+const AUTHORIZE_PATH = "/authorize";
+const AUTHORIZE_STATUS_PATH = "/authorize/status";
 
 export interface OAuthRouterDeps {
   logger: Logger;
   clientsStore: ClientsStore;
+  // T-P3-002: optional. When omitted, /authorize + /authorize/status
+  // route to false (MCP fall-through) so legacy callers don't suddenly
+  // see new endpoints. Production wiring passes a real manager.
+  consentManager?: ConsentManager;
 }
 
 function pathOf(req: IncomingMessage): string {
@@ -40,6 +54,24 @@ export function makeOAuthRouter(
       await handleRegister(req, res, {
         logger: deps.logger,
         clientsStore: deps.clientsStore,
+      });
+      return true;
+    }
+    if (path === AUTHORIZE_PATH && deps.consentManager !== undefined) {
+      await handleAuthorize(req, res, {
+        logger: deps.logger,
+        clientsStore: deps.clientsStore,
+        consentManager: deps.consentManager,
+      });
+      return true;
+    }
+    if (
+      path === AUTHORIZE_STATUS_PATH &&
+      deps.consentManager !== undefined
+    ) {
+      await handleStatus(req, res, {
+        logger: deps.logger,
+        consentManager: deps.consentManager,
       });
       return true;
     }

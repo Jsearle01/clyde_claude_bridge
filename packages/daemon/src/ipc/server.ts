@@ -114,6 +114,16 @@ export class IpcServer {
   // (legacy daemon-construction without gate), set_workspace_mode and
   // approval_response requests respond with a protocol_error.
   private approvalGate: ApprovalGate | null = null;
+  // T-P3-002: optional consent receiver. When absent, auth_consent_*
+  // messages are silently dropped (the daemon-authoritative state
+  // machine treats this the same as a late arrival).
+  private consentReceiver: {
+    recordAck: (request_id: string) => void;
+    recordDecision: (
+      request_id: string,
+      decision: "approve" | "deny" | "dismiss",
+    ) => void;
+  } | null = null;
   // T-P2-009 / T-P2-010: optional extension-tool router. Wired in
   // main.ts. When absent, inbound inspection-tool response/error
   // envelopes are silently dropped (the daemon has nothing pending to
@@ -145,6 +155,21 @@ export class IpcServer {
     this.approvalGate = gate;
   }
 
+  // T-P3-002: consent receiver. Wired by main.ts after the
+  // ConsentManager is constructed. Routes auth_consent_ack +
+  // auth_consent_response inbound from extensions to the manager;
+  // late arrivals are silently discarded by the manager per the
+  // daemon-authoritative race-resolution invariant.
+  public setConsentReceiver(receiver: {
+    recordAck: (request_id: string) => void;
+    recordDecision: (
+      request_id: string,
+      decision: "approve" | "deny" | "dismiss",
+    ) => void;
+  }): void {
+    this.consentReceiver = receiver;
+  }
+
   // T-P2-009 / T-P2-010: post-construction extension-router wire-up.
   // The router needs IpcServer.sendServerMessage as its send adapter
   // (wired by main.ts inside the router's constructor), so the router
@@ -173,6 +198,33 @@ export class IpcServer {
         else resolve();
       });
     });
+  }
+
+  // T-P3-002: broadcast a daemon-initiated message to ALL active
+  // extension connections (across all registered workspaces). Returns
+  // the number of recipients written to. Used by the OAuth consent flow
+  // — the consent request is per-(client_id), not per-workspace, so any
+  // online extension can surface the modal.
+  //
+  // Best-effort: a write error on one socket does not prevent writes to
+  // the others. The returned count reflects sockets the daemon
+  // ATTEMPTED to write to (the OS write buffer succeeded); delivery to
+  // userspace is the OS's job.
+  public broadcastServerMessage(message: IpcServerMessage): number {
+    let count = 0;
+    const encoded = encodeMessage(message);
+    for (const entry of this.activeRegistry.values()) {
+      try {
+        entry.socket.write(encoded);
+        count += 1;
+      } catch (err) {
+        this.logger.warn("ipc broadcast: socket write failed", {
+          identifier: entry.identifier,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return count;
   }
 
   constructor(
@@ -460,7 +512,9 @@ export class IpcServer {
       case "approval_response":
       case "get_open_editors_response":
       case "get_diagnostics_response":
-      case "extension_tool_error": {
+      case "extension_tool_error":
+      case "auth_consent_ack":
+      case "auth_consent_response": {
         // These are handled inline in dispatchLine (workspace cases need
         // per-socket access; hello is handled in the gate above). They
         // never reach this switch.
@@ -531,9 +585,25 @@ export class IpcServer {
       request.kind !== "approval_response" &&
       request.kind !== "get_open_editors_response" &&
       request.kind !== "get_diagnostics_response" &&
-      request.kind !== "extension_tool_error"
+      request.kind !== "extension_tool_error" &&
+      request.kind !== "auth_consent_ack" &&
+      request.kind !== "auth_consent_response"
     ) {
       return false;
+    }
+    // T-P3-002: consent messages route to the consent manager. No daemon
+    // ack — the manager funnels them through its single state-transition
+    // primitive; late arrivals are silently discarded there.
+    if (request.kind === "auth_consent_ack") {
+      this.consentReceiver?.recordAck(request.request_id);
+      return true;
+    }
+    if (request.kind === "auth_consent_response") {
+      this.consentReceiver?.recordDecision(
+        request.request_id,
+        request.decision,
+      );
+      return true;
     }
     // approval_response is processed in a dedicated path below — it
     // routes to the gate and writes no response.

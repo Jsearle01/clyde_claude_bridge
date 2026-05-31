@@ -35,6 +35,7 @@ import { TunnelManager } from "./tunnel/manager.js";
 import { IpcServer, type IpcHandlers } from "./ipc/server.js";
 import { WorkspacesStore } from "./workspace/store.js";
 import { ClientsStore } from "./oauth/clients-store.js";
+import { ConsentManager } from "./oauth/consent.js";
 import { makeOAuthRouter } from "./oauth/router.js";
 import { getWorkspacesStorePath, getClientsStorePath } from "./config/paths.js";
 import { makeInitialState } from "./state.js";
@@ -64,6 +65,7 @@ export interface DaemonComponents {
   dailyTimer: DailyTimer;
   pendingApprovals: PendingApprovalRegistry;
   extensionRouter: ExtensionToolRouter;
+  consentManager: ConsentManager;
   logger: Logger;
   pidPath: string;
 }
@@ -103,6 +105,18 @@ export async function shutdown(
       name: "extension-router",
       stop: (): Promise<void> => {
         components.extensionRouter.stop();
+        return Promise.resolve();
+      },
+    },
+    // T-P3-002: consent manager between extension-router stop and mcp
+    // stop. After ipc stop, no new consent messages can flow; before
+    // mcp stop, in-flight consent awaiters must resolve so /authorize
+    // and /authorize/status handlers can return error pages rather than
+    // hanging.
+    {
+      name: "oauth-consent",
+      stop: (): Promise<void> => {
+        components.consentManager.stop();
         return Promise.resolve();
       },
     },
@@ -297,6 +311,29 @@ async function main(): Promise<void> {
   });
   logger.info("extension tool router initialized");
 
+  // 5.55c. OAuth consent manager (P3 — T-P3-002). In-memory ephemeral
+  // state machine for /authorize → modal → /authorize/status flow. The
+  // send-to-extension adapter broadcasts to ALL active extension
+  // connections (consent is per-client_id, not per-workspace; any online
+  // extension can surface the modal). Returns the number of recipients;
+  // 0 → caller renders the offline page BEFORE creating a consent record.
+  const consentManager = new ConsentManager(
+    { logger },
+    (msg) => {
+      const server = ipcServerRef.current;
+      if (server === null) return 0;
+      return server.broadcastServerMessage(msg);
+    },
+    (msg) => {
+      const server = ipcServerRef.current;
+      if (server === null) return;
+      // Best-effort modal-close signal; failures swallowed (the daemon's
+      // state machine has already transitioned, browser is told regardless).
+      server.broadcastServerMessage(msg);
+    },
+  );
+  logger.info("oauth consent manager initialized");
+
   // 5.6. Job queue (P1). In-memory single-concurrent queue; 24h retention
   // via the daily timer below. Threaded into tool factories at Phase 4.
   const jobQueue = new JobQueue();
@@ -396,7 +433,7 @@ async function main(): Promise<void> {
     // T-P3-001: OAuth bootstrap router mounted ahead of Bearer auth.
     // Handles `/.well-known/oauth-authorization-server` and `/register`
     // unauthenticated; other paths fall through to MCP.
-    oauthHandler: makeOAuthRouter({ logger, clientsStore }),
+    oauthHandler: makeOAuthRouter({ logger, clientsStore, consentManager }),
   });
   await mcpServer.start();
 
@@ -500,6 +537,14 @@ async function main(): Promise<void> {
   // dispatch can route inspection-response envelopes back, and so a
   // socket close cancels in-flight inspection calls with 503.
   ipcServer.setExtensionRouter(extensionRouter);
+  // T-P3-002: wire the consent manager so auth_consent_ack +
+  // auth_consent_response route to the daemon-authoritative state
+  // machine.
+  ipcServer.setConsentReceiver({
+    recordAck: (request_id) => consentManager.recordAck(request_id),
+    recordDecision: (request_id, decision) =>
+      consentManager.recordDecision(request_id, decision),
+  });
 
   components = {
     ipcServer,
@@ -509,6 +554,7 @@ async function main(): Promise<void> {
     dailyTimer,
     pendingApprovals,
     extensionRouter,
+    consentManager,
     logger,
     pidPath,
   };

@@ -44,6 +44,12 @@ function encode(msg) {
 //   onTrustPrompt: "trust" | "deny" | "ignore"
 //   onApproval: "approve" | "approve_session" | "deny" | "ignore"
 //                | (request) => "approve" | "deny" | "approve_session" | "ignore"
+//   onAuthConsent: "approve" | "deny" | "ack-only" | "ignore" | function
+//                  "approve"  → ack + auth_consent_response{approve}
+//                  "deny"     → ack + auth_consent_response{deny}
+//                  "ack-only" → ack but never respond (drives decision-timeout)
+//                  "ignore"   → no ack, no response (drives ack-timeout)
+//                  function   → (request) => one of the above (string)
 //   getOpenEditors: () => OpenEditor[]           // optional
 //   getDiagnostics: (severities: string[]) => DiagnosticItem[]  // optional
 //
@@ -183,6 +189,34 @@ export async function startMockExtension(behavior) {
         });
         return;
       }
+      case "auth_consent_request": {
+        const knob = await resolveAuthConsentDecision(parsed);
+        if (knob === "ignore") return;
+        // ack first (within the 3s window the daemon enforces). The
+        // "approve" / "deny" / "ack-only" all ack; only "ignore"
+        // skips the ack.
+        write({
+          kind: "auth_consent_ack",
+          request_id: parsed.request_id,
+        });
+        if (knob === "ack-only") return;
+        write({
+          kind: "auth_consent_response",
+          request_id: parsed.request_id,
+          decision: knob,
+        });
+        return;
+      }
+      case "auth_consent_timeout": {
+        // Daemon told us the decision timer fired. Best-effort modal-close
+        // notification; mock-extension just acknowledges by logging via
+        // the call log (no IPC reply expected). T-P3-003's real extension
+        // will close its modal here.
+        if (state.callLog !== undefined) {
+          state.callLog.push({ kind: "auth_consent_timeout", request_id: parsed.request_id });
+        }
+        return;
+      }
       case "get_open_editors_request": {
         const editors =
           behavior.getOpenEditors !== undefined
@@ -222,6 +256,15 @@ export async function startMockExtension(behavior) {
 
   async function resolveApprovalDecision(request) {
     const behaviorValue = state.approvalBehavior;
+    if (typeof behaviorValue === "function") {
+      const r = behaviorValue(request);
+      return r instanceof Promise ? await r : r;
+    }
+    return behaviorValue;
+  }
+
+  async function resolveAuthConsentDecision(request) {
+    const behaviorValue = behavior.onAuthConsent ?? "deny";
     if (typeof behaviorValue === "function") {
       const r = behaviorValue(request);
       return r instanceof Promise ? await r : r;
