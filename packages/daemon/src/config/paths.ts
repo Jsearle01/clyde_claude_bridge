@@ -37,6 +37,10 @@ export function getWorkspacesStorePath(): string {
   return join(getConfigDir(), "workspaces.json");
 }
 
+export function getClientsStorePath(): string {
+  return join(getConfigDir(), "clients.json");
+}
+
 export function expandTilde(p: string): string {
   if (p === "~") return getHome();
   if (p.startsWith("~/")) {

@@ -34,7 +34,9 @@ import { McpServer } from "./mcp/server.js";
 import { TunnelManager } from "./tunnel/manager.js";
 import { IpcServer, type IpcHandlers } from "./ipc/server.js";
 import { WorkspacesStore } from "./workspace/store.js";
-import { getWorkspacesStorePath } from "./config/paths.js";
+import { ClientsStore } from "./oauth/clients-store.js";
+import { makeOAuthRouter } from "./oauth/router.js";
+import { getWorkspacesStorePath, getClientsStorePath } from "./config/paths.js";
 import { makeInitialState } from "./state.js";
 import { WorkspaceRegistryImpl } from "./workspace/registry.js";
 import { validateWorkspaceConfig } from "./workspace/config.js";
@@ -246,6 +248,13 @@ async function main(): Promise<void> {
   // C-23: daemon-restart against pre-populated workspaces.json).
   const workspacesStore = new WorkspacesStore(getWorkspacesStorePath(), logger);
   await workspacesStore.load();
+  // T-P3-001: OAuth DCR clients store. Mirrors WorkspacesStore shape;
+  // loaded once at startup so the DCR endpoint sees pre-existing entries.
+  const clientsStore = new ClientsStore(getClientsStorePath(), logger);
+  await clientsStore.load();
+  logger.info("oauth clients store initialized", {
+    client_count: clientsStore.list().length,
+  });
   const ipcServerRef: { current: IpcServer | null } = { current: null };
   const workspaceRegistry = new WorkspaceRegistryImpl(
     workspacesStore,
@@ -384,6 +393,10 @@ async function main(): Promise<void> {
     auditLog,
     state,
     registry,
+    // T-P3-001: OAuth bootstrap router mounted ahead of Bearer auth.
+    // Handles `/.well-known/oauth-authorization-server` and `/register`
+    // unauthenticated; other paths fall through to MCP.
+    oauthHandler: makeOAuthRouter({ logger, clientsStore }),
   });
   await mcpServer.start();
 

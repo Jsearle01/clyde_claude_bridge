@@ -82,6 +82,12 @@ export interface McpServerOpts {
   auditLog: AuditLog;
   state: DaemonState;
   registry: ToolRegistry;
+  // T-P3-001: OAuth bootstrap handler. Routes `/.well-known/oauth-
+  // authorization-server` and `/register` BEFORE the Bearer auth check
+  // (both endpoints are unauthenticated by RFC 8414 / RFC 7591 design).
+  // Returns true when the request was handled (caller short-circuits);
+  // false when the request should fall through to MCP routing.
+  oauthHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }
 
 export class McpBindError extends Error {
@@ -180,6 +186,46 @@ export class McpServer {
       typeof sessionHeader === "string" ? sessionHeader : undefined;
     const startMs = Date.now();
 
+    // T-P3-001: OAuth bootstrap routing runs BEFORE the Bearer auth
+    // check. The two OAuth endpoints (`/.well-known/oauth-authorization-
+    // server` and `/register`) are unauthenticated by spec; routing them
+    // through `authenticate` would 401 valid discovery + DCR traffic.
+    // The handler returns `true` when it consumed the request (we exit);
+    // `false` when the URL didn't match its routes (fall through to MCP).
+    if (this.opts.oauthHandler !== undefined) {
+      const oauthHandler = this.opts.oauthHandler;
+      void oauthHandler(req, res).then(
+        (handled) => {
+          if (handled) return;
+          this.handleMcpAfterOAuthMiss(req, res, transport, requestId, remoteAddr, mcpSessionId, startMs);
+        },
+        (err: unknown) => {
+          this.opts.logger.warn("mcp oauth handler failed", {
+            error: errorMessage(err),
+            request_id: requestId,
+          });
+          // Best-effort: if the response isn't written yet, close cleanly.
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    this.handleMcpAfterOAuthMiss(req, res, transport, requestId, remoteAddr, mcpSessionId, startMs);
+  }
+
+  private handleMcpAfterOAuthMiss(
+    req: IncomingMessage,
+    res: ServerResponse,
+    transport: StreamableHTTPServerTransport,
+    requestId: string,
+    remoteAddr: string,
+    mcpSessionId: string | undefined,
+    startMs: number,
+  ): void {
     const authResult = authenticate(req, this.opts.getExpectedToken());
     if (!authResult.ok) {
       res.writeHead(401);
