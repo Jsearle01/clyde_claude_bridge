@@ -1,7 +1,7 @@
 # claude-bridge — project state
 
 **Project:** claude-bridge
-**Methodology version:** v0.5
+**Methodology version:** v0.6 (codified T-P2-014, 2026-05-30; supersedes v0.5)
 **Current phase:** P1 closed; P2 design pending
 **Current integration milestone:** INT-2 closed implicitly via P1 ACs; INT-3 (steady-state multi-workspace UX in VS Code) pending P2
 **Last conversation date:** 2026-05-24
@@ -12,7 +12,13 @@
 - Update `02-p1-delegation.md` `delegate_to_claude_code` validation rules: remove the "capped at 32 KB" phrase from the prompt-field description (was speculative architecture without empirical grounding; no enforcement in P1 by design per T-P1-009 reshape).
 **Repository:** https://github.com/Jsearle01/clyde_claude_bridge (public, mechanically verified via `gh repo view` at T-P1-001.6)
 
-## v0.6 candidates
+## v0.6 candidates (codified — see `docs/claude-orchestrated-methodology-v0_6.md`)
+
+T-P2-014 codified the v0.6 candidates per the 2026-05-28 scope-lock. The historical
+table below is retained for traceability; live candidates moving forward are tracked
+in the v0.7 candidates section near the end of this file.
+
+## v0.6 candidates (historical — closed by T-P2-014 codification)
 
 Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this list as its scope. Each P2-era verdict may append to the list; entries are append-only except for `status` updates.
 
@@ -65,14 +71,23 @@ Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this li
 ## Task queue
 
 ### In progress
-- T-P2-013 — Runbook + walkthrough + overview updates; OAuth narrative correction (COMPLETE, awaiting verdict)
+- T-P2-014 — v0.6 methodology codification (COMPLETE, awaiting verdict)
 
 ### Pending
-- T-P2-014 — v0.6 methodology codification (consumes the v0.6 candidates table including C-1 through C-31 + the M-G/H/I/J/K provisional methodology candidates).
 - T-P2-015 — P2 gate-close marker on README + gate-close snapshot.
-- AC-24 retry full smoke (R1/R2/R3a/R3b) — operator runtime smoke (C-25.c) for T-P2-008.7 (R3b session_bypass) + T-P2-008.8 (race-window registration retry).
+- AC-24 retry full smoke (R1/R2/R3a/R3b) — operator runtime smoke (C-25.3) for T-P2-008.7 (R3b session_bypass) + T-P2-008.8 (race-window registration retry).
 
 ### Recently completed
+- **T-P2-014** — v0.6 methodology codification (COMPLETE, awaiting verdict; 2026-05-30)
+  - **New file:** `docs/claude-orchestrated-methodology-v0_6.md` — full standalone replacement for v0.5 per scope-lock A.1 (~570 lines). Preserves v0.5 substance verbatim in §1, §2 (lightly extended for new C-N dispatch-shape references), §4, §5.1, §5.3, §5.4, §6, §7, §9 (with added tolerance note for existing 9 pattern docs), §13. Revises §3.5 (Form A/B specs gain mandatory C-35 elapsed-time block), §5.2 (combined P1+P2 empirical band table organized by task-shape with 12 new shape rows), §8.2 (CC-2 elaborations C.1 path-verification from C-17 + C.2 CVE-2024-27980 citation from C-20). New §10 (Numbered conventions — C-13/14/21/31/32/33/34/35), §11 (Verdict-time evidence — C-25.1/.2/.3), §15 (Changelog from v0.5 with differential-review statement + closed-item acknowledgments for C-23/24/26/28/29/30 + empirical-basis table + v0.7-deferred list).
+  - **Cross-reference updates (3 files, 8 edits applied; 4 historical references left alone with rationale):** `README.md` line 129 methodology link v0.5 → v0.6 with expanded description; `docs/design/p2-build-plan.md` 6 edits at lines 6, 42, 316, 320, 471, 509 (declarative current-state references updated; historical authorship references at lines 10, 378, 386 preserved); `docs/patterns/project/settable-single-subscriber-callback.md` line 331 methodology reference v0.5 → v0.6 with tolerance-note appendage.
+  - **C-13 grep findings, no hard-stops:** scope-lock vs project-state candidate alignment — all scope-lock B/C/D candidates present in project-state's v0.6 table; new C-32/33/34/35 codified by scope-lock B itself (not pre-existing); minor status drift on C-23 (project-state line 53 still "open" while scope-lock D says closed-by-T-P2-007) — noted not blocked. v0.5 doc structure matched scope-lock's assumption (12 sections + Preamble + End). Calibration log: 22 P2 datapoints confirmed (matches scope-lock A.6 expected). Pattern docs: 9 confirmed (matches A.5).
+  - **C-22 text recovery (per scope-lock E TBD):** C-22 present in project-state.md line 45 as fully recovered text (orchestrator narrowing audit). Per scope-lock E, deferred to v0.7. v0.6 §12 (open questions) and §15 (changelog deferred list) both cite C-22 as v0.7-deferred. Logged as such in v0.6.
+  - **Differential-review statement (per scope-lock A.3):** present in v0.6 §15 as the first subsection — explicitly enumerates which v0.5 sections survived verbatim (1, 2-extended, 4, 5.1, 5.3, 5.4, 6, 7, 9, 13), which were revised (3.5, 5.2, 8.2), which are new (10, 11, 15), and which were repurposed (10→12, +14).
+  - **Empirical band table (§5.2) refresh:** combined P1+P2 matrix organized by task-shape. 12 shape rows including bounded-fix (5-15), pure-code discovery-deferred (6-12), pure-code real discovery (14-25), medium-shape pre-resolved (30-50), large multi-subsystem (70-100), live-cycle harness (15-30), live-API unit-test (12-30), live-API wire-path harness (20-35), cross-platform validation (15-30 or 8-15), doc rewrite + cross-references (15-25), methodology codification (25-45), diagnostic-add separate task (10-20).
+  - **Pattern doc template (§9)** codified going-forward; existing 9 docs explicitly noted as not normalized (tolerated per scope-lock A.5).
+  - **Streak counter:** stays out of methodology per scope-lock A.7. v0.6 says nothing about per-project streak tracking.
+  - **No source-code or test changes** (verified via `git diff --stat packages/ scripts/` returning empty per AC #18). Existing tests unchanged. Lint clean across 4 workspaces (C-25.1 fresh-verified per AC #20). C-25.2 N/A (no .vsix change). C-25.3 N/A (doc-only; no runtime surface affected).
 - **T-P2-013** — Runbook + walkthrough + overview updates; OAuth narrative correction (COMPLETE, awaiting verdict; 2026-05-30)
   - **Doc-only change.** 7 files modified across `docs/` + `README.md`. Zero changes in `packages/*` or `scripts/*` (confirmed via `git diff --stat`).
   - **Section A — Walkthrough rewrite:** `docs/walkthrough.md` restructured into Part 1 / Part 2 (566 → ~388 lines net). Part 1 documents the actual P2-shipped flow via Bearer-compatible MCP clients (Claude Code CLI, MCP Inspector, Claude Desktop, raw curl) including new sections for `Connecting an MCP client`, the actual T-P2-001..008 trust-prompt + workspaces.json + status-bar flow, the Claude Code CLI delegation example with `per_call` modal, and the new T-P2-009/010 `Inspection tools` section with `get_open_editors` / `get_diagnostics` payload shapes + `400 ambiguous_workspace` routing. Part 2 preserves the aspirational claude.ai project-chat narrative (the `list_workspaces` / `delegate_to_claude_code` / `poll_delegation` loop + webview-panel + `.claude-bridge.json` content + the ATTN-CC3-specific section) clearly marked as "requires OAuth in daemon's auth layer — P3 deliverable." The former technical `P1 — Delegation surface` section (~190 lines duplicating `02-p1-delegation.md` + runbook) deleted as out of scope for an operator walkthrough — explains the net line shrink despite Part 1's added breadth.
@@ -577,6 +592,47 @@ load-bearing file/line.
   collapses untrusted into the unregistered code path (both return 503). Add a
   discriminated 403 if there's demand. Surfaced during T-P2-011 harness work
   + corrected in T-P2-013's `docs/design/03-p2-extension.md` § 5 note.
+
+## v0.7 candidates
+
+Methodology candidates surfaced after the 2026-05-28 v0.6 scope-lock. Promoted to numbered C-N entry on third-instance evidence; codified during the v0.7 scope-lock pass.
+
+### Deferred from v0.6 (per scope-lock E)
+
+| ID | Description | Status |
+|----|-------------|--------|
+| C-11 | §22.5 trigger clarification: find-target-absent-but-substantive-intent-applies-elsewhere (at-site) vs find-target-exists-with-different-wording (consult). Boundary working in practice; codify with examples. | open, deferred from v0.6 |
+| C-12 | Empirical band for multi-file doc-edit with all decisions pre-resolved (15-22 min over 2 datapoints; legacy Medium-consolidation 5-15 min under-predicts). | open, single-shape datapoint; revisit at 3+ instances |
+| C-15 | Structured error-discrimination fields on the error variant (regex-parseable fields embedded in message vs first-class discriminated `error_data`). | open, project pattern candidate; defer until 2+ instances |
+| C-19 | VS Code SecretStorage returns `Thenable<T>` not `Promise<T>`; library-style interfaces consuming it must type with `PromiseLike<T>`. | open, project pattern candidate |
+| C-22 | Orchestrator narrowing audit: when an initial fix doesn't resolve the defect, re-examine the original rejection reasoning before drafting another fix. | open, captured in v0.6 §3.2 informally; formal codification deferred |
+
+### Provisional methodology candidates (M-* series, tracked per scope-lock F)
+
+| Provisional | Description | Instance count |
+|-------------|-------------|----------------|
+| M-A | Fork-in-the-road dispatch pattern | 1 (T-P2-008.7) |
+| M-E | Accessor-read C-26 test subgenre | 2 (T-P2-006.5, T-P2-006-followup) |
+| M-F | "Verify mechanism before describing mechanism" | 1 (T-P2-008.8 scope refinement) |
+| M-G | (post-scope-lock; tracked per T-P2-013 verdict — placeholder pending verdict text) | TBD |
+| M-H | (post-scope-lock; tracked per T-P2-013 verdict — placeholder pending verdict text) | TBD |
+| M-I | (post-scope-lock; tracked per T-P2-013 verdict — placeholder pending verdict text) | TBD |
+| M-J | (post-scope-lock; tracked per T-P2-013 verdict — placeholder pending verdict text) | TBD |
+| M-K | (post-scope-lock; tracked per T-P2-013 verdict — placeholder pending verdict text) | TBD |
+| M-L | Parallel-sub-agent leverage for independent-file edits (T-P2-013 + T-P2-014 dispatches both used Workflow tool for parallel section writes) | 2 |
+| M-M | (placeholder, tracked per T-P2-013 verdict — pending verdict text) | TBD |
+
+### Project-pattern candidates (not methodology-level; surfaced during P2)
+
+| Pattern | Instances | Source |
+|---------|-----------|--------|
+| Fire-and-forget `send()` vs `request<R>()` shape on IPC clients | 1 | T-P2-008 |
+| Layered shutdown with new layers inserted between existing layers | 1 | T-P2-008 |
+| Forward-declaration thunk for circular construction dependencies | 1 | T-P2-007 |
+| Pre-fix regression-test verification | 1 | T-P2-006.5 |
+| Logger as optional constructor parameter for testability | 1 | T-P2-007.5 |
+
+---
 
 ## Completed work manifest
 

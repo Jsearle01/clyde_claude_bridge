@@ -3,7 +3,7 @@
 **Phase:** P2
 **Status:** Draft — pending Clyde review and user final approval
 **Predecessor:** `docs/design/p1-build-plan.md` (14 phases, gate-closed)
-**Methodology in effect:** v0.5
+**Methodology in effect:** v0.6
 
 This document is the per-task breakdown of P2. Each task is a numbered phase. The design rationale for each phase is in `docs/design/03-p2-extension.md`.
 
@@ -39,7 +39,7 @@ Three process changes worth being explicit about:
 
 **1. Running v0.6 candidate list in `project-state.md`.** Each task's verdict appends to a `v0_6_candidates` field if anything methodology-relevant surfaces. T-P2-014 reads from this list as its scope, rather than reconstructing from 13 prior verdicts at task time.
 
-**2. Methodology v0.5 in effect from day one.** Every dispatch follows v0.5 conventions: dual-band reporting, mandatory "User interaction during task" section, explicit variance arithmetic in verdicts, CC-4/5/6 cross-platform discipline, docs-vs-runtime pattern recognition. No transition cost; methodology is settled going in.
+**2. Methodology v0.5 in effect from day one (succeeded by v0.6 at T-P2-014).** Every dispatch followed v0.5 conventions through T-P2-013; T-P2-014 codified v0.6, which carries forward all v0.5 conventions plus the C-13/C-14/C-21/C-31/C-32/C-33/C-34/C-35 numbered conventions and the C-25 verdict-time evidence family.
 
 **3. Extension introduces a new package boundary.** Code lives under `extension/` (or `packages/extension/` if we mirror the monorepo style; T-P2-001 makes the call). VS Code-specific code stays out of `packages/daemon/` and `packages/shared/`. Cross-package dependencies follow the existing monorepo conventions.
 
@@ -313,11 +313,11 @@ Three process changes worth being explicit about:
 **ACs:**
 - All P2 SMOKE ACs pass via the harness.
 - Harness runs on Windows; WSL run is Phase 12's concern.
-- No silent-pass failures (assertion discipline per v0.5 §7).
+- No silent-pass failures (assertion discipline per v0.6 §7).
 
 **Patterns:** Harness-common.mjs (from T-P1-011); unwrapOrThrow; cross-platform-test-inputs.
 
-**Empirical prediction:** 25-35 min (real harness production + live-cycle debug-fix headroom). Live-API wire-path harness shape per v0.5 calibration table.
+**Empirical prediction:** 25-35 min (real harness production + live-cycle debug-fix headroom). Live-API wire-path harness shape per v0.6 calibration table (combined P1+P2 matrix in v0.6 §5.2).
 
 ---
 
@@ -468,7 +468,7 @@ The two clocks have been distinguished here because conflating them is logged as
 ## References
 
 - Design doc: `docs/design/03-p2-extension.md`
-- Methodology in effect: `docs/claude-orchestrated-methodology-v0_5.md`
+- Methodology in effect: `docs/claude-orchestrated-methodology-v0_6.md`
 - P1 close snapshot: `docs/snapshot/orchestrator-context-p1-close.md`
 - P1 build plan: `docs/design/p1-build-plan.md` (template for P2 plan structure)
 
@@ -506,7 +506,7 @@ Review pass performed 2026-05-24 alongside the companion `03-p2-extension.md` re
 
 7. **`v0_6_candidates` field doesn't exist in `project-state.md` yet.** Build plan §"How P2 differs from P1" claims "Each task's verdict appends to a `v0_6_candidates` field [in project-state.md]." T-P2-014 reads from this list. The field needs initialization before T-P2-001 — either as a pre-flight step in T-P2-001 or as an addition to be made at the same time as the design-doc approval. **Recommend: initialize the field via a tiny housekeeping commit before T-P2-001, OR add as a T-P2-001 deliverable.**
 
-8. **Methodology v0.6 task scope is undefined at dispatch time.** Phase 14 deliverables include "AskUserQuestion to resolve scope: which candidates to include, which to defer, what new structural sections." That makes Phase 14 a scope-resolution-during-task pattern, which v0.5 §1.1 explicitly identifies as the **anti-pattern** to pre-task scope-decision conversation. **Recommend: scope conversation for v0.6 happens pre-dispatch, same as every other P2 task, NOT during dispatch via AskUserQuestion.** Adjust Phase 14 deliverables accordingly.
+8. **Methodology v0.6 task scope is undefined at dispatch time.** Phase 14 deliverables include "AskUserQuestion to resolve scope: which candidates to include, which to defer, what new structural sections." That makes Phase 14 a scope-resolution-during-task pattern, which v0.6 §1.1 explicitly identifies as the **anti-pattern** to pre-task scope-decision conversation. **Recommend: scope conversation for v0.6 happens pre-dispatch, same as every other P2 task, NOT during dispatch via AskUserQuestion.** Adjust Phase 14 deliverables accordingly.
 
 9. **No explicit Phase for the initial workspace-trust file format decision.** Phase 3 mentions a trust store ("`~/.claude-bridge/workspace-trust.json`") without naming format. JSON vs JSONL is in the per-task scope-decision matrix for Phase 3 — fine. But what about the identifier-persistence concern (see design doc appendix concern #7)? If identifiers are persisted, that's part of the trust store too. Phase 3's deliverables don't unify these. **Recommend: explicit Phase 3 deliverable for the trust+identifier persistent-store schema.**
 

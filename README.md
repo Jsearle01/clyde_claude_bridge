@@ -126,7 +126,7 @@ See `docs/walkthrough.md` Part 1 for end-to-end usage examples.
 - [`docs/design/p1-build-plan.md`](docs/design/p1-build-plan.md) — P1 concrete file paths and build order
 - [`docs/snapshot/orchestrator-context-p0-close.md`](docs/snapshot/orchestrator-context-p0-close.md) — P0 close snapshot
 - [`docs/snapshot/orchestrator-context-p1-close.md`](docs/snapshot/orchestrator-context-p1-close.md) — P1 close snapshot (16 ACs, 14 phases, calibration summary, pattern inventory, P2 deferrals)
-- [`docs/claude-orchestrated-methodology-v0_5.md`](docs/claude-orchestrated-methodology-v0_5.md) — methodology in effect (dual-band reporting, docs-vs-runtime pattern, harness brittleness defense, CC-N artifacts)
+- [`docs/claude-orchestrated-methodology-v0_6.md`](docs/claude-orchestrated-methodology-v0_6.md) — methodology in effect (dual-band reporting, docs-vs-runtime pattern, harness brittleness defense, CC-N artifacts, numbered C-N conventions including pre-dispatch grep + mandatory elapsed-time block, verdict-time evidence sub-rules)
 - [`docs/conventions.md`](docs/conventions.md) — TypeScript / ESM / cross-cutting concerns
 
 ## License

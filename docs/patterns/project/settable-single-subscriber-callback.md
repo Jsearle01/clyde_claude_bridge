@@ -328,8 +328,7 @@ Sources of record:
 
 - `docs/project-state.md` — C-26 v0.6 candidate (the field-precedes-setState
   invariant; closed-by-T-P2-006.5).
-- `docs/claude-orchestrated-methodology-v0_5.md` §9 — pattern doc template
-  this file follows.
+- `docs/claude-orchestrated-methodology-v0_6.md` §9 — pattern doc template this file follows (codified going-forward in v0.6; existing pre-v0.6 pattern docs including some in this directory are not normalized — see v0.6 §9 tolerance note).
 
 ## Status
 active (seven confirmed use sites: five at original promotion 2026-05-28; two added 2026-05-30 via T-P2-009/010 inspection tools)
