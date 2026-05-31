@@ -18,7 +18,7 @@ The architecture is intentionally layered:
 |---|---|---|
 | P0 | Bus validation: daemon + tunnel + auth + audit + one tool | **GATE-CLOSED** 2026-05-23 |
 | P1 | Headless delegation: queued jobs, SDK integration, snapshot/diff, transcripts, cross-platform | **GATE-CLOSED** 2026-05-24 |
-| P2 | VS Code extension + workspace registration + approval flow + inspection tools | **GATE-PENDING** (T-P2-015 will mark closed) |
+| P2 | VS Code extension + workspace registration + approval flow + inspection tools | **GATE-CLOSED** 2026-05-30 |
 | P3+ | Polish: last-shell routing, named tunnels, autostart | Not started |
 
 ## Prerequisites
@@ -95,9 +95,11 @@ In the Inspector UI, set:
 
 Click `Connect`, then `tools/list` should show four tools: `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. A typical delegation flow: call `delegate_to_claude_code` with `{"prompt": "...", "mode": "agentic"}` to enqueue, then `poll_delegation` with `{"job_id": "...", "wait_ms": 30000}` until the response includes a `report` field. See the [runbook's Operating Delegations section](docs/runbook.md#operating-delegations-p1) for tool semantics and the [walkthrough](docs/walkthrough.md) for end-to-end usage examples.
 
-**Claude.ai connector UI caveat.** The custom MCP connector in Claude.ai's project settings currently requires OAuth client credentials; static Bearer tokens are not supported. For static-Bearer testing, use MCP Inspector, Claude Code (`claude mcp add --transport http <url>/mcp --header "Authorization: Bearer <token>"`), or Claude Desktop's `mcpServers` config entry. OAuth in the daemon is a candidate for the P1-P2 interphase or P2 itself. See [`docs/runbook.md`](docs/runbook.md) for full client procedures.
+**Claude.ai connector UI caveat.** The custom MCP connector in Claude.ai's project settings requires OAuth client credentials; static Bearer tokens are not supported. For Bearer-auth use, drive the daemon via MCP Inspector, Claude Code (`claude mcp add --transport http <url>/mcp --header "Authorization: Bearer <token>"`), or Claude Desktop's `mcpServers` config entry. **OAuth in the daemon's auth layer is P3 priority #1 (C-27)**; deferred from P2 to keep the gate-close shape clean. See [`docs/runbook.md`](docs/runbook.md) for full client procedures and [`docs/snapshot/orchestrator-context-p2-close.md`](docs/snapshot/orchestrator-context-p2-close.md) § P3 entry surface for the P3 framing.
 
 ## P2 — VS Code Extension + Real Workspace Registration
+
+**Status: GATE-CLOSED 2026-05-30.** See [`docs/snapshot/orchestrator-context-p2-close.md`](docs/snapshot/orchestrator-context-p2-close.md) for the close report.
 
 P2 ships the developer workflow end-to-end via Bearer-compatible MCP clients
 (Claude Code CLI, MCP Inspector, Claude Desktop, raw curl):
