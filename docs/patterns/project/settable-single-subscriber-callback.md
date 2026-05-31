@@ -36,7 +36,7 @@ codebase because:
 4. **Trivial to test.** A test sets `instance.onX = (arg) => spy(arg)`
    and reads the spy after triggering the transition.
 
-The codebase has five confirmed instances of this shape (see References).
+The codebase has seven confirmed instances of this shape (see References).
 
 ## Rules
 
@@ -273,7 +273,7 @@ callback's resolution before continuing its own state machine.
 
 ## References
 
-Five confirmed instances at promotion time (2026-05-28):
+Seven confirmed instances at promotion time (2026-05-28):
 
 - `IpcClient.onReconnectAttempt` —
   [packages/extension/src/ipc/client.ts:88](../../../packages/extension/src/ipc/client.ts#L88).
@@ -293,6 +293,15 @@ Five confirmed instances at promotion time (2026-05-28):
   (full describe block on the modal handler that consumes this callback;
   callback receives the parsed `ApprovalRequest` payload as its argument,
   so structurally no field-vs-setState ordering concern applies on this site).
+- `IpcClient.onGetOpenEditorsRequest` —
+  [packages/extension/src/ipc/client.ts:118](../../../packages/extension/src/ipc/client.ts#L118).
+  Introduced T-P2-009. **Payload-pass-through:** the callback argument IS the data
+  (an `OpenEditorsRequest` payload); no closure-captured class field, so no
+  C-26 concern applies on this site.
+- `IpcClient.onGetDiagnosticsRequest` —
+  [packages/extension/src/ipc/client.ts:123](../../../packages/extension/src/ipc/client.ts#L123).
+  Introduced T-P2-009/010. **Payload-pass-through** (same shape as
+  `onGetOpenEditorsRequest` above); no C-26 concern.
 - `WorkspaceRegistration.onStateChange` —
   [packages/extension/src/registration.ts:81](../../../packages/extension/src/registration.ts#L81).
   Introduced T-P2-006; C-26 invariant codified at T-P2-006.5. Tests:
@@ -323,7 +332,7 @@ Sources of record:
   this file follows.
 
 ## Status
-active (five confirmed use sites at promotion time)
+active (seven confirmed use sites: five at original promotion 2026-05-28; two added 2026-05-30 via T-P2-009/010 inspection tools)
 
 ## History
 - 2026-05-25: First use, T-P2-005 — `IpcClient.onReconnectAttempt`.
@@ -338,3 +347,4 @@ active (five confirmed use sites at promotion time)
   invariant inlined as required precondition; two accessor-read regression
   tests added to strengthen coverage on the two callbacks that previously
   only exercised parameter-based assertions.
+- 2026-05-30: Two new instances added via T-P2-009 + T-P2-010 (inspection tools). Both are payload-pass-through callbacks distinct from the state-coupled callbacks that gave rise to C-26.

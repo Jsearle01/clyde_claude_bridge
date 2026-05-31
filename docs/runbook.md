@@ -36,6 +36,32 @@ Then `claude-bridge --version` from any directory.
 
 To uninstall: `npm unlink -g @claude-bridge/cli` (see [Uninstallation](#uninstallation) at the bottom of this doc for full cleanup).
 
+### Extension .vsix install on Windows (P2)
+
+The VS Code extension ships as a bundled `.vsix` under `packages/extension/`. To install or upgrade in place:
+
+```
+code --install-extension packages\extension\claude-bridge-extension-0.1.0.vsix --force
+```
+
+The `.vsix` itself is produced by `npx vsce package --no-dependencies` from `packages/extension/` (per the T-P2-008.5 packaging pattern — bundling via esbuild means vsce should not walk node_modules). Reload the VS Code window after install so the new build takes effect.
+
+### Extension .vsix install on WSL (P2)
+
+WSL hosts do not need to load the extension into a running VS Code instance to validate the package — structural verification suffices for the daemon-side handshake work. Use:
+
+```
+bash scripts/verify-vsix-wsl.sh
+```
+
+The script unpacks the `.vsix` to `/tmp`, asserts `dist/extension.js` and a valid `package.json` exist, and greps for any externally-imported `@claude-bridge/*` references (these must be zero — everything must be bundled). See [Operator tools](#operator-tools) below.
+
+### C-16 Windows extension reinstall idiom
+
+> After every `dist` change, run `code --install-extension packages\extension\claude-bridge-extension-0.1.0.vsix --force`. Without `--force`, VS Code keeps the old version.
+
+This is the most common foot-gun during extension iteration: a fresh `npm run build` updates `dist/`, but VS Code is still running the prior install. Always `--force`.
+
 ## Lifecycle
 
 ### `claude-bridge start`
@@ -122,6 +148,23 @@ Update any MCP clients with the new URL.
 ### `claude-bridge --version` / `--help`
 
 Standard commander conventions. `-V` / `-h` are aliases. `--help` on a parent command (e.g. `claude-bridge token`) prints subcommand help.
+
+### Daemon lifecycle from the VS Code extension (P2)
+
+The P2 extension can drive the daemon's lifecycle and surfaces connection state without leaving the editor.
+
+**Start Daemon command (T-P2-004).** The Command Palette entry `Claude Bridge: Start Daemon` spawns the daemon via the CLI path resolved from `claudeBridge.cliPath` (settings; falls back to PATH auto-detect). After spawn, the extension's WebSocket reconnect loop attempts to attach; if the daemon is genuinely absent and the threshold of reconnect attempts is exceeded, a "daemon not running" notification fires so the operator knows to investigate (rather than silently retrying forever).
+
+**Status bar surface (T-P2-006).** A right-side status bar item reports both the WebSocket connection state and the workspace registration state. Clicking it opens a QuickPick menu whose items vary by current state:
+
+| Current state | QuickPick items |
+|---|---|
+| Disconnected | Start Daemon, Reconnect, Open Logs |
+| Connecting / retrying (`(retry N)`) | Cancel reconnect, Open Logs |
+| Connected, registered | Change approval mode, Disconnect, Open Logs |
+| Connected, unregistered | Register workspace, Disconnect |
+
+This is the canonical entry point for routine extension control — the Command Palette commands are still available but the status bar makes state visible at a glance.
 
 ## Configuration
 
@@ -338,6 +381,16 @@ The transcript is the authoritative record of what happened; the report is a der
 
 Each MCP tool invocation produces one audit log entry in `~/.claude-bridge/audit.jsonl` with `tool`, `request_id`, `allowed`, `duration_ms`, plus P1 additions `job_id` and `workspace_id` (when present in the tool's context). The job completing does **not** produce a separate audit entry — the audit is on tool calls, not on job lifecycle events. To trace a delegation end-to-end: filter audit entries by `job_id`.
 
+## Approval modes (P2)
+
+P2 introduces an in-extension approval surface so the operator decides per-delegation whether the remote MCP client is allowed to run work in the workspace. Three modes:
+
+- **`per_call`** (default) — every delegation pops a modal in the extension; the operator picks **Approve**, **Approve for this session**, or **Deny**. The MCP call blocks until the operator responds (or until the daemon's approval timeout fires).
+- **`session_bypass`** — after one **Approve for this session** click, subsequent delegations in the same MCP session for the same workspace auto-approve without a modal. The bypass is keyed by `(mcp_session_id, workspace_id)` and is cleared when the extension disconnects (either deliberately or via a dropped WebSocket). This keeps "I trust this run" scoped tightly: a new MCP session, a different workspace, or a reconnect all reset the bypass.
+- **`auto`** — no modal; every delegation auto-approves. Intended only for environments where the workspace owner explicitly wants frictionless delegation (e.g., a dedicated dev box where the operator IS the remote caller). Audit entries still record each call.
+
+**Changing the mode:** click the status bar item → **Change approval mode** → pick from the QuickPick. The change applies to the next delegation; a delegation in-flight is not retroactively re-evaluated.
+
 ## Troubleshooting
 
 ### `cloudflared not found on PATH`
@@ -458,6 +511,30 @@ The matrix:
 20.10 is the P0 daemon floor. Below that, native ESM dynamic-import semantics differ enough to risk runtime surprises. 20.19 is the recommended floor for the SDK runtime to silence the engine warning. 22.19 is undici@8's hard floor.
 
 If you can choose a single version, **Node 22 LTS** satisfies everything cleanly.
+
+### Extension not connecting (P2)
+
+The status bar item is the diagnostic source of truth. If it reports `daemon down` or `(retry N)`:
+
+1. Confirm the daemon is actually up: `claude-bridge status`. If `down`, start it (CLI or the extension's **Start Daemon** command).
+2. If the daemon is up but the extension still won't attach, re-install the .vsix (see [Extension .vsix install on Windows](#extension-vsix-install-on-windows-p2)) — a stale install can be running against a removed API.
+3. Reload the VS Code window (`Developer: Reload Window`) to restart the extension host cleanly.
+
+### Daemon binary not found (P2)
+
+The extension's **Start Daemon** command resolves the CLI binary in this order: explicit `claudeBridge.cliPath` setting → PATH auto-detect. If both fail, the command errors with a notification. Fix by setting `claudeBridge.cliPath` (VS Code Settings) to the absolute path of the CLI's `bin` entry — e.g., the `claude-bridge` script that `npm link` created, or the direct path inside `packages/cli/bin/`.
+
+### C-18 VS Code window-coalescing
+
+> VS Code coalesces windows to one instance per folder. To test multi-workspace scenarios, copy the workspace to a different path (`xcopy ws-a ws-b /E /I`) rather than opening the same path twice.
+
+A second `code .` invocation on a folder that already has a window open just focuses the existing window; you don't get two extension hosts attached to "the same" workspace. For multi-workspace registration testing, the workspace must live at a different absolute path.
+
+### WSL Node version selection
+
+> WSL may have multiple Node installs. VS Code Remote ships its own Node at `~/.vscode-server/bin/<hash>/node`; the daemon honors `PATH` of the shell that launched it. Verify with `which node` from the same shell.
+
+This trips up extension-host vs daemon mismatches: the extension host sees one Node, the daemon spawned from a separate shell sees another. When in doubt, launch the daemon from the same integrated terminal that hosts the extension to guarantee the same `PATH`.
 
 ## Connecting an MCP client (in depth)
 
@@ -583,6 +660,30 @@ ANTHROPIC_API_KEY="sk-ant-..." bash scripts/acceptance-p1-smoke.sh
 Both wrappers invoke the same `.mjs` core. The SMOKE harness aborts with exit 2 if `ANTHROPIC_API_KEY` is absent from the invoking shell.
 
 Cross-platform parity was verified at T-P1-012: Windows and WSL both produce identical PASS counts on both harnesses. Per-AC elapsed varies (Claude's model nondeterminism on read_only delegations can produce 5x wall-time variance between runs — neither is wrong).
+
+## Operator tools
+
+Two helper scripts under `scripts/` cover the P2 WSL operator path. Both are bash scripts intended for WSL (or any Linux); their Windows-side equivalents are the `.ps1` acceptance harness and direct `code --install-extension` from PowerShell.
+
+### `scripts/run-p2-wsl.sh`
+
+End-to-end P2 verification on WSL. Exports `PATH` to pick up the portable Node 20.19+ install at `~/node-v20/bin` plus the user-local cloudflared, then invokes the P2 acceptance harness (`scripts/acceptance-p2.mjs`). Use:
+
+```
+bash scripts/run-p2-wsl.sh
+```
+
+This is the canonical WSL driver — it avoids needing a `.bashrc` PATH augmentation and works from any login or non-login shell. Forwards extra args through to the underlying harness.
+
+### `scripts/verify-vsix-wsl.sh`
+
+Structural verification of the bundled `.vsix` on WSL. Unpacks the packaged extension (via `python3 -m zipfile -e`, which avoids needing `unzip` from apt) to a `/tmp` scratch dir, asserts `dist/extension.js` and `package.json` exist, and greps for any externally-imported `@claude-bridge/*` references (must return 0 matches — the extension must be fully self-bundled). Use:
+
+```
+bash scripts/verify-vsix-wsl.sh
+```
+
+Run this after every `vsce package` to confirm the bundle did not regress to pulling workspace packages at runtime.
 
 ## Uninstallation
 

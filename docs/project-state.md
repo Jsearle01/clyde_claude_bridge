@@ -65,12 +65,30 @@ Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this li
 ## Task queue
 
 ### In progress
-- T-P2-006-followup — Promoted settable-single-subscriber-callback pattern to docs (COMPLETE, awaiting verdict)
+- T-P2-013 — Runbook + walkthrough + overview updates; OAuth narrative correction (COMPLETE, awaiting verdict)
 
 ### Pending
-- AC-24 retry full smoke (R1/R2/R3a/R3b) — operator runtime smoke (C-25.c) for T-P2-008.7 (R3b session_bypass) + T-P2-008.8 (race-window registration retry). If retry-N indicator visible during race + eventual register succeeds + R3b modal does NOT re-fire → C-29 closed, C-30 closed empirically, AC-24 closed, P2 critical path resumes (T-P2-009).
+- T-P2-014 — v0.6 methodology codification (consumes the v0.6 candidates table including C-1 through C-31 + the M-G/H/I/J/K provisional methodology candidates).
+- T-P2-015 — P2 gate-close marker on README + gate-close snapshot.
+- AC-24 retry full smoke (R1/R2/R3a/R3b) — operator runtime smoke (C-25.c) for T-P2-008.7 (R3b session_bypass) + T-P2-008.8 (race-window registration retry).
 
 ### Recently completed
+- **T-P2-013** — Runbook + walkthrough + overview updates; OAuth narrative correction (COMPLETE, awaiting verdict; 2026-05-30)
+  - **Doc-only change.** 7 files modified across `docs/` + `README.md`. Zero changes in `packages/*` or `scripts/*` (confirmed via `git diff --stat`).
+  - **Section A — Walkthrough rewrite:** `docs/walkthrough.md` restructured into Part 1 / Part 2 (566 → ~388 lines net). Part 1 documents the actual P2-shipped flow via Bearer-compatible MCP clients (Claude Code CLI, MCP Inspector, Claude Desktop, raw curl) including new sections for `Connecting an MCP client`, the actual T-P2-001..008 trust-prompt + workspaces.json + status-bar flow, the Claude Code CLI delegation example with `per_call` modal, and the new T-P2-009/010 `Inspection tools` section with `get_open_editors` / `get_diagnostics` payload shapes + `400 ambiguous_workspace` routing. Part 2 preserves the aspirational claude.ai project-chat narrative (the `list_workspaces` / `delegate_to_claude_code` / `poll_delegation` loop + webview-panel + `.claude-bridge.json` content + the ATTN-CC3-specific section) clearly marked as "requires OAuth in daemon's auth layer — P3 deliverable." The former technical `P1 — Delegation surface` section (~190 lines duplicating `02-p1-delegation.md` + runbook) deleted as out of scope for an operator walkthrough — explains the net line shrink despite Part 1's added breadth.
+  - **Section B — Overview status block:** `docs/design/00-overview.md` gains a status block at lines 6-10 (post-2026-05-30 P2 framing); § Purpose first paragraph lightly reworded at line 14 to acknowledge MCP-client-agents as the immediate consumer + claude.ai as the P3 OAuth-extended target. Topology diagram preserved unchanged (correct as architectural target).
+  - **Section C — Runbook topical insertions** (~101 lines added across `docs/runbook.md`):
+    - § Installation: Extension `.vsix` install on Windows + WSL + C-16 reinstall idiom (~35 lines).
+    - § Lifecycle: appended "Daemon lifecycle from the VS Code extension (P2)" covering T-P2-004 (Start Daemon + cliPath + daemon-not-running threshold) and T-P2-006 (status bar item + state-conditional QuickPick) (~20 lines).
+    - New § "Approval modes (P2)" between § Operating delegations and § Troubleshooting: `per_call` / `session_bypass` (keyed by `(mcp_session_id, workspace_id)`) / `auto` + the status bar → Change approval mode UX (~15 lines).
+    - § Troubleshooting: Extension-not-connecting + Daemon-binary-not-found + C-18 window-coalescing + WSL Node version selection (~25 lines).
+    - New § "Operator tools": `scripts/run-p2-wsl.sh` + `scripts/verify-vsix-wsl.sh` (~20 lines).
+  - **Section D — Design doc:** `docs/design/03-p2-extension.md` line 208 "Reserved for P3" note replaced with the actual post-P2 untrusted-collapse-to-503 narrative. **C-13 mismatch flagged in report:** dispatch said AC-P2-5 contains the 403 text, but the actual file's AC-P2-5 at line 197 is the lifecycle text; the workspace_untrusted narrative lives in the Reserved-for-P3 note at line 208 — that's where the spec-D rewrite landed. AC-P2-5 itself untouched.
+  - **Section E — Pattern doc:** `docs/patterns/project/settable-single-subscriber-callback.md` instance count refreshed 5 → 7. New entries for `IpcClient.onGetOpenEditorsRequest` (client.ts:118, T-P2-009) and `IpcClient.onGetDiagnosticsRequest` (client.ts:123, T-P2-009/010), both marked **payload-pass-through** (callback arg IS the data; no closure-captured class field; no C-26 concern). History entry appended for 2026-05-30. C-26 invariant text and original five-site descriptions untouched.
+  - **Section F — README:** P2 section inserted after the P1-focused "Connecting an MCP client" section and before "Where to dive deeper" (correct structural position). Phase-table row for P2 updated to "**GATE-PENDING** (T-P2-015 will mark closed)" with full P2 deliverables list. No GATE-CLOSED marker (T-P2-015 territory).
+  - **Section G — Project-state:** new top-level § "P3 backlog (developer-experience)" appended at lines 548-561 with two items — approval-timeout configurability (cites `daemon/src/approval/pending.ts:33`) and discriminated 403 workspace_untrusted response (cites T-P2-011 surfacing + T-P2-013 design-doc correction).
+  - **Reactive at-site fix:** Section A's walkthrough rewrite deleted the former `## P1 — Delegation surface (what's actually shipped)` section, which `README.md:96` had been linking via `walkthrough.md#p1--delegation-surface-whats-actually-shipped`. Spot-found during link verification; replaced with a generic `[walkthrough](docs/walkthrough.md)` link in README.
+  - **Tests:** 685 passing + 15 skipped (unchanged — doc-only change). Lint clean (C-25.1 fresh-verified). C-25.2 N/A (no .vsix change). C-25.3 N/A (no runtime surface affected). Workspace-root build clean.
 - **T-P2-012** — Cross-platform validation Windows + WSL Ubuntu (COMPLETE, awaiting verdict; 2026-05-29) — **closes AC-P2-15**.
   - **WSL harness: 10/10 PASS on first run.** No platform fixes needed in `packages/*` or in `scripts/acceptance-p2.mjs`. The harness's Windows-pipe-vs-Unix-socket dispatch (`process.platform === "win32"`) was already correct and handled both platforms cleanly.
   - **Windows harness re-run: 10/10 PASS** on second attempt (first attempt got EADDRINUSE on port 7423 in TIME_WAIT after the user-daemon stop; 5s wait resolved). Parity confirmed across all 10 ACs.
@@ -544,6 +562,21 @@ Methodology candidates accumulated since v0.5 froze. T-P2-014 reads from this li
 
 ### Failed / awaiting resolution
 (none)
+
+## P3 backlog (developer-experience)
+
+Items surfaced during P2 work that would improve the developer experience
+without blocking P2 gate-close. Each entry cites its surfacing task and the
+load-bearing file/line.
+
+- **Approval timeout configurable.** `APPROVAL_TIMEOUT_MS` is hardcoded at
+  `5 * 60 * 1000` in `packages/daemon/src/approval/pending.ts:33`. Make it a
+  config-knob with default = 5 minutes. Surfaced during T-P2-011 harness work.
+
+- **Discriminated `403 workspace_untrusted` response.** Daemon currently
+  collapses untrusted into the unregistered code path (both return 503). Add a
+  discriminated 403 if there's demand. Surfaced during T-P2-011 harness work
+  + corrected in T-P2-013's `docs/design/03-p2-extension.md` § 5 note.
 
 ## Completed work manifest
 

@@ -205,7 +205,7 @@ Full ACs are in `docs/design/p2-build-plan.md` per-phase. Summary:
 - AC-P2-13: Multiple VS Code windows each register their own workspace; inspection tools route correctly via `workspace` argument.
 - AC-P2-14: Cross-platform parity (Windows + WSL Ubuntu) for all behavioral ACs.
 
-**Reserved for P3:** `403 workspace_untrusted` is defined in the protocol but unreachable in P2. P2 trust is binary at registration; only `503 no_workspace_registered` is reachable as a delegation-rejection. P3's revocation UI will reactivate the `workspace_untrusted` path.
+**Untrusted-workspace collapse (post-P2 actual behavior):** Daemon collapses untrusted-workspace state into the same path as unregistered-workspace state; both return `503 no_workspace_registered`. The collapse is semantically defensible: an untrusted workspace is not in the registry. A discriminated `403 workspace_untrusted` response could be added in P3 if there's demand; currently the collapse simplifies error handling without functional cost. Logged in `docs/project-state.md` § P3 backlog.
 
 ## 6. Open questions deferred to P3
 

@@ -18,7 +18,7 @@ The architecture is intentionally layered:
 |---|---|---|
 | P0 | Bus validation: daemon + tunnel + auth + audit + one tool | **GATE-CLOSED** 2026-05-23 |
 | P1 | Headless delegation: queued jobs, SDK integration, snapshot/diff, transcripts, cross-platform | **GATE-CLOSED** 2026-05-24 |
-| P2 | VS Code extension: workspace attachment | Not started; design pending |
+| P2 | VS Code extension + workspace registration + approval flow + inspection tools | **GATE-PENDING** (T-P2-015 will mark closed) |
 | P3+ | Polish: last-shell routing, named tunnels, autostart | Not started |
 
 ## Prerequisites
@@ -93,9 +93,27 @@ In the Inspector UI, set:
 - URL: `<tunnel-url>/mcp`
 - Header: `Authorization: Bearer <token>`
 
-Click `Connect`, then `tools/list` should show four tools: `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. A typical delegation flow: call `delegate_to_claude_code` with `{"prompt": "...", "mode": "agentic"}` to enqueue, then `poll_delegation` with `{"job_id": "...", "wait_ms": 30000}` until the response includes a `report` field. See the [runbook's Operating Delegations section](docs/runbook.md#operating-delegations-p1) for tool semantics and the [P1 walkthrough section](docs/walkthrough.md#p1--delegation-surface-whats-actually-shipped) for end-to-end internals.
+Click `Connect`, then `tools/list` should show four tools: `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. A typical delegation flow: call `delegate_to_claude_code` with `{"prompt": "...", "mode": "agentic"}` to enqueue, then `poll_delegation` with `{"job_id": "...", "wait_ms": 30000}` until the response includes a `report` field. See the [runbook's Operating Delegations section](docs/runbook.md#operating-delegations-p1) for tool semantics and the [walkthrough](docs/walkthrough.md) for end-to-end usage examples.
 
 **Claude.ai connector UI caveat.** The custom MCP connector in Claude.ai's project settings currently requires OAuth client credentials; static Bearer tokens are not supported. For static-Bearer testing, use MCP Inspector, Claude Code (`claude mcp add --transport http <url>/mcp --header "Authorization: Bearer <token>"`), or Claude Desktop's `mcpServers` config entry. OAuth in the daemon is a candidate for the P1-P2 interphase or P2 itself. See [`docs/runbook.md`](docs/runbook.md) for full client procedures.
+
+## P2 — VS Code Extension + Real Workspace Registration
+
+P2 ships the developer workflow end-to-end via Bearer-compatible MCP clients
+(Claude Code CLI, MCP Inspector, Claude Desktop, raw curl):
+
+- VS Code extension installs via `.vsix` sideload
+- Workspace registration with one-time trust prompt
+- Daemon-side workspace registry
+- Per-delegation approval flow with three modes (`per_call`, `session_bypass`, `auto`)
+- Read-only inspection tools (`get_open_editors`, `get_diagnostics`)
+- Multi-workspace routing via explicit `workspace` argument
+- Cross-platform validated on Windows + WSL Ubuntu
+
+Claude.ai project-chat integration via the connector UI is deferred to P3
+pending OAuth implementation in the daemon's auth layer (C-27).
+
+See `docs/walkthrough.md` Part 1 for end-to-end usage examples.
 
 ## Where to dive deeper
 

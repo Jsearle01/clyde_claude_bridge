@@ -3,9 +3,15 @@
 **Status:** Active
 **Last updated:** 2026-05-01
 
+> **Status (2026-05-30, post-P2):** P2 ships the developer workflow via Bearer-compatible
+> MCP clients (Claude Code CLI, MCP Inspector, Claude Desktop, raw curl). Claude.ai
+> project-chat integration via the connector UI requires OAuth in the daemon's auth
+> layer; deferred to P3. See C-27 in `docs/project-state.md` and § "OAuth deferral"
+> in `docs/walkthrough.md`.
+
 ## Purpose
 
-claude-bridge connects Claude.ai project chats to local VS Code workspaces via an MCP bridge, enabling a Claude.ai project to delegate code work to Claude Code running on the user's machine. Project-Claude treats workspaces as remote sub-agents addressable by ID; Claude Code runs locally with full workspace context and returns structured reports.
+claude-bridge is an MCP bridge that connects MCP-client agents (project-Claude, Claude Code CLI, MCP Inspector) to local VS Code workspaces, enabling delegation of code work to Claude Code running locally. P3 extends this to claude.ai project chats via OAuth-based authentication. MCP-client agents treat workspaces as remote sub-agents addressable by ID; Claude Code runs locally with full workspace context and returns structured reports.
 
 ## Topology
 

@@ -1,10 +1,21 @@
 # Walkthrough — New Workspace, End to End
 
-This document walks through the full operational flow of using claude-bridge with a brand-new VS Code workspace, from first attach through a complete delegation. It assumes the system is fully built (P0 through P2 shipped) and serves as reference material for what the day-to-day UX looks like in steady state.
+## Status (2026-05-30, post-P2)
 
-## Prerequisite: daemon already installed
+P2 ships the developer workflow via Bearer-compatible MCP clients (Claude Code CLI, MCP Inspector, Claude Desktop, raw curl). Claude.ai project-chat integration via the connector UI requires OAuth in the daemon's auth layer; deferred to P3. See C-27 in [project-state.md](project-state.md).
 
-The daemon is started once and runs persistently:
+This document is split:
+
+- **Part 1: What works today (P2 shipped)** — actual operational flow you can run now.
+- **Part 2: P3 target state (where we're going)** — preserved aspirational content for the Claude.ai project-chat integration that requires OAuth.
+
+---
+
+## Part 1: What works today (P2 shipped)
+
+### Prerequisite: daemon already installed
+
+The daemon is started once and runs persistently. Either install the CLI globally and run `claude-bridge start`, or invoke "Claude Bridge: Start Daemon" from the VS Code command palette (the extension wraps the same spawn under the hood).
 
 ```
 $ claude-bridge start
@@ -13,79 +24,297 @@ Tunnel: https://plum-otter-7821.trycloudflare.com
 Token:  cb_live_a7f3...d219  (copy this)
 ```
 
-The tunnel URL and bearer token are pasted **once** into a Claude.ai project's custom MCP connector configuration. From that point on, any new VS Code workspace just needs to register itself with the running daemon — no further Claude.ai-side configuration required.
+The tunnel URL and Bearer token are the two values any MCP client needs in order to reach the daemon. Both are also surfaced by `claude-bridge status` at any time. See the [runbook](runbook.md) for full lifecycle commands, config locations, and troubleshooting.
 
-## First attach — fresh workspace
+### Connecting an MCP client
 
-Scenario: a new folder at `~/projects/new-thing`, freshly `git init`'d with a remote at `github.com/jay/new-thing`. Empty except for `README.md` and `.gitignore`.
+Any Bearer-compatible MCP client works today. Four common paths:
 
-### 1. Extension activates on workspace open
+**Claude Code CLI.** The canonical command per the [runbook's MCP client section](runbook.md#claude-code):
 
-VS Code opens the folder. The claude-bridge extension activates, scans the workspace root, finds no existing `.claude-bridge.json`. A one-time prompt appears:
+```bash
+claude mcp add --transport http <tunnel-url>/mcp --header "Authorization: Bearer <token>"
+```
 
-> Attach this workspace to claude-bridge? [Yes] [No] [Don't ask again]
+Substitute the tunnel URL and token from `claude-bridge start` / `claude-bridge status`. Note the `/mcp` path suffix on the URL.
 
-User clicks **Yes**.
+**MCP Inspector.** Useful for poking at the tool surface interactively:
 
-### 2. Extension registers with daemon
+```bash
+npx @modelcontextprotocol/inspector
+```
 
-Extension opens local WebSocket to `127.0.0.1:7423` and sends:
+Then in the Inspector UI set transport to **Streamable HTTP**, URL to `<tunnel-url>/mcp`, and add header `Authorization: Bearer <token>`.
+
+**Claude Desktop.** Edit Claude Desktop's MCP config (`%APPDATA%\Claude\claude_desktop_config.json` on Windows; `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
 ```json
 {
-  "kind": "register",
-  "abs_path": "/home/jay/projects/new-thing",
-  "folder_name": "new-thing",
-  "git_remote": "github.com/jay/new-thing",
-  "vscode_window_id": "..."
-}
-```
-
-Daemon computes ID `github.com/jay/new-thing#new-thing`, adds to registry, returns:
-
-```json
-{
-  "workspace_id": "github.com/jay/new-thing#new-thing",
-  "is_default": true
-}
-```
-
-It's the only attached workspace, so it's the default.
-
-### 3. Extension writes config
-
-Extension creates `.claude-bridge.json` at workspace root with sensible defaults:
-
-```jsonc
-{
-  "default_mode": "agentic",
-  "deny_list_extra": [],
-  "bash_deny_extra": [],
-  "auto_attach": {
-    "include_claude_md": true,
-    "include_last_shell": true,
-    "extra_files": []
+  "mcpServers": {
+    "claude-bridge": {
+      "type": "http",
+      "url": "https://plum-otter-7821.trycloudflare.com/mcp",
+      "headers": {
+        "Authorization": "Bearer cb_live_a7f3...d219"
+      }
+    }
   }
 }
 ```
 
-Prompt: *"Add `.claude-bridge.json` to the repo? [Yes] [No]"* — usually yes; it's safe to commit, defines per-workspace policy.
+Restart Claude Desktop; `ping`, `delegate_to_claude_code`, `get_open_editors`, and the rest of the tool list appear.
 
-### 4. Status bar updates
+**Raw curl** (sanity check):
 
-Bottom-right of VS Code: `Bridge: new-thing (default)`.
+```bash
+curl -X POST https://plum-otter-7821.trycloudflare.com/mcp \
+  -H "Authorization: Bearer cb_live_a7f3...d219" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
 
-**Total elapsed:** ~5 seconds, two clicks. The workspace is now drivable from Claude.ai.
+**What does NOT work today:** the Claude.ai project-settings connector UI. It exposes only OAuth client_id / client_secret fields — no Bearer header field. C-27 captures this; OAuth in the daemon's auth layer is a P3 deliverable. Until then, drive claude.ai work through the Claude Code CLI bridge.
 
-## First delegation
+### First attach — fresh workspace
+
+Scenario: a new folder at `~/projects/new-thing`, freshly `git init`'d with a remote at `github.com/jay/new-thing`. Empty except for `README.md` and `.gitignore`.
+
+**1. Extension activates on workspace open.**
+
+VS Code opens the folder. The claude-bridge extension activates (it has `activationEvents: ["onStartupFinished"]`), connects to the running daemon via its IPC channel, and sends a `register_workspace` request keyed by absolute path.
+
+**2. Daemon issues a trust prompt on first registration.**
+
+The daemon has no prior trust record for this path, so it stores a "pending trust" state and routes a trust-prompt to the extension. VS Code surfaces a modal (per T-P2-006):
+
+> Permit this workspace (`/home/jay/projects/new-thing`) to receive delegations from claude-bridge clients?
+>
+> This authorizes any MCP client connected to your daemon to delegate work against this workspace, subject to per-call approval.
+>
+> [Trust] [Don't trust]
+
+User clicks **Trust**.
+
+**3. Daemon persists the trust decision and the workspace identifier.**
+
+Daemon writes an entry to `~/.claude-bridge/workspaces.json` (per T-P2-005/006):
+
+```json
+{
+  "abs_path": "/home/jay/projects/new-thing",
+  "identifier": "new-thing",
+  "name": "new-thing",
+  "trust_state": "trusted",
+  "trusted_at": "2026-05-30T14:22:31Z",
+  "mode": "per_call"
+}
+```
+
+Subsequent activations of the same path skip the prompt — the extension just re-registers and the daemon reuses the persisted entry.
+
+**4. Status bar updates.**
+
+Bottom-right of VS Code shows the registered identifier (per T-P2-007):
+
+```
+Claude Bridge: new-thing
+```
+
+Clicking the status bar item opens a quick-pick menu (T-P2-008) where the user can change approval mode (`per_call` / `session_bypass` / `auto`) or rename the workspace.
+
+**Total elapsed:** a few seconds and one modal click. The workspace is now drivable from any connected MCP client.
+
+### First delegation via Claude Code CLI
+
+Operator launches Claude Code CLI with the daemon configured as an MCP server (per the [Connecting an MCP client](#connecting-an-mcp-client) step above) and prompts:
+
+> I want to start a Rust CLI for parsing Karateka save files. Use the delegate_to_claude_code tool to scaffold it in the new-thing workspace.
+
+Claude Code reasons about the bridge tools available, then calls:
+
+```
+delegate_to_claude_code(
+  prompt: "Create a Rust CLI project named karateka-saves. Use clap for args.
+           Single subcommand `inspect <FILE>` that for now just prints
+           file size and first 16 bytes as hex. cargo init, add deps,
+           write src/main.rs, run cargo check.",
+  workspace: "new-thing",
+  mode: "agentic",
+  max_turns: 30
+)
+```
+
+**What the operator sees in VS Code.**
+
+Because `new-thing` is in `per_call` mode (the default — see [03-p2-extension.md §Q6](design/03-p2-extension.md#q6--runtime-approval-flow)), the daemon routes an approval request to the extension before invoking the SDK. A notification appears with the delegation parameters (workspace, mode, prompt text truncated to ~500 chars, exhibits count) and four buttons: **Approve** / **Approve for session** / **Deny** / **View details**.
+
+User clicks **Approve**.
+
+**What happens next.**
+
+- Daemon spawns the Claude Code SDK process with `cwd` set to `/home/jay/projects/new-thing`, mode `acceptEdits` (per the `agentic` mapping at `packages/daemon/src/sdk-runner.ts`), and the transcript piped to `~/.claude-bridge/transcripts/j_8f2a.jsonl`.
+- The SDK runs `cargo init`, edits `Cargo.toml`, writes `src/main.rs`, runs `cargo check`.
+- Bash deny list (hardcoded P1 surface; see [runbook → Operating delegations](runbook.md#operating-delegations-p1)) blocks anything risky (`sudo`, `rm -rf /`, package installs at system scope, SSH/AWS credential access).
+- Operator's Claude Code CLI long-polls `poll_delegation` with `wait_ms: 30000`; the long-poll resolves the moment the job reaches terminal.
+
+**Job completes.**
+
+Daemon returns the structured `DelegationReport`:
+
+```json
+{
+  "job_id": "j_8f2a",
+  "summary": "Created karateka-saves Rust CLI with clap-based `inspect` subcommand. cargo check passes.",
+  "files_created": ["Cargo.toml", "Cargo.lock", "src/main.rs", ".gitignore"],
+  "files_modified": [],
+  "files_deleted": [],
+  "diff": "...",
+  "shell_commands": [
+    {"cmd": "cargo init --name karateka-saves", "exit_code": 0},
+    {"cmd": "cargo add clap --features derive", "exit_code": 0},
+    {"cmd": "cargo check", "exit_code": 0}
+  ],
+  "tool_calls_made": 7,
+  "turns": 6,
+  "duration_ms": 23410,
+  "truncated": false,
+  "transcript_uri": "file:///home/jay/.claude-bridge/transcripts/j_8f2a.jsonl"
+}
+```
+
+Claude Code surfaces the summary back to the operator. The operator can verify the files exist in VS Code (they're right there) and re-read the transcript anytime via the `transcript_uri`. Full field-by-field interpretation is in the [runbook's `DelegationReport` section](runbook.md#interpreting-delegationreport).
+
+### Inspection tools
+
+P2 ships two read-only inspection tools (per T-P2-009 and T-P2-010) that bypass the approval gate — they're metadata-only and designed for high-frequency client use (e.g., before every delegation):
+
+**`get_open_editors`** — returns the list of currently-open editor tabs in the registered VS Code window, with active/dirty metadata. Input: `{ workspace?: string }`. Output:
+
+```json
+{
+  "editors": [
+    {
+      "uri": "file:///c:/projects/new-thing/src/main.rs",
+      "fs_path": "c:\\projects\\new-thing\\src\\main.rs",
+      "is_active": true,
+      "is_dirty": false
+    }
+  ]
+}
+```
+
+**`get_diagnostics`** — returns LSP/extension diagnostics for the registered workspace, filtered by severity threshold. Input: `{ workspace?: string, severity?: "error" | "warning" | "all" }` (default `"all"`). Output:
+
+```json
+{
+  "diagnostics": [
+    {
+      "uri": "file:///c:/projects/new-thing/src/main.rs",
+      "fs_path": "c:\\projects\\new-thing\\src\\main.rs",
+      "range": { "start": {"line": 12, "character": 4}, "end": {"line": 12, "character": 18} },
+      "severity": "error",
+      "message": "cannot find type `SaveFile` in this scope",
+      "source": "rust-analyzer"
+    }
+  ]
+}
+```
+
+Invoke from any MCP client. From Claude Code CLI:
+
+> Use get_open_editors on the new-thing workspace and tell me what files I have open.
+
+From MCP Inspector: pick the tool, fill in `{ "workspace": "new-thing" }`, click **Call Tool**.
+
+From raw curl:
+
+```bash
+curl -X POST https://plum-otter-7821.trycloudflare.com/mcp \
+  -H "Authorization: Bearer cb_live_a7f3...d219" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","arguments":{"name":"get_open_editors","arguments":{"workspace":"new-thing"}}}'
+```
+
+**Workspace argument routing.** When exactly one workspace is registered, `workspace` is optional (the single registration is implied). When multiple workspaces are registered, omitting `workspace` returns `400 ambiguous_workspace` — the caller must supply one. Mismatch on an unknown identifier returns `404 workspace_not_found`. The daemon proxies the call to the matching extension via IPC with a 5-second timeout; on timeout the tool returns `503 extension_offline`.
+
+### Subsequent sessions in the same workspace
+
+User closes VS Code, comes back the next day, reopens the workspace.
+
+- Extension activates, sends `register_workspace` to the daemon — **no trust prompt this time** because `workspaces.json` already has a `trust_state: "trusted"` entry for this path.
+- Daemon restores per-workspace settings (approval mode, name) from the persisted entry.
+- Status bar: `Claude Bridge: new-thing`.
+- Workspace is drivable again immediately.
+
+If the daemon was restarted, the same recovery applies — the extension re-registers on next activation, and the trust state survives because it's on disk, not in the daemon's in-memory state.
+
+### Multiple workspaces simultaneously
+
+Scenario: ATTN-CC3 open in one VS Code window, the new Rust project open in another.
+
+- Each VS Code window's extension instance registers its own workspace independently with the daemon.
+- Both entries live in `~/.claude-bridge/workspaces.json`.
+- The daemon's `WorkspaceRegistry` tracks both; tool dispatch routes by the `workspace` argument.
+
+For inspection tools and delegations alike, the caller passes `workspace: "attn-cc3"` or `workspace: "new-thing"` explicitly (per T-P2-009 / T-P2-010's argument routing). With two workspaces registered, omitting the arg on an inspection tool returns `400 ambiguous_workspace`.
+
+Approval mode is per-workspace: ATTN-CC3 can sit on `session_bypass` (approve once per VS Code session) while the experimental Rust project stays on `per_call` (approve every time).
+
+### Steady-state UX
+
+Day-to-day with P2 shipped:
+
+- User opens VS Code; extension attaches silently (no prompt after first-trust).
+- User drives delegations from Claude Code CLI / MCP Inspector / Claude Desktop.
+- Bridge is invisible except for the approval modal on agentic delegations (`per_call` mode) or never (`auto` mode for sandbox workspaces).
+
+The only times the bridge becomes visible:
+
+| Event | Visibility |
+|---|---|
+| First registration of a new workspace | Trust modal, one click |
+| An agentic delegation runs in `per_call` mode | Approval notification, one click |
+| `auto` mode | Never — audit log is the only record |
+| Something denies | Notification surfacing the denial |
+| User checks `claude-bridge status` | Manual diagnostic action |
+
+That's the target UX for P2. P3 will collapse the Claude Code CLI intermediary by adding OAuth so claude.ai project chats can drive delegations directly.
+
+### Failure modes worth being aware of
+
+**Tunnel URL changes after cloudflared restart.** Any MCP client configured with the old URL gets fetch errors. User must repaste the new URL (`claude-bridge status` to retrieve). P3 mitigation: persistent named tunnels.
+
+**Daemon crashes mid-job.** In-memory job state is lost. Transcript file may be partial but readable. Client's `poll_delegation` returns an error. User restarts daemon, retries delegation.
+
+**VS Code window closes mid-job.** Extension disconnects from daemon. Daemon detects disconnect; in-flight delegations against that workspace fail with `503 extension_offline`-class errors. Partial diff and transcript still recoverable from `~/.claude-bridge/transcripts/`.
+
+**Two windows open the same workspace.** Documented behavior is one-extension-per-path; multi-instance routing for the same `abs_path` is in the P3 backlog per [03-p2-extension.md §6](design/03-p2-extension.md).
+
+**Token rotated while a client still has the old.** All requests 401 until the user updates the client config. Audit log records the rejected attempts.
+
+**Approval timeout.** Default 60 seconds (per `claudeBridge.approvalTimeoutMs`). If the operator is AFK when an approval arrives, the timeout is treated as deny; the caller gets `403 user_denied`.
+
+---
+
+## Part 2: P3 target state (where we're going)
+
+### Claude.ai project-chat integration
+
+This is the architectural target for P3: claude.ai project chats connect to the daemon directly via the connector UI — no Claude Code CLI intermediary. The connector UI currently requires OAuth, which the daemon's auth layer doesn't yet implement (C-27 captures the deferral). Until P3 ships OAuth, claude.ai project chats use Bearer auth via Claude Code CLI as the bridge (Part 1 above).
+
+The aspirational shape, once OAuth lands:
+
+The tunnel URL and Bearer/OAuth credential are pasted **once** into a Claude.ai project's custom MCP connector configuration. From that point on, any new VS Code workspace just needs to register itself with the running daemon — no further Claude.ai-side configuration required.
 
 User opens the relevant Claude.ai project and starts chatting. Project-Claude has whatever context lives in that project (design docs, memory). It does not yet know what files exist on disk in `new-thing` — only that the workspace exists, via the connector.
 
-### User prompt
+**User prompt:**
 
 > I want to start a Rust CLI for parsing Karateka save files. Set up the scaffolding.
 
-### Project-Claude's reasoning
+**Project-Claude's reasoning (requires OAuth in daemon's auth layer — P3 deliverable).**
 
 This is workspace-side work. Project-Claude calls the bridge:
 
@@ -106,8 +335,7 @@ Sees `new-thing` is default. Confirms it's empty before delegating:
 list_workspace(glob: "*")
   → [
       {path: "README.md", type: "file", size: 47},
-      {path: ".gitignore", type: "file", size: 1203},
-      {path: ".claude-bridge.json", type: "file", size: 412}
+      {path: ".gitignore", type: "file", size: 1203}
     ]
 ```
 
@@ -115,163 +343,36 @@ Decides to delegate the scaffolding rather than do it itself:
 
 ```
 delegate_to_claude_code(
-  prompt: "Create a Rust CLI project named karateka-saves. Use clap for args.
-           Single subcommand `inspect <FILE>` that for now just prints
-           file size and first 16 bytes as hex. cargo init, add deps,
-           write src/main.rs, run cargo check.",
+  prompt: "Create a Rust CLI project named karateka-saves. ...",
   mode: "agentic",
   max_turns: 30
 )
   → {job_id: "j_8f2a", status: "queued"}
 ```
 
-### What happens on the user's machine
+**What happens on the user's machine** (same flow as Part 1's delegation — daemon, extension snapshot, SDK spawn, transcript pass-through).
 
-**Daemon side:**
-- Receives delegation request
-- Asks the `new-thing` extension instance for an auto-attach snapshot
-- Extension assembles snapshot:
-  - Workspace path and ID
-  - Git: branch `main`, clean, no ahead/behind
-  - No open editors
-  - No CLAUDE.md present
-  - No last-shell yet
-  - Snapshot ID (hash for post-delegation diff)
-- Daemon spawns Claude Code SDK process:
-  - cwd set to `/home/jay/projects/new-thing`
-  - Prompt = snapshot header + delegation prompt
-  - Mode flags: `agentic`
-  - Transcript piped to `~/.claude-bridge/transcripts/j_8f2a.jsonl`
+**Claude.ai side meanwhile** (requires OAuth in daemon's auth layer — P3 deliverable):
 
-**VS Code window:**
-- Webview panel opens automatically (extension subscribes to job-start events from the daemon)
-- Conversation streams in real-time:
-  - Claude Code's reasoning about the plan
-  - Each tool call (file write, bash invocation)
-  - Each tool result
-- User watches it run `cargo init`, edit `Cargo.toml`, write `src/main.rs`, run `cargo check`
-- No toasts fire — everything's in-workspace, deny-list patterns don't trigger
-- Status bar: `Bridge: new-thing (default) · job j_8f2a running · 4 turns`
+- Project-Claude calls `poll_delegation("j_8f2a", wait_ms: 30000)` — long-poll.
+- Daemon returns when job finishes (or 30s elapses, returning `status: running` and project-Claude polls again).
 
-**Claude.ai side meanwhile:**
-- Project-Claude calls `poll_delegation("j_8f2a", wait_ms: 30000)` — long-poll
-- Daemon returns when job finishes (or 30s elapses, returning `status: running` and project-Claude polls again)
-
-### Job completes
-
-Daemon assembles the report:
-
-```json
-{
-  "job_id": "j_8f2a",
-  "summary": "Created karateka-saves Rust CLI with clap-based `inspect` subcommand. cargo check passes.",
-  "files_created": ["Cargo.toml", "Cargo.lock", "src/main.rs", ".gitignore"],
-  "files_modified": [],
-  "files_deleted": [],
-  "diff": "...",
-  "diagnostics_before": [],
-  "diagnostics_after": [],
-  "diagnostics_delta": {"added": [], "resolved": []},
-  "shell_commands": [
-    {"cmd": "cargo init --name karateka-saves", "exit_code": 0},
-    {"cmd": "cargo add clap --features derive", "exit_code": 0},
-    {"cmd": "cargo check", "exit_code": 0}
-  ],
-  "tool_calls_made": 7,
-  "turns": 6,
-  "duration_ms": 23410,
-  "truncated": false,
-  "transcript_uri": "file:///home/jay/.claude-bridge/transcripts/j_8f2a.jsonl"
-}
-```
-
-Project-Claude receives this on its next poll. Tells the user:
+**Job completes.** Project-Claude receives the structured `DelegationReport` on its next poll and tells the user:
 
 > Scaffolding's in place. `karateka-saves` with clap, `inspect` subcommand stubbed, `cargo check` passes. Created Cargo.toml, src/main.rs, .gitignore. Next I'd suggest figuring out the save-file format — do you have a sample file, or should we start from disassembly?
 
 User can verify in VS Code (the files are right there) and re-read the transcript anytime via `~/.claude-bridge/transcripts/j_8f2a.jsonl`.
 
-## Subsequent sessions in the same workspace
+**Aspirational additional surface (requires OAuth in daemon's auth layer — P3 deliverable):**
 
-User closes VS Code, comes back the next day, reopens the workspace.
+- A **webview panel** in VS Code that opens automatically when a delegation kicks off, streaming the conversation in real time (tool calls, tool results, model reasoning).
+- A **per-workspace `.claude-bridge.json`** file at the workspace root capturing local policy (additional bash-deny patterns, additional inspection-tool deny patterns, `auto_attach` snapshot configuration).
+- A **default-workspace** concept so single-workspace operators don't have to pass `workspace:` on every call.
+- **Offline workspaces** surfaced in `list_workspaces()` with `status: "offline"` and `last_attached`, so project-Claude can tell the user "the attn-cc3 workspace is offline — open it in VS Code and I'll pick up there."
 
-- Extension activates, finds existing `.claude-bridge.json`, registers with daemon — **no prompt this time** because config exists
-- Daemon recognizes the workspace ID from prior state in `~/.claude-bridge/workspaces/`, restores per-workspace settings
-- Status bar: `Bridge: new-thing (default)`
-- Workspace is drivable again immediately
+All of these depend on the OAuth-enabled claude.ai connector path landing first; until then, Bearer-via-Claude-Code-CLI (Part 1) is the operational path.
 
-## Multiple workspaces simultaneously
-
-Scenario: ATTN-CC3 open in one window, the new Rust project open in another.
-
-- Both extensions register independently with the daemon
-- `list_workspaces()` returns both:
-  ```json
-  [
-    {"id": "github.com/jay/attn-cc3#attn-cc3", "status": "attached", "is_default": false},
-    {"id": "github.com/jay/new-thing#new-thing", "status": "attached", "is_default": true}
-  ]
-  ```
-- The Claude.ai project chat for ATTN-CC3 always passes `workspace: "github.com/jay/attn-cc3#attn-cc3"` explicitly, regardless of which is default — defensive against the wrong default being current
-- The Claude.ai project chat for the Rust work can rely on the default
-
-The user changes the default by clicking the status bar item in whichever VS Code window they're driving from, or via:
-
-```
-claude-bridge default github.com/jay/new-thing#new-thing
-```
-
-(deferred to P3 along with the other multi-workspace conveniences)
-
-## Offline workspaces
-
-Scenario: ATTN-CC3 was attached earlier today but the VS Code window is now closed.
-
-- `list_workspaces()` still returns it, but with `status: "offline"`:
-  ```json
-  {
-    "id": "github.com/jay/attn-cc3#attn-cc3",
-    "folder_name": "attn-cc3",
-    "abs_path": "/home/jay/projects/attn-cc3",
-    "status": "offline",
-    "last_attached": "2026-05-01T14:22:31Z"
-  }
-  ```
-- Project-Claude can see it exists historically and tell the user "the attn-cc3 workspace is offline — open it in VS Code and I'll pick up there"
-- Tier-2 calls and delegations against an offline workspace return `{error: "workspace_not_attached", available: [...]}`
-
-## Steady-state UX
-
-Day-to-day:
-
-- User opens VS Code, extension attaches silently
-- Drives from Claude.ai
-- Bridge is invisible most of the time — no manual steps per session, no per-prompt friction
-
-The only times the bridge becomes visible:
-
-| Event | Visibility |
-|---|---|
-| First attach to a new workspace | Two-click prompt, ~5 seconds |
-| A delegation runs | Webview panel opens, conversation streams |
-| Something denies | Toast appears asking to approve or deny |
-| User checks `claude-bridge status` | Manual diagnostic action |
-
-That's the target UX. Everything else is mechanism.
-
-## Failure modes worth being aware of
-
-**Tunnel URL changes after cloudflared restart.** User must repaste new URL into Claude.ai connector. P3 mitigation: persistent named tunnels.
-
-**Daemon crashes mid-job.** In-memory job state is lost. Transcript file may be partial but readable. Project-Claude's `poll_delegation` returns `{error: "daemon_restart", job_id_missing: true}`. User restarts daemon, retries delegation.
-
-**VS Code window closes mid-job.** Extension disconnects from daemon. Daemon detects disconnect, marks job `failed` with `reason: "workspace_unavailable"`. Partial diff and transcript still recoverable.
-
-**Two windows open the same workspace.** Daemon refuses second registration with `error: "workspace_already_attached"`. The first window remains the provider. Second window's extension shows a banner explaining.
-
-**Token rotated while a Claude.ai project still has the old.** All requests 401 until the user updates the connector. Audit log records the rejected attempts.
-
-## What this looks like for ATTN-CC3 specifically
+### What this looks like for ATTN-CC3 specifically (P3+ target)
 
 For the existing ATTN-CC3 project:
 
@@ -285,192 +386,3 @@ For the existing ATTN-CC3 project:
 Each delegation runs locally with full ATTN-CC3 workspace context, and the structured report comes back with diff, diagnostics delta, and transcript URI. The user watches it run in the VS Code webview, and project-Claude reasons about the result on the Claude.ai side.
 
 That is the system, fully realized.
-
----
-
-# P1 — Delegation surface (what's actually shipped)
-
-The section above describes the **steady-state UX** assuming P0 through P2 are complete. The section below describes the **delegation surface as it currently exists after P1**, before the VS Code extension lands at P2.
-
-This section is for contributors and operators who want to know how the daemon actually behaves today. Cross-references throughout to the [runbook](runbook.md) for operator concerns and the [P1 design doc](design/02-p1-delegation.md) for design rationale.
-
-## P1 overview
-
-P0 shipped the **bus**: daemon + cloudflared tunnel + MCP server + auth + audit + `ping` tool. P1 layers the **delegation surface** on top:
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ MCP client (Bearer auth)                                         │
-│   delegate_to_claude_code / poll_delegation / cancel_delegation  │
-└──────────────────┬───────────────────────────────────────────────┘
-                   │  HTTPS  (P0 tunnel + auth)
-┌──────────────────▼───────────────────────────────────────────────┐
-│ Daemon                                                            │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │ MCP tools (P1)                                              │  │
-│  │   delegate.ts / poll.ts / cancel.ts                         │  │
-│  │   (wraps audit metadata; validates input)                   │  │
-│  └────────────────┬────────────────────────────────────────────┘  │
-│                   │                                                │
-│  ┌────────────────▼────────────────────────────────────────────┐  │
-│  │ JobQueue (P1) — single-concurrent FIFO + terminal-promise   │  │
-│  └────────────────┬────────────────────────────────────────────┘  │
-│                   │                                                │
-│  ┌────────────────▼────────────────────────────────────────────┐  │
-│  │ SdkJobRunner (P1) — query() AsyncGenerator + AbortController │  │
-│  │   ↳ TranscriptWriter (P1) — JSONL stream + 50MB cap          │  │
-│  │   ↳ snapshot/diff (P1) — before/after workspace state        │  │
-│  │   ↳ report assembler (P1) — derives DelegationReport         │  │
-│  └────────────────┬────────────────────────────────────────────┘  │
-│                   │                                                │
-│  ┌────────────────▼────────────────────────────────────────────┐  │
-│  │ @anthropic-ai/claude-agent-sdk (external)                   │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────────────┘
-```
-
-The P0 surface (audit, auth, tunnel manager, IPC) is unchanged in P1. The new surface is the dotted-line section.
-
-## Job lifecycle
-
-P1 introduces a strict three-layer model for delegation state:
-
-- **`Job`** — immutable inputs: `id`, `workspace_id`, `prompt`, `mode`, `max_turns`, `working_directory`, `exhibits`, `model`, `created_at`. Set once at enqueue, never mutated.
-- **`JobRunState`** — mutable execution state: `status` (one of `queued` / `running` / `complete` / `failed` / `cancelled`), `partial` (progress block), `started_at`, `finished_at`, `cancel_requested`, `error`, `report`. Owned by the JobQueue; mutated through `mark*` methods.
-- **`JobView`** — projection for wire responses: a flattened snapshot of `Job` + `JobRunState` shaped for the MCP tool outputs.
-
-The split (decided at T-P1-003 per Decision 6) keeps immutable design data separate from mutable runtime state. Tests and instrumentation can reason about a `Job` without worrying about race conditions on its execution status.
-
-**Single-concurrent constraint.** The runner processes one job at a time. Additional `delegate_to_claude_code` calls enqueue; their `queued_position` is the FIFO index behind the running job (0 = first to run next). The constraint exists to bound resource usage on the user's machine (SDK can consume CPU + memory) and to keep the in-memory job state simple. P3 may revisit if multi-concurrent demand is real.
-
-**Partial progress.** During a running job, `poll_delegation` returns a `partial` block with `turns_so_far`, `last_tool`, `elapsed_ms`. These fields update as the SDK's `query()` AsyncGenerator yields messages — the runner taps each `assistant` message to extract the last tool name and increment the turn counter. Polling with `wait_ms: 0` reads the current partial; long-polling resolves on terminal.
-
-**Terminal-promise primitive.** The JobQueue exposes `terminalPromise(job_id)` which resolves when the job reaches a terminal state. The `poll_delegation` long-poll path races this promise against a `setTimeout(wait_ms)` — event-driven, no busy-wait. Verified at T-P1-005 AC-4 (poll resolved in 1513ms when stub delay was 1500ms, well before the 6000ms wait cap).
-
-## The three MCP tools
-
-Names match the design doc and the wire surface:
-
-- **`delegate_to_claude_code`** — enqueue a new delegation. Returns `{job_id, status, workspace_id, queued_position}`.
-- **`poll_delegation`** — read job state with optional long-poll. Returns `{job_id, status, workspace_id, partial?, report?}`.
-- **`cancel_delegation`** — request termination. Returns `{job_id, status, prior_status}`.
-
-Input/output shapes are fully specified by Zod schemas in `packages/shared/src/delegation.ts`; the [runbook's Operating Delegations section](runbook.md#operating-delegations-p1) is the operator-facing reference for field semantics and limits.
-
-**Audit metadata side-channel.** The audit log records per-tool-call entries with `job_id` and `workspace_id` fields. To populate these without coupling the audit middleware to the tool implementations, T-P1-004 introduced the `ctx.setAuditMetadata()` pattern: tool handlers receive a context object that includes a setter; the dispatch wrapper reads any metadata the handler set and merges it into the audit entry. Handlers that don't set metadata produce normal audit entries (`ping` doesn't set anything; the three delegation tools all set `job_id` + `workspace_id`).
-
-## Workspace registry stub
-
-P1 ships a single-workspace stub: configured via the `workspace` block in `config.json`, matched by exact-string ID compare. The implementation is at `packages/daemon/src/workspace/registry.ts` — interface `WorkspaceRegistry` with one method `resolve(id): Workspace | null`. The stub validates the configured workspace at daemon startup (absolute path, exists, is a directory; symlinks resolved per CC-1).
-
-P2 will replace the stub with a real registry: the VS Code extension registers workspaces at attach time via the IPC channel; the registry persists state to `~/.claude-bridge/workspaces/`. The interface stays the same — only the implementation changes.
-
-In the meantime: one workspace per daemon. Multi-workspace work (the [walkthrough's UX narrative above](#multiple-workspaces-simultaneously)) is forward-looking.
-
-## Snapshot + diff
-
-Before each delegation, `takeSnapshot(workspace_id, abs_path)` produces a `WorkspaceSnapshot`: a list of `FileEntry` (path, size_bytes, sha256, is_binary). After the delegation, a second snapshot is taken; the pair feeds `computeDiff` to produce the textual diff that lands in the report.
-
-**File enumeration paths:**
-
-- **Git workspaces** (`git ls-files` returns at least one file): use `git ls-files -z` for tracked files + `git ls-files -z --others --exclude-standard` for untracked-but-not-ignored. NUL-separated to handle filenames with newlines. Two-step approach because `git ls-files` doesn't combine tracked and untracked in a single invocation cleanly.
-- **Non-git workspaces** (or `git` unavailable): walk recursively with the [`ignore`](https://www.npmjs.com/package/ignore) package's `.gitignore`-syntax engine reading the workspace's `.gitignore` (if present) plus a hardcoded default exclude list (`node_modules/`, `dist/`, `.git/`).
-
-Either path produces the same `FileEntry[]` shape. Per-file: read first 8KB to detect binary (presence of NUL byte), then either stream `sha256` of the full file (text) or just compute the size + flag binary. 50000-file cap with `truncated: true` propagation.
-
-**Diff computation:**
-
-- **Git path:** `git diff --no-index --binary --text <before-tree> <after-tree>` against ephemeral tree objects built from the two snapshots. Produces unified diff format directly.
-- **Fallback path:** the [`diff`](https://www.npmjs.com/package/diff) npm package's `createPatch` per file pair. Concatenated into a single multi-file unified diff. Chosen at T-P1-007 after a real §22.5 consultation (the `diff` package was already a devDep candidate; user chose to keep it).
-
-Both paths respect the 256KB-per-file cap with `truncated: true` propagation. Binary files are listed by path in `files_modified` but excluded from `diff`.
-
-## Transcript writer
-
-`TranscriptWriter` streams JSONL to `~/.claude-bridge/transcripts/{job_id}.jsonl`. One JSON object per line; the SDK's `SDKMessage` shape is passed through pretty-much-unchanged (no normalization — the docs-vs-runtime pattern at work; see [v0.5 §6](claude-orchestrated-methodology-v0_5.md#6-the-docs-describe-happy-path-runtime-reveals-edges-pattern-new-in-v05)). The writer:
-
-- Creates the transcripts directory lazily on first write (mode 0700 on Unix).
-- Opens the file with mode 0600 on Unix.
-- Caps total bytes at 50MB; appends a final marker line `{"type":"truncation","reason":"transcript_size","truncated_at":<bytes>}` when the cap is reached. Subsequent appends are dropped silently.
-- Idempotent `close()` per the async-sink-queue pattern (see `docs/patterns/project/async-sink-queue.md`).
-
-**Orphan handling at startup** (T-P1-006): the daemon scans `~/.claude-bridge/transcripts/` and reports any transcript files whose `job_id` isn't in the JobQueue's retained-IDs set (P1 has no persistent job state, so all transcripts at startup are orphans). The default action is to leave orphans in place for forensic recovery; the runbook covers manual cleanup.
-
-## Report assembler
-
-`assembleReport({job, run_state, before_snapshot, after_snapshot, transcript_path, ...})` produces a `DelegationReport`. Responsibilities:
-
-- **Parse the transcript** with `parseTranscript` — line-by-line JSON, fail-soft (one bad line doesn't abort; logged at warn level, line skipped).
-- **Extract the summary** — backward-walk the parsed messages from the end, finding the last assistant message with text content; if no such message exists, return empty string.
-- **Extract shell commands** — forward-walk parsed messages, looking for `tool_use` blocks with `name === "Bash"`; pair each with its `tool_result` and extract `command` + exit-code-from-result regex.
-- **Compute files diff** — call `computeDiff(before_snapshot, after_snapshot)`; categorize file additions/modifications/deletions from snapshot comparison.
-- **Pick truncation reason** — 4-tier precedence: `timeout` > `max_turns` > `transcript_size` > `workspace_size`. First match wins; `truncated: true` if any match.
-
-The assembler is the reason for the docs-vs-runtime pattern showing up at T-P1-008: the orchestrator's pre-dispatch reading of SDK docs said messages have a flat `content` field; the SDK's actual TypeScript types nest assistant content under `.message.content` (full Anthropic `BetaMessage` shape). The `effectiveContent(m)` helper (in `report.ts`) reads both shapes, preferring the nested form when present. The legacy flat-content path remains for backward compatibility with messages that may not be assistant-typed.
-
-## SDK integration
-
-The SdkJobRunner wraps `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code` in late 2025; the older name appears in some older design notes — a P1-close doc-debt item).
-
-**Permission mode mapping:**
-
-| `Job.mode` | SDK `permissionMode` |
-|---|---|
-| `agentic` | `"acceptEdits"` |
-| `read_only` | `"plan"` |
-
-**Belt-and-suspenders for `read_only` (T-P1-010 fix):** the SDK's `"plan"` mode is not actually read-only on its own. Claude in plan mode can call the `ExitPlanMode` tool which the SDK **auto-approves** and flips `permissionMode` to `"default"` — on the next turn, write tools become available. T-P1-010's SMOKE run caught this: on Windows the test happened to pass only because `max_turns=3` ran out before the post-flip turn; with higher max_turns the workspace would have been mutated.
-
-The fix is to pin `disallowedTools` for read_only delegations: `["Write", "Edit", "MultiEdit", "NotebookEdit", "ExitPlanMode"]`. The SDK enforces `disallowedTools` at the dispatch layer regardless of any `permissionMode` flip. Belt + suspenders: permission mode says "plan," disallowed-tools list says "and even if plan mode is escaped, these stay forbidden."
-
-See [v0.5 §6](claude-orchestrated-methodology-v0_5.md#6-the-docs-describe-happy-path-runtime-reveals-edges-pattern-new-in-v05) for the methodology lesson: orchestrator-side documentation reading said "plan mode is read-only"; runtime exercise revealed the `ExitPlanMode` escape hatch.
-
-**Bash deny via canUseTool.** The SDK's `canUseTool` callback fires before each tool invocation. The runner inspects `toolName === "Bash"` and matches the command against a hardcoded deny pattern list (from `00-overview.md`): `sudo`, `rm -rf /`, `dd of=/dev/`, `npm install`, `pip install`, `apt install`, `brew install`, `~/.ssh` access, `~/.aws` access. Match → return `{behavior: "deny", message: "Blocked by claude-bridge deny list: <reason>"}`. The SDK surfaces the deny message in the transcript as a `tool_result`. P2 will layer per-workspace `.claude-bridge.json` overrides on top; P1 is hardcoded.
-
-**Cancellation: AbortController, not `query.interrupt()`.** T-P1-009's original design specified `query.interrupt()` for cancellation. The SDK's TypeScript declarations explicitly say `interrupt()` is "only supported when streaming input/output is used" — for single-prompt delegations (which is all P1 does), it's a no-op. The actual primitive is `Options.abortController`: the runner constructs an `AbortController`, passes it into the SDK options, and calls `.abort()` on cancel. This was a reactive deviation at T-P1-009 documented in `sdk-runner.ts`'s header.
-
-**Transcript pass-through.** Each `SDKMessage` from the `query()` AsyncGenerator is appended to the transcript writer's JSONL stream. Lossless from the SDK's perspective — the daemon does not normalize or filter. The transcript is the ground truth for what the SDK did; the report is a derived summary.
-
-## Acceptance harnesses
-
-Two harnesses, both at `scripts/`, both invoking the same MCP client (`scripts/mcp-delegate-client.mjs`):
-
-- **`acceptance-p1.mjs`** (T-P1-005) — drives 9 [MECH] ACs against the **StubJobRunner**. No API key needed; runs in ~7 seconds. Covers `delegate_to_claude_code` latency, queue semantics, long-poll event-driven behavior, cancellation of queued jobs, audit-entry metadata, input validation, no-workspace-503 path.
-- **`acceptance-p1-smoke.mjs`** (T-P1-011) — drives 3 [SMOKE] ACs against the real **SdkJobRunner** with live Anthropic API. Requires `ANTHROPIC_API_KEY`. Covers AC-5 (agentic happy path), AC-6 (read_only refusal — verifies the belt-and-suspenders), AC-8 (cancel running delegation within 15s).
-
-Both harnesses share `scripts/lib/harness-common.mjs` (extracted at T-P1-011): temp env setup, config writing, daemon spawn/stop, ready-poll, `pass`/`fail`/`extractResult` helpers, the `ensureCloudflaredOnPath` PATH-augmentation function (covers Windows install paths + Linux user-local `~/cloudflared` per T-0019.6 + system paths per T-P1-012).
-
-**Harness brittleness defense** (T-P1-011 reactive fix; codified in [v0.5 §7](claude-orchestrated-methodology-v0_5.md#7-harness-brittleness-defense-new-in-v05)): the SMOKE harness uses an `unwrapOrThrow(callResult, where)` helper that hard-fails when the MCP response carries `isError: true`. Without it, a schema-rejection or other server-side error gets wrapped in an envelope, `extractResult` returns the bare result object (no `structuredContent`), and assertions like `p.status === "cancelled"` evaluate `undefined === "cancelled"` → false → silent "pass." T-P1-011's first run had AC-6 "pass" in 38ms because of exactly this — a `wait_ms: 90000` rejected at the `PollInputSchema` boundary (60000 cap).
-
-Cross-platform parity verified at T-P1-012: both harnesses run identically on Windows and WSL Ubuntu with the same PASS counts. Per-AC elapsed varies (Claude's model nondeterminism on read_only delegations can produce 5x wall-time variance for the same semantic outcome — neither is wrong).
-
-## Cross-platform considerations
-
-P1 inherits CC-1 through CC-3 from P0 and adds CC-4 through CC-6 (per [v0.5 §8](claude-orchestrated-methodology-v0_5.md#8-cross-platform-discipline-cc-n-artifacts)):
-
-| Discipline | What it means | P1 manifestation |
-|---|---|---|
-| CC-1 | Path-handling: canonical forward slashes; `path.join`; `pathToFileURL` for file URIs | Transcript URIs use `pathToFileURL`; snapshot paths normalized at the boundary. |
-| CC-2 | Process/signal handling: Windows vs Unix subprocess semantics | Daemon spawns SDK + cloudflared with platform-aware kill chains (SIGTERM with 5s SIGKILL watchdog on Unix; equivalent shape on Windows). |
-| CC-3 | File permissions: Unix mode bits no-op on Windows | Daemon's loose-perms refusal is Unix-only (`0600` check skipped on `win32`). Audit log file mode 0600 set when supported. |
-| CC-4 | Defensive clean install before cross-platform validation | The runbook's [WSL pre-flight](runbook.md#wsl-pre-flight-checklist) documents this. |
-| CC-5 | Lazy-load with graceful degradation for rare-case dependencies | The MCP client's `undici` import is wrapped in try/catch — load failure (Node 20.18 vs `>=22.19` engine) drops the DNS workaround with a stderr warning. Localhost MCP unaffected. |
-| CC-6 | Node engine pinning matrix | The runbook's [Node engine guidance](runbook.md#node-engine-guidance) makes the matrix explicit. |
-
-The `ensureCloudflaredOnPath` helper is the most-edited cross-platform surface in the harness — Windows install path at T-0019, Linux user-local + system paths at T-P1-012. macOS Homebrew paths are an open follow-up.
-
-## What's deferred to P2
-
-P1 explicitly excludes (will land at P2 or later):
-
-- **VS Code extension** — workspace registration via IPC, status bar, webview for live delegation streaming, toast approval UI.
-- **Real workspace registry** — multi-workspace support, attach/detach lifecycle, persistent state.
-- **Per-workspace `.claude-bridge.json`** — additional bash-deny patterns, additional inspection-tool deny patterns, `auto_attach` snapshot configuration.
-- **OAuth** — Claude.ai connector UI requires OAuth-style credentials; static Bearer tokens (P1's mechanism) work via MCP Inspector, Claude Code CLI, Claude Desktop, and any other Bearer-capable MCP client, but not the Claude.ai connector. May land between P1 and P2 or be absorbed into P2.
-- **Tier-2 inspection tools** — `list_workspace`, `read_file`, `get_git_status`, `get_git_diff`, `get_diagnostics`, `search_workspace`, `get_open_editors`.
-- **Persistent job state** — daemon crash mid-job loses the in-memory `JobRunState`. P3 candidate.
-- **Multi-concurrent runner** — single-concurrent is a soft constraint; multi could land at P3 if there's real demand.
-- **Streaming responses to project-Claude** — P1 is poll-only. Streaming via MCP server-sent events is a P4 stretch.
-- **Persistent named tunnels** — every cloudflared restart issues a new URL. Named tunnels (P3) avoid the re-paste-the-URL friction.
-
-Cross-references: the [P1 design doc](design/02-p1-delegation.md) has the full out-of-scope list with rationale.
