@@ -1,11 +1,11 @@
 # claude-bridge — project state
 
 **Project:** claude-bridge
-**Methodology version:** v0.6 (codified T-P2-014, 2026-05-30; supersedes v0.5)
-**Current phase:** P1 closed; P2 design pending
-**Current integration milestone:** INT-2 closed implicitly via P1 ACs; INT-3 (steady-state multi-workspace UX in VS Code) pending P2
-**Last conversation date:** 2026-05-24
-**Status:** **P1 GATE-CLOSED 2026-05-24** (alongside P0 still closed). All 16 P1 ACs MECH/MCP/INFER-VERIFIED on Windows + WSL Ubuntu. T-P1-014 COMPLETE, awaiting verdict: 11-item design-doc-debt sweep applied + P1-close snapshot produced at `docs/snapshot/orchestrator-context-p1-close.md` + `docs/snapshot/retroactive-notes.md` created (T-P1-003 DailyTimer coverage gap annotation) + v0.5 methodology now tracked in git. P2 design conversation pending; no kickoff content produced at gate close.
+**Methodology version:** v0.7 (in effect; codified + convention clause wired CB-WIRE-CLAUSE 2026-05-31; supersedes v0.6)
+**Current phase:** P2 GATE-CLOSED (2026-05-30); P3 (OAuth) mid-phase — T-P3-001, T-P3-002 done; T-P3-003 next.
+**Current integration milestone:** INT-3 (steady-state multi-workspace UX in VS Code) closed via P2 ACs; P3 OAuth integration in progress (claude.ai connector end-to-end is the AC-P3-12 gate).
+**Last conversation date:** 2026-06-01
+**Status:** **P2 GATE-CLOSED 2026-05-30** (P0/P1 also closed). P3 (OAuth resolution) mid-phase: T-P3-001 (DCR + metadata endpoints) and T-P3-002 (`/authorize` + consent state machine, pre-modal) committed; T-P3-003 (extension modal + consent IPC) is the next undone task. Gate-blocking ACs AC-P3-12 (live claude.ai smoke) and AC-P3-13 (Windows+WSL parity) still pending. No P3-close snapshot yet (T-P3-006 deliverable).
 **SDK package:** `@anthropic-ai/claude-agent-sdk@^0.3.150` (renamed from `@anthropic-ai/claude-code`)
 **P1-close doc-debt (informal):**
 - Update `02-p1-delegation.md` / `p1-build-plan.md` references from `@anthropic-ai/claude-code` → `@anthropic-ai/claude-agent-sdk`.
