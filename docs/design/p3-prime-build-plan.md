@@ -22,8 +22,7 @@ The binding (isolation) is the load-bearing foundation: granularity, gate re-key
 FOUNDATION (isolation)
   T-P3-002R  revise consent: bound workspace + responder-binds + named modal   [revises shipped code]
   T-P3-003   reshaped modal: bind-this-workspace (named: client + codebase) + status-bar binding display
-  T-P3-003U  unbind / revoke: targeted daemon teardown + VS Code unbind command   [misclick recovery]
-  T-P3-004   /token + token carries binding + AUTH-LAYER ENFORCEMENT + unbound-broadcast filter
+  T-P3-004   /token + token carries binding + AUTH-LAYER ENFORCEMENT + unbind/revoke + unbound-broadcast filter
   ── ISOLATION MILESTONE ──  (two bindings; A⊥B proven; misbinding recoverable)
 AUTONOMY (layered on the proven binding)
   T-P3-005   gate re-key (workspace→token) + per-operation granularity
@@ -35,7 +34,7 @@ SEPARATE (not a code task)
   methodology codification of the §5/§6.4 disciplines → orchestrator/executor prompting, via the pool
 ```
 
-**Sequencing note (why T-P3-003U lands before T-P3-004):** misclick recovery is an operator requirement, not a P4 nicety. Today the only recovery is daemon restart (which clears in-memory consent state). But T-P3-004 persists the token (30-day TTL) — and a persisted binding is NOT cleared by restart. So if T-P3-004 shipped before an unbind path existed, a misbinding would be written to a persisted token with no recovery short of manual file editing. The unbind/revoke (T-P3-003U) therefore lands **before** token persistence, so the isolation milestone ships with bindings that are always undoable. (Recon 2026-06-01 established no revocation of any kind exists today; /revoke was P4-deferred — this pulls a minimal targeted unbind into P3′.)
+**Sequencing note (why unbind is folded INTO T-P3-004, revised 2026-06-02):** misclick recovery is an operator requirement, not a P4 nicety — the principle is *no persistence without recovery*. We initially planned a standalone T-P3-003U *before* T-P3-004. But the 2026-06-02 resume recon established there is **no durable binding to revoke until T-P3-004** — pre-004 the binding lives only in transient state (in-memory ConsentRecord + 60s-TTL AuthCodeRecord + a per-window extension `let`); the durable home is T-P3-004's token store. So a standalone pre-004 unbind would be plumbing built against nothing, which 004 would then re-wire to the persistent token anyway. **Resolution: build the token store and its teardown together in T-P3-004** — unbind targets the real durable binding from the start, is fully functional/demonstrable immediately, and is never re-wired. This honors the principle *better* than "recovery first against nothing": persistence and its recovery ship atomically in the same task, so there is never a persisted binding without an unbind path. (Recon 2026-06-01 established no revocation exists today; full RFC-7009 /revoke + trust-revocation UI remain P4 — this builds a minimal targeted unbind for the binding model.)
 
 ---
 
@@ -77,18 +76,8 @@ SEPARATE (not a code task)
 - AC-7: AC-P3-3 (full, real-modal path) and AC-P3-5 (modal-close-on-timeout half) satisfied via the real extension, not the harness stub.
 - AC-7b: after binding, the status bar shows the bound claude.ai client; the binding is human-inspectable.
 
-### T-P3-003U — Unbind / revoke: misclick recovery (FOUNDATION; before token-persistence)
-**Goal:** a misbinding can be undone — targeted, without nuking other bindings — BEFORE T-P3-004 makes bindings persist (and thus survive the restart that is today's only recovery).
-**Scope:**
-- **Daemon-side targeted teardown:** drop a specific binding (this workspace ↔ this client), leaving other bindings and the DCR registration intact. (No `removeClient` needed — the lighter unbind drops the binding, keeps the registration; claude.ai can re-bind with the same client_id.) Once T-P3-004 exists, unbind also invalidates/deletes the bound token so it can no longer authenticate.
-- **VS Code-side trigger (operator decision: act in the window you can see is wrong):** a status-bar affordance / command in the affected window — "Unbind this workspace from {client}?" → confirm → daemon teardown. (The status bar from T-P3-003 is where the binding is inspected, so it's where unbind is triggered.) Requires an ext→daemon unbind request message + handler.
-- **claude.ai re-bind after unbind:** the daemon's half is guaranteed (binding/token killed → that client's requests rejected via the existing `invalid_client`/401 machinery). The claude.ai-side re-bind smoothness is **external-to-confirm** (whether claude.ai auto-re-registers/re-prompts on `invalid_client`, or the user must manually reconnect via claude.ai's connector UI). **Build for graceful (return `invalid_client` so a well-behaved client re-prompts); accept the manual-reconnect floor** if claude.ai doesn't auto-re-prompt. Either way recovery is guaranteed — and targeted unbind beats restart (doesn't nuke the good binding) AND survives token-persistence (restart won't).
-**ACs:**
-- AC-7c: a specific binding can be torn down on operator command without affecting other bindings.
-- AC-7d: after unbind, the unbound client can no longer act on the formerly-bound workspace (rejected).
-- AC-7e: the operator triggers unbind from the affected VS Code window (status-bar command).
-- AC-7f (smoke-confirmed): after unbind, re-binding to the correct workspace succeeds (graceful re-prompt if claude.ai supports it; manual reconnect otherwise — confirmed at AC-P3-12).
-**Sequencing:** lands BEFORE T-P3-004 so persisted bindings are always undoable (see Phase map sequencing note).
+### T-P3-003U — Unbind / revoke — FOLDED INTO T-P3-004 (2026-06-02)
+**No longer a standalone task.** The 2026-06-02 resume recon established there is no durable binding to revoke until T-P3-004 builds the token store (pre-004 the binding is transient: in-memory ConsentRecord + 60s-TTL AuthCodeRecord + a per-window extension `let`). Building unbind before 004 would be plumbing against nothing that 004 re-wires. **Unbind is therefore built together with the token store in T-P3-004** (see its scope + the Phase-map sequencing note) — persistence and its recovery ship atomically, so there is never a persisted binding without an unbind path. The unbind scope/ACs below are absorbed into T-P3-004.
 
 ### T-P3-004 — /token + binding on the token + auth-layer enforcement (FOUNDATION; the milestone)
 **Goal:** the token carries the binding and the auth layer ENFORCES it — isolation becomes structural and real.
@@ -97,7 +86,12 @@ SEPARATE (not a code task)
 - Auth layer (`auth.ts authenticate()` + the layer after it): an authenticated request may act ONLY on its token's bound workspace. Tool-call workspace resolution is constrained to the binding.
 - Binding-violation attempts (a token targeting a non-bound workspace) are **rejected AND surfaced** (not silent).
 - The `ambiguous_workspace` resolution path is simplified — under a binding there is no ambiguity; the explicit workspace arg validates against the binding rather than resolving against the global registry.
-- **Consent broadcast filtered to unbound windows (now that binding state exists):** the consent request broadcasts only to windows WITHOUT an active binding — a window already bound to a claude.ai can't accept another binding, so it shouldn't prompt. ("Bound," not merely "connected" — every window is connected; filter on active-binding state, read live.) This progressively narrows the prompt set: the first binding still broadcasts to all unbound windows (named modal + dismiss-siblings guard it), but each subsequent binding prompts fewer, until the last prompts exactly one. A window freed by unbind (T-P3-003U) re-enters the set. **Edge case — all windows already bound:** broadcast reaches zero recipients → fail with a LEGIBLE message ("no unbound workspace available to bind; unbind one or open the intended workspace"), not the generic offline error.
+- **Unbind / revoke (folded in from former T-P3-003U):** built together with the token store so persistence and recovery ship atomically.
+  - *Daemon-side targeted teardown:* drop a specific binding (this workspace ↔ this client) AND invalidate/delete its bound token, leaving other bindings and the DCR registration intact (lighter unbind — keep the registration; claude.ai can re-bind with the same client_id). No `removeClient`.
+  - *VS Code-side trigger:* a status-bar affordance / command in the affected window (hangs off the T-P3-003 status-bar binding display — parallel to the existing `claudeBridge.openStatusBarMenu` / "Change approval mode" item) — "Unbind this workspace from {client}?" → confirm → teardown. Uses the **response-expected ext→daemon request pattern** (model: `set_workspace_mode` → `await client.request({kind:"unbind_workspace", identifier})` → daemon handler → `unbind_workspace_ok` reply — NOT the fire-and-forget `send()` path).
+  - *`binding_cleared` signal:* the inverse of T-P3-003's `binding_established` — a new `IpcServerMessageSchema` variant, sent targeted to the (formerly) bound window (mirror `main.ts` `sendServerMessage(identifier, …)`), so the extension clears `currentBinding` + refreshes the status bar on teardown.
+  - *claude.ai re-bind:* daemon half guaranteed (killed token → client rejected via `invalid_client`/401). Re-bind smoothness external-to-confirm (auto-re-prompt vs. manual reconnect) — build for graceful, accept the manual-reconnect floor; confirmed at AC-P3-12.
+- **Consent broadcast filtered to unbound windows (now that binding state exists):** the consent request broadcasts only to windows WITHOUT an active binding — a window already bound to a claude.ai can't accept another binding, so it shouldn't prompt. ("Bound," not merely "connected" — every window is connected; filter on active-binding state, read live.) This progressively narrows the prompt set: the first binding still broadcasts to all unbound windows (named modal + dismiss-siblings guard it), but each subsequent binding prompts fewer, until the last prompts exactly one. A window freed by unbind re-enters the set. **Edge case — all windows already bound:** broadcast reaches zero recipients → fail with a LEGIBLE message ("no unbound workspace available to bind; unbind one or open the intended workspace"), not the generic offline error.
 **ACs (the isolation milestone):**
 - AC-8: a token carries its bound workspace; `/token` issues it correctly (PKCE enforced).
 - AC-9: **claude.ai-A (bound to workspace-A) can act on workspace-A.**
@@ -105,6 +99,9 @@ SEPARATE (not a code task)
 - AC-11: a binding-violation attempt is surfaced (logged/reported), not silently denied.
 - AC-12: with two bindings live, A⊥B and B⊥A both hold.
 - AC-12b: consent broadcast excludes already-bound windows; with workspace-A bound, authorizing a second client prompts only the unbound workspace-B window. All-bound → legible refusal.
+- AC-12c (unbind): a specific binding is torn down on operator command (status-bar trigger in the affected window) without affecting other bindings; its token is invalidated; `binding_cleared` clears the window's status-bar binding.
+- AC-12d (unbind): after unbind, the unbound client can no longer act on the formerly-bound workspace (rejected); a freed window re-enters the unbound-broadcast set.
+- AC-12e (unbind, smoke-confirmed): after unbind, re-binding to the correct workspace succeeds (graceful re-prompt if claude.ai supports it; manual reconnect otherwise — AC-P3-12).
 **── ISOLATION MILESTONE: at AC-12, the operator's original requirement (no cross-talk) is structurally met and testable. Independently valuable; could be used as-is even before the autonomy layer. ──**
 
 ### T-P3-005 — Gate re-key + per-operation granularity (AUTONOMY)
@@ -158,6 +155,6 @@ The §5/§6.4 disciplines (pre-flight dispatch review; design-vs-implementation 
 - **External-to-confirm at AC-P3-12 live smoke:** (a) claude.ai's actual `client_name` (meaningful per-project vs generic — determines whether the modal/statusbar show a name or only the client_id prefix); (b) claude.ai's re-registration behavior on `invalid_client` (determines whether post-unbind re-bind is graceful or manual-reconnect). Both have guaranteed floors (client_id prefix; manual reconnect), so neither blocks the build.
 
 ## Provenance
-Derived from `05-autonomous-collaboration-model.md` §9 (impact map) and the recon passes (2026-06-01). Order A + two-binding test scope + revise-shipped-code per operator decisions 2026-06-01. Binding mechanism = **responder-binds** (decided after four recon passes: 3a and URL-encodes-workspace both ruled out by claude.ai-connector + exposure constraints). Misclick recovery = **targeted unbind pulled into P3′** (T-P3-003U, before token-persistence) per operator decision; the named modal + status-bar binding display are the prevention+inspection legs.
+Derived from `05-autonomous-collaboration-model.md` §9 (impact map) and the recon passes (2026-06-01 + 2026-06-02 resume). Order A + two-binding test scope + revise-shipped-code per operator decisions 2026-06-01. Binding mechanism = **responder-binds** (decided after four recon passes: 3a and URL-encodes-workspace both ruled out by claude.ai-connector + exposure constraints). Misclick recovery = **targeted unbind folded into T-P3-004** (revised 2026-06-02 — the resume recon showed no durable binding exists pre-004, so unbind ships atomically with the token store rather than as a standalone pre-004 task); the named modal + status-bar binding display are the prevention+inspection legs.
 
 **End of P3′ build plan.**
