@@ -342,6 +342,22 @@ export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
       request_id: z.string(),
     })
     .strict(),
+  // T-P3-002R: daemon notifies the extensions that a consent resolved by
+  // approve OR deny (a window answered). Best-effort dismiss-siblings
+  // signal so stale broadcast modals close immediately rather than
+  // hanging (the recon-#2 zombie-modal gap — the 30s timer is cleared on
+  // first resolution, so the timeout close-path never fires on approve/
+  // deny). Broadcast to all active connections; dismissal is keyed by
+  // request_id and idempotent, so the responder receiving its own
+  // resolved signal is a harmless no-op. Distinct from
+  // auth_consent_timeout: timeout = "nobody answered in time"; resolved =
+  // "a decision was recorded". Extension-side handling lands in T-P3-003.
+  z
+    .object({
+      kind: z.literal("auth_consent_resolved"),
+      request_id: z.string(),
+    })
+    .strict(),
 ]);
 export type IpcServerMessage = z.infer<typeof IpcServerMessageSchema>;
 export type ApprovalRequest = Extract<

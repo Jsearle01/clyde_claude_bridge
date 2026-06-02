@@ -122,6 +122,10 @@ export class IpcServer {
     recordDecision: (
       request_id: string,
       decision: "approve" | "deny" | "dismiss",
+      // T-P3-002R: the responding connection's workspace identifier
+      // (responder-binds), or null if the responder had no resolvable
+      // workspace.
+      bound_workspace: string | null,
     ) => void;
   } | null = null;
   // T-P2-009 / T-P2-010: optional extension-tool router. Wired in
@@ -165,6 +169,7 @@ export class IpcServer {
     recordDecision: (
       request_id: string,
       decision: "approve" | "deny" | "dismiss",
+      bound_workspace: string | null,
     ) => void;
   }): void {
     this.consentReceiver = receiver;
@@ -563,6 +568,19 @@ export class IpcServer {
     return null;
   }
 
+  // T-P3-002R: reverse lookup — the workspace identifier registered on a
+  // given socket, or null if the socket holds no active registration
+  // (e.g. a connected-but-unregistered connection answering a broadcast
+  // consent). Same `entry.socket === socket` match used by
+  // removeActiveRegistrationsForSocket. Used by the responder-binds path
+  // to recover which workspace a consent response came from.
+  private findWorkspaceIdentifierBySocket(socket: Socket): string | null {
+    for (const entry of this.activeRegistry.values()) {
+      if (entry.socket === socket) return entry.identifier;
+    }
+    return null;
+  }
+
   // Returns true when the response was written and the caller should
   // short-circuit (workspace request handled). Returns false when the
   // request is not a workspace request and normal dispatch should proceed.
@@ -599,9 +617,16 @@ export class IpcServer {
       return true;
     }
     if (request.kind === "auth_consent_response") {
+      // T-P3-002R (responder-binds): recover the responding connection's
+      // workspace from the active registry (the socket is in scope here)
+      // and thread it into recordDecision so an approve binds the grant to
+      // that workspace. null when the socket holds no registration — the
+      // manager guards that as a non-binding approve.
+      const bound_workspace = this.findWorkspaceIdentifierBySocket(socket);
       this.consentReceiver?.recordDecision(
         request.request_id,
         request.decision,
+        bound_workspace,
       );
       return true;
     }

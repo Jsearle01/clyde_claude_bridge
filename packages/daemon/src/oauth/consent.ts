@@ -62,6 +62,14 @@ export interface ConsentRecord {
   // fires, the consent is invalidated as "ack_timeout" (returned to the
   // caller, not stored as a state value).
   acked: boolean;
+  // T-P3-002R (responder-binds): the workspace identifier this grant is
+  // bound to, recovered from the responding extension connection at
+  // approve-time. null until an approve records it (and stays null if the
+  // responding connection had no resolvable workspace — a non-binding
+  // approve, which downstream enforcement (T-P3-004) treats as
+  // non-actionable). Carried onto the AuthCodeRecord so /token redemption
+  // (T-P3-004) sees the binding.
+  bound_workspace: string | null;
 }
 
 export interface AuthCodeRecord {
@@ -75,6 +83,10 @@ export interface AuthCodeRecord {
   // Once redeemed, the record is removed from the map. Tracked here for
   // diagnostic clarity; never relied on externally.
   redeemed: boolean;
+  // T-P3-002R (responder-binds): the workspace this auth code (and the
+  // token it mints in T-P3-004) is bound to. Copied from the ConsentRecord
+  // at mint time. null for a non-binding approve.
+  bound_workspace: string | null;
 }
 
 /** Outcome of waiting for the extension's ack. */
@@ -107,6 +119,15 @@ export type SendConsentRequest = (msg: {
 
 export type SendConsentTimeout = (msg: {
   kind: "auth_consent_timeout";
+  request_id: string;
+}) => void;
+
+// T-P3-002R: dismiss-siblings adapter. Broadcast (best-effort) to the
+// active extension connections when a consent resolves by approve/deny so
+// stale broadcast modals close. Symmetric with SendConsentTimeout but a
+// distinct event (a decision was recorded, vs. the timer expired).
+export type SendConsentResolved = (msg: {
+  kind: "auth_consent_resolved";
   request_id: string;
 }) => void;
 
@@ -144,6 +165,10 @@ export class ConsentManager {
     private readonly deps: ConsentManagerDeps,
     private readonly sendConsentRequest: SendConsentRequest,
     private readonly sendConsentTimeout: SendConsentTimeout,
+    // T-P3-002R: optional so existing 3-arg constructions (tests that
+    // don't exercise dismiss-siblings) keep compiling. Production wiring
+    // (main.ts) passes the broadcast adapter.
+    private readonly sendConsentResolved?: SendConsentResolved,
   ) {}
 
   /**
@@ -178,6 +203,7 @@ export class ConsentManager {
       issued_code: null,
       denial_kind: null,
       acked: false,
+      bound_workspace: null,
     };
     // Optimistic insert so the send-adapter can find the record if it
     // synchronously triggers a callback; if send fails, we delete.
@@ -332,8 +358,21 @@ export class ConsentManager {
   }
 
   /** Records the extension's decision. Late arrivals (state !== pending)
-   *  are SILENTLY DISCARDED — daemon-authoritative race resolution. */
-  recordDecision(request_id: string, decision: ConsentResolution): void {
+   *  are SILENTLY DISCARDED — daemon-authoritative race resolution.
+   *
+   *  T-P3-002R: `bound_workspace` is the workspace identifier of the
+   *  responding extension connection (recovered by the IPC server from the
+   *  responder's socket). On an `approve`, it is recorded on both the
+   *  consent record and the minted auth code — this is the responder-binds
+   *  grant binding. `null` means the responder had no resolvable workspace
+   *  (a non-binding approve — guarded + logged; downstream enforcement
+   *  treats a null binding as non-actionable). Defaults to null so existing
+   *  2-arg callers (tests) keep compiling. */
+  recordDecision(
+    request_id: string,
+    decision: ConsentResolution,
+    bound_workspace: string | null = null,
+  ): void {
     const record = this.consents.get(request_id);
     if (record === undefined) {
       // Unknown request_id — discard. No throw; this is a routine race.
@@ -341,7 +380,9 @@ export class ConsentManager {
     }
     if (record.state !== "pending") {
       // Late arrival — state already resolved (timeout fired first, or
-      // another response slipped through). Discard.
+      // another response slipped through). Discard. First-write-wins is
+      // preserved here: a late sibling response never reaches transition()
+      // and never re-fires the dismiss-siblings broadcast.
       this.deps.logger.info("oauth consent: late decision discarded", {
         request_id,
         current_state: record.state,
@@ -349,7 +390,20 @@ export class ConsentManager {
       });
       return;
     }
+    let result: "transitioned" | "noop";
     if (decision === "approve") {
+      // T-P3-002R: bind the grant to the responding connection's workspace.
+      if (bound_workspace === null) {
+        // Guard: the responder had no resolvable workspace. Honor the
+        // approve (the user clicked it; the browser is waiting) but record
+        // NO binding — never fabricate one. T-P3-004 enforcement rejects a
+        // null-bound token.
+        this.deps.logger.warn(
+          "oauth consent: approve from a connection with no resolvable workspace; grant not bound",
+          { request_id, client_id: record.client_id },
+        );
+      }
+      record.bound_workspace = bound_workspace;
       const code = generateAuthCode();
       const codeRecord: AuthCodeRecord = {
         code,
@@ -360,6 +414,7 @@ export class ConsentManager {
         state_param: record.state_param,
         issued_at: Date.now(),
         redeemed: false,
+        bound_workspace,
       };
       this.authCodes.set(code, codeRecord);
       const expiryTimer = setTimeout(() => {
@@ -368,12 +423,32 @@ export class ConsentManager {
       }, AUTH_CODE_TTL_MS);
       expiryTimer.unref?.();
       this.codeExpiryTimers.set(code, expiryTimer);
-      this.transition(request_id, { kind: "approved", code });
+      result = this.transition(request_id, { kind: "approved", code });
     } else {
-      this.transition(request_id, {
+      result = this.transition(request_id, {
         kind: "denied",
         denial_kind: decision,
       });
+    }
+    // T-P3-002R: dismiss-siblings. Only when this call actually resolved
+    // the consent (first write wins) do we tell the other broadcast
+    // recipients to close their now-stale modals. Best-effort UX — the
+    // daemon-authoritative state machine remains the real guarantee;
+    // failures are swallowed. Fires on approve AND deny (the timeout path
+    // has its own close signal). The responder receives it too, but a
+    // dismiss keyed by request_id is idempotent extension-side.
+    if (result === "transitioned" && this.sendConsentResolved !== undefined) {
+      try {
+        this.sendConsentResolved({
+          kind: "auth_consent_resolved",
+          request_id,
+        });
+      } catch (err) {
+        this.deps.logger.warn("oauth consent: resolved-notify send failed", {
+          request_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 

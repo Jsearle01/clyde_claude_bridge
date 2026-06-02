@@ -484,6 +484,79 @@ describe("IpcServer workspace registration (T-P2-003)", () => {
     ).rejects.toThrow();
   });
 
+  it("T-P3-002R: auth_consent_response threads the responding connection's workspace into recordDecision", async () => {
+    const { address } = await startServerWithStore();
+    if (server === null) throw new Error("server not started");
+    // Capture what the consent receiver is handed.
+    const captured: Array<{
+      request_id: string;
+      decision: string;
+      bound_workspace: string | null;
+    }> = [];
+    server.setConsentReceiver({
+      recordAck: () => undefined,
+      recordDecision: (request_id, decision, bound_workspace) =>
+        captured.push({ request_id, decision, bound_workspace }),
+    });
+
+    // One persistent connection: hello → register → confirm_trust (so the
+    // socket is in the active registry), then auth_consent_response (which
+    // writes no reply). The identifier must be recovered from THIS socket.
+    const client = connect(address);
+    client.setEncoding("utf8");
+    const lines: string[] = [];
+    let buf = "";
+    client.on("data", (chunk: string) => {
+      buf += chunk;
+      let idx = buf.indexOf("\n");
+      while (idx !== -1) {
+        lines.push(buf.slice(0, idx));
+        buf = buf.slice(idx + 1);
+        idx = buf.indexOf("\n");
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      client.on("connect", () => resolve());
+      client.on("error", reject);
+    });
+    const send = (obj: unknown): void => {
+      client.write(JSON.stringify(obj) + "\n");
+    };
+    const waitForLines = async (n: number): Promise<void> => {
+      for (let i = 0; i < 100 && lines.length < n; i += 1) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    };
+
+    send({ kind: "hello", version: "1.0", role: "extension", pid: 4242 });
+    send({ kind: "register_workspace", abs_path: "/ws/alpha", name: "Alpha" });
+    send({ kind: "confirm_trust", abs_path: "/ws/alpha", name: "Alpha" });
+    await waitForLines(3); // hello_ok, needs_trust, register_workspace_ok
+    const okRaw = lines[2];
+    if (okRaw === undefined) throw new Error("expected register_workspace_ok");
+    const ok = JSON.parse(okRaw) as IpcResponse;
+    if (ok.kind !== "register_workspace_ok") {
+      throw new Error(`expected register_workspace_ok, got ${ok.kind}`);
+    }
+    const identifier = ok.identifier;
+
+    // Now the consent response on the SAME (registered) socket.
+    send({
+      kind: "auth_consent_response",
+      request_id: "req-alpha",
+      decision: "approve",
+    });
+    // No reply line for a consent response; give the server a tick.
+    await new Promise((r) => setTimeout(r, 30));
+    client.end();
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.request_id).toBe("req-alpha");
+    expect(captured[0]?.decision).toBe("approve");
+    // The binding: recovered from the responding socket's registration.
+    expect(captured[0]?.bound_workspace).toBe(identifier);
+  });
+
   it("confirm_trust after needs_trust writes file with trusted entry", async () => {
     const { address, store } = await startServerWithStore();
     const responses = await rpcRaw(

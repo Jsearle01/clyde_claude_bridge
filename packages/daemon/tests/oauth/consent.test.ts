@@ -36,9 +36,12 @@ function makeManager(opts?: {
   manager: ConsentManager;
   sent: SentMessage[];
   timeouts: SentMessage[];
+  resolved: SentMessage[];
 } {
   const sent: SentMessage[] = [];
   const timeouts: SentMessage[] = [];
+  // T-P3-002R: dismiss-siblings broadcasts.
+  const resolved: SentMessage[] = [];
   const manager = new ConsentManager(
     { logger: silentLogger },
     (msg) => {
@@ -52,8 +55,11 @@ function makeManager(opts?: {
     (msg) => {
       timeouts.push(msg);
     },
+    (msg) => {
+      resolved.push(msg);
+    },
   );
-  return { manager, sent, timeouts };
+  return { manager, sent, timeouts, resolved };
 }
 
 function dcrArgs(overrides: Partial<{
@@ -368,5 +374,115 @@ describe("ConsentManager.stop — shutdown discipline", () => {
     manager.stop();
     expect((await decisionPromise).kind).toBe("timeout");
     expect(manager.size().decision_timers).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-P3-002R — responder-binds + dismiss-siblings
+// ---------------------------------------------------------------------------
+
+describe("T-P3-002R — grant binds to the responding workspace", () => {
+  it("AC-1/AC-2: approve from workspace-A's connection binds the grant + auth code to workspace-A", async () => {
+    const { manager } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    // The IPC server resolves the responding socket → "workspace-A".
+    manager.recordDecision(r.request_id, "approve", "workspace-A");
+    const outcome = await manager.awaitDecision(r.request_id);
+    if (outcome.kind !== "approved") throw new Error("expected approved");
+
+    // Consent record carries the binding.
+    expect(manager.getConsent(r.request_id)?.bound_workspace).toBe("workspace-A");
+    // AuthCodeRecord carries it (flows into /token redemption at T-P3-004).
+    expect(manager.getAuthCode(outcome.code)?.bound_workspace).toBe("workspace-A");
+  });
+
+  it("a response from workspace-B's connection binds to workspace-B (not A)", async () => {
+    const { manager } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    manager.recordDecision(r.request_id, "approve", "workspace-B");
+    const outcome = await manager.awaitDecision(r.request_id);
+    if (outcome.kind !== "approved") throw new Error("expected approved");
+    expect(manager.getAuthCode(outcome.code)?.bound_workspace).toBe("workspace-B");
+  });
+
+  it("guard: approve with no resolvable workspace records a non-binding grant (null), still issues a code", async () => {
+    const { manager } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    // null = responding socket had no active registration.
+    manager.recordDecision(r.request_id, "approve", null);
+    const outcome = await manager.awaitDecision(r.request_id);
+    if (outcome.kind !== "approved") throw new Error("expected approved");
+    expect(manager.getConsent(r.request_id)?.bound_workspace).toBeNull();
+    expect(manager.getAuthCode(outcome.code)?.bound_workspace).toBeNull();
+  });
+
+  it("default (omitted) bound_workspace is null — back-compat with 2-arg callers", async () => {
+    const { manager } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    manager.recordDecision(r.request_id, "approve");
+    const outcome = await manager.awaitDecision(r.request_id);
+    if (outcome.kind !== "approved") throw new Error("expected approved");
+    expect(manager.getAuthCode(outcome.code)?.bound_workspace).toBeNull();
+  });
+});
+
+describe("T-P3-002R — dismiss-siblings on resolve (AC-2b)", () => {
+  it("sends auth_consent_resolved on approve", () => {
+    const { manager, resolved } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    manager.recordDecision(r.request_id, "approve", "workspace-A");
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.kind).toBe("auth_consent_resolved");
+    expect(resolved[0]?.request_id).toBe(r.request_id);
+  });
+
+  it("sends auth_consent_resolved on deny", () => {
+    const { manager, resolved } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    manager.recordDecision(r.request_id, "deny", "workspace-A");
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.kind).toBe("auth_consent_resolved");
+  });
+
+  it("first-write-wins: a late sibling response does NOT re-fire the dismiss signal", () => {
+    const { manager, resolved } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    // First responder wins (workspace-A approves).
+    manager.recordDecision(r.request_id, "approve", "workspace-A");
+    expect(resolved).toHaveLength(1);
+    // A late sibling response (workspace-B) after resolution is a no-op:
+    // no state change, no second dismiss broadcast, binding unchanged.
+    manager.recordDecision(r.request_id, "deny", "workspace-B");
+    expect(resolved).toHaveLength(1);
+    expect(manager.getConsent(r.request_id)?.state).toBe("approved");
+    expect(manager.getConsent(r.request_id)?.bound_workspace).toBe("workspace-A");
+  });
+
+  it("does NOT send a resolved signal on the 30s decision-timeout path (that path has its own close signal)", async () => {
+    vi.useFakeTimers();
+    const { manager, resolved, timeouts } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    const decisionPromise = manager.awaitDecision(r.request_id);
+    vi.advanceTimersByTime(DECISION_TIMEOUT_MS + 1);
+    expect((await decisionPromise).kind).toBe("timeout");
+    // Timeout fires auth_consent_timeout, NOT auth_consent_resolved.
+    expect(timeouts).toHaveLength(1);
+    expect(resolved).toHaveLength(0);
   });
 });

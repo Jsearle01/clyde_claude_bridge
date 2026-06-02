@@ -311,12 +311,15 @@ async function main(): Promise<void> {
   });
   logger.info("extension tool router initialized");
 
-  // 5.55c. OAuth consent manager (P3 — T-P3-002). In-memory ephemeral
-  // state machine for /authorize → modal → /authorize/status flow. The
-  // send-to-extension adapter broadcasts to ALL active extension
-  // connections (consent is per-client_id, not per-workspace; any online
-  // extension can surface the modal). Returns the number of recipients;
-  // 0 → caller renders the offline page BEFORE creating a consent record.
+  // 5.55c. OAuth consent manager (P3 — T-P3-002; T-P3-002R binding model).
+  // In-memory ephemeral state machine for /authorize → modal →
+  // /authorize/status flow. The consent REQUEST is broadcast to ALL active
+  // extension connections — consent is initiated by claude.ai, which gives
+  // no workspace target before a window responds. The GRANT, however, is
+  // bound to the workspace of whichever connection responds (responder-
+  // binds, T-P3-002R) — the binding is not in the delivery. Broadcast
+  // returns the recipient count; 0 → caller renders the offline page
+  // BEFORE creating a consent record.
   const consentManager = new ConsentManager(
     { logger },
     (msg) => {
@@ -329,6 +332,15 @@ async function main(): Promise<void> {
       if (server === null) return;
       // Best-effort modal-close signal; failures swallowed (the daemon's
       // state machine has already transitioned, browser is told regardless).
+      server.broadcastServerMessage(msg);
+    },
+    // T-P3-002R: dismiss-siblings on approve/deny resolution. Broadcast the
+    // resolved signal so the other windows' stale modals close (the timeout
+    // close-path doesn't fire on approve/deny). Best-effort; broadcast-to-
+    // all is fine because dismissal is idempotent by request_id.
+    (msg) => {
+      const server = ipcServerRef.current;
+      if (server === null) return;
       server.broadcastServerMessage(msg);
     },
   );
@@ -542,8 +554,11 @@ async function main(): Promise<void> {
   // machine.
   ipcServer.setConsentReceiver({
     recordAck: (request_id) => consentManager.recordAck(request_id),
-    recordDecision: (request_id, decision) =>
-      consentManager.recordDecision(request_id, decision),
+    // T-P3-002R: forward the responding connection's workspace (recovered
+    // by the IPC server from the responder's socket) so an approve binds
+    // the grant to that workspace.
+    recordDecision: (request_id, decision, bound_workspace) =>
+      consentManager.recordDecision(request_id, decision, bound_workspace),
   });
 
   components = {
