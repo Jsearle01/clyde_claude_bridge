@@ -17,6 +17,10 @@ import {
   type ApprovalRequest,
   type GetOpenEditorsRequest,
   type GetDiagnosticsRequest,
+  type AuthConsentRequest,
+  type AuthConsentResolved,
+  type AuthConsentTimeout,
+  type BindingEstablished,
 } from "@claude-bridge/shared";
 import { diag } from "../diag.js";
 
@@ -123,6 +127,24 @@ export class IpcClient {
   public onGetDiagnosticsRequest?: (
     request: GetDiagnosticsRequest,
   ) => Promise<void>;
+  // T-P3-003: fires on each daemon-initiated auth_consent_request. The
+  // subscriber (oauth-consent.ts) acks immediately, shows the named modal,
+  // and sends auth_consent_response. Seventh instance of the pattern; the
+  // callback fires AFTER parse so no C-26 ordering concern applies.
+  public onAuthConsentRequest?: (
+    request: AuthConsentRequest,
+  ) => Promise<void>;
+  // T-P3-003: fires when the daemon broadcasts auth_consent_resolved
+  // (T-P3-002R dismiss-siblings). Subscriber closes/marks a stale open
+  // modal. Synchronous (no response to send). Eighth instance.
+  public onAuthConsentResolved?: (msg: AuthConsentResolved) => void;
+  // T-P3-003: fires when the daemon sends auth_consent_timeout (the 30s
+  // decision timer fired). Subscriber closes the stale modal. Synchronous.
+  public onAuthConsentTimeout?: (msg: AuthConsentTimeout) => void;
+  // T-P3-003: fires when the daemon sends binding_established (targeted to
+  // the bound window). Subscriber records the binding for status-bar
+  // display. Ninth instance.
+  public onBindingEstablished?: (msg: BindingEstablished) => void;
 
   constructor(
     private readonly endpoint: string,
@@ -320,6 +342,42 @@ export class IpcClient {
                 void this.onGetDiagnosticsRequest(msg).catch(() => {
                   // intentional swallow
                 });
+              } else if (
+                serverMsg.data.kind === "auth_consent_request" &&
+                this.onAuthConsentRequest !== undefined
+              ) {
+                const msg = serverMsg.data;
+                void this.onAuthConsentRequest(msg).catch(() => {
+                  // intentional swallow — the handler acks/responds on its
+                  // own write path; failures must not corrupt the buffer.
+                });
+              } else if (
+                serverMsg.data.kind === "auth_consent_resolved" &&
+                this.onAuthConsentResolved !== undefined
+              ) {
+                try {
+                  this.onAuthConsentResolved(serverMsg.data);
+                } catch {
+                  // swallow — subscriber errors must not corrupt the buffer
+                }
+              } else if (
+                serverMsg.data.kind === "auth_consent_timeout" &&
+                this.onAuthConsentTimeout !== undefined
+              ) {
+                try {
+                  this.onAuthConsentTimeout(serverMsg.data);
+                } catch {
+                  // swallow — subscriber errors must not corrupt the buffer
+                }
+              } else if (
+                serverMsg.data.kind === "binding_established" &&
+                this.onBindingEstablished !== undefined
+              ) {
+                try {
+                  this.onBindingEstablished(serverMsg.data);
+                } catch {
+                  // swallow — subscriber errors must not corrupt the buffer
+                }
               }
             } else if (this.pending !== null) {
               // Standard response-to-pending-request path.

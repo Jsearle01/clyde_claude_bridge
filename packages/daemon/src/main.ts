@@ -343,6 +343,18 @@ async function main(): Promise<void> {
       if (server === null) return;
       server.broadcastServerMessage(msg);
     },
+    // T-P3-003: binding-established, TARGETED to the bound workspace's
+    // connection (the winning window) so its status bar surfaces the
+    // binding. sendServerMessage rejects if no active connection for that
+    // identifier; best-effort, so swallow.
+    (identifier, msg) => {
+      const server = ipcServerRef.current;
+      if (server === null) return;
+      void server.sendServerMessage(identifier, msg).catch(() => {
+        // best-effort — the window may have disconnected between approve
+        // and this send; the status-bar refresh is non-critical.
+      });
+    },
   );
   logger.info("oauth consent manager initialized");
 

@@ -11,11 +11,19 @@ import * as vscode from "vscode";
 import type { WorkspaceMode } from "@claude-bridge/shared";
 import type { ConnectionStateKind } from "./ipc/client.js";
 import type { RegistrationState } from "./registration.js";
+import { formatClientLabel } from "./oauth-consent.js";
 
 export interface DaemonInfo {
   pid: number;
   url: string;
   uptime_s: number;
+}
+
+// T-P3-003: the OAuth client this window's workspace is bound to (set when
+// the daemon sends binding_established). null = no binding yet.
+export interface BindingInfo {
+  client_id: string;
+  client_name: string;
 }
 
 export interface StatusBarSources {
@@ -37,6 +45,11 @@ export interface StatusBarSources {
   // "registering (retry N)" indicator when ≥ 1. Returns 0 when no
   // registration is in flight (e.g., already registered, or no folder).
   getRetryCount(): number;
+  // T-P3-003: the OAuth client this workspace is bound to, or null if not
+  // yet bound. Optional so existing StatusBarSources implementers (tests)
+  // compile unchanged; refresh()/tooltip degrade to "no binding" when
+  // absent.
+  getBinding?(): BindingInfo | null;
 }
 
 export interface StatusBarDeps {
@@ -75,6 +88,7 @@ export function makeStatusBar(
       sources.getRegistrationIdentifier(),
       sources.getRegistrationExistingPid(),
       sources.getRetryCount(),
+      sources.getBinding?.() ?? null,
     );
     item.tooltip = composeStatusBarTooltip(sources);
     item.show();
@@ -95,6 +109,8 @@ export function composeStatusBarText(
   identifier: string | null,
   existingPid: number | null,
   retryCount: number,
+  // T-P3-003: optional so existing 5-arg callers (tests) compile unchanged.
+  binding: BindingInfo | null = null,
 ): string {
   // T-P2-008.8 (C-29 UX): when registration is still trying AND we've had
   // ≥1 reconnect retry, surface the retry count regardless of connection-
@@ -110,7 +126,13 @@ export function composeStatusBarText(
   // (no-workspace case is handled upstream in makeStatusBar.refresh by
   // hiding the item entirely, so it cannot reach this point.)
   if (reg === "registered") {
-    return `$(plug) ${identifier ?? "(no identifier)"}`;
+    const id = identifier ?? "(no identifier)";
+    // T-P3-003: when bound to an OAuth client, surface it after the
+    // identifier so the binding is inspectable at a glance.
+    if (binding !== null) {
+      return `$(plug) ${id} → ${formatClientLabel(binding.client_id, binding.client_name)}`;
+    }
+    return `$(plug) ${id}`;
   }
   if (reg === "trust_denied") return "$(warning) (trust denied)";
   if (reg === "duplicate") {
@@ -140,6 +162,13 @@ export function composeStatusBarTooltip(
   }
   if (identifier !== null) {
     md.appendMarkdown(`**Identifier:** ${identifier}\n\n`);
+  }
+  // T-P3-003: surface the bound OAuth client when present.
+  const binding = sources.getBinding?.() ?? null;
+  if (binding !== null) {
+    md.appendMarkdown(
+      `**Bound to:** ${formatClientLabel(binding.client_id, binding.client_name)}\n\n`,
+    );
   }
   md.appendMarkdown(`**Trust:** ${trustLabel(reg)}\n\n`);
   md.appendMarkdown(`**Daemon:** ${daemonLabel(conn, daemonInfo)}\n\n`);

@@ -29,6 +29,13 @@ interface SentMessage {
   request_id?: string;
 }
 
+interface BindingMessage {
+  identifier: string;
+  client_id?: string;
+  client_name?: string;
+  bound_workspace?: string;
+}
+
 function makeManager(opts?: {
   recipients?: number;
   sendThrows?: boolean;
@@ -37,11 +44,14 @@ function makeManager(opts?: {
   sent: SentMessage[];
   timeouts: SentMessage[];
   resolved: SentMessage[];
+  bindings: BindingMessage[];
 } {
   const sent: SentMessage[] = [];
   const timeouts: SentMessage[] = [];
   // T-P3-002R: dismiss-siblings broadcasts.
   const resolved: SentMessage[] = [];
+  // T-P3-003: targeted binding-established sends.
+  const bindings: BindingMessage[] = [];
   const manager = new ConsentManager(
     { logger: silentLogger },
     (msg) => {
@@ -58,8 +68,11 @@ function makeManager(opts?: {
     (msg) => {
       resolved.push(msg);
     },
+    (identifier, msg) => {
+      bindings.push({ identifier, ...msg });
+    },
   );
-  return { manager, sent, timeouts, resolved };
+  return { manager, sent, timeouts, resolved, bindings };
 }
 
 function dcrArgs(overrides: Partial<{
@@ -484,5 +497,40 @@ describe("T-P3-002R — dismiss-siblings on resolve (AC-2b)", () => {
     // Timeout fires auth_consent_timeout, NOT auth_consent_resolved.
     expect(timeouts).toHaveLength(1);
     expect(resolved).toHaveLength(0);
+  });
+});
+
+describe("T-P3-003 — binding-established signal to the bound window", () => {
+  it("approve with a bound workspace sends binding_established (targeted) with client info", () => {
+    const { manager, bindings } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(
+      dcrArgs({ client_id: "cb_client_zzz", client_name: "Proj X" }),
+    );
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    manager.recordDecision(r.request_id, "approve", "workspace-A");
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.identifier).toBe("workspace-A"); // targeted to bound ws
+    expect(bindings[0]?.client_id).toBe("cb_client_zzz");
+    expect(bindings[0]?.client_name).toBe("Proj X");
+    expect(bindings[0]?.bound_workspace).toBe("workspace-A");
+  });
+
+  it("approve with NO resolvable workspace (null) does NOT send binding_established", () => {
+    const { manager, bindings } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    manager.recordDecision(r.request_id, "approve", null);
+    expect(bindings).toHaveLength(0);
+  });
+
+  it("deny does NOT send binding_established", () => {
+    const { manager, bindings } = makeManager({ recipients: 1 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    manager.recordDecision(r.request_id, "deny", "workspace-A");
+    expect(bindings).toHaveLength(0);
   });
 });

@@ -358,6 +358,23 @@ export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
       request_id: z.string(),
     })
     .strict(),
+  // T-P3-003: daemon tells the WINNING window (the one whose workspace the
+  // grant bound to) that a binding was established, so its status bar can
+  // surface it. Targeted (sent only to the bound workspace's connection
+  // via sendServerMessage) — only the bound window should display the
+  // binding. Distinct from auth_consent_resolved (broadcast, dismiss-only):
+  // under the broadcast race only the daemon knows which window won, so the
+  // bound window cannot self-determine its binding — the daemon must tell
+  // it. `client_id`/`client_name` name the bound claude.ai client for
+  // display; `bound_workspace` is the workspace identifier it bound to.
+  z
+    .object({
+      kind: z.literal("binding_established"),
+      client_id: z.string(),
+      client_name: z.string(),
+      bound_workspace: z.string(),
+    })
+    .strict(),
 ]);
 export type IpcServerMessage = z.infer<typeof IpcServerMessageSchema>;
 export type ApprovalRequest = Extract<
@@ -371,4 +388,21 @@ export type GetOpenEditorsRequest = Extract<
 export type GetDiagnosticsRequest = Extract<
   IpcServerMessage,
   { kind: "get_diagnostics_request" }
+>;
+// T-P3-003: extension-side consent flow message types.
+export type AuthConsentRequest = Extract<
+  IpcServerMessage,
+  { kind: "auth_consent_request" }
+>;
+export type AuthConsentTimeout = Extract<
+  IpcServerMessage,
+  { kind: "auth_consent_timeout" }
+>;
+export type AuthConsentResolved = Extract<
+  IpcServerMessage,
+  { kind: "auth_consent_resolved" }
+>;
+export type BindingEstablished = Extract<
+  IpcServerMessage,
+  { kind: "binding_established" }
 >;

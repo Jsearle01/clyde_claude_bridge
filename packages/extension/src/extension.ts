@@ -5,9 +5,14 @@ import {
   runStartDaemonCommand,
   makeDaemonNotRunningHandler,
 } from "./daemon-lifecycle.js";
-import { makeStatusBar, type StatusBarSources } from "./status-bar.js";
+import {
+  makeStatusBar,
+  type StatusBarSources,
+  type BindingInfo,
+} from "./status-bar.js";
 import { makeStatusBarMenu } from "./status-bar-menu.js";
 import { makeApprovalHandler } from "./approval-modal.js";
+import { makeConsentHandlers } from "./oauth-consent.js";
 import {
   makeGetOpenEditorsHandler,
   makeGetDiagnosticsHandler,
@@ -75,6 +80,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(startDaemonCmd);
 
+  // T-P3-003: per-window OAuth binding state, set when the daemon sends
+  // binding_established to this (the bound) window. Read by the status bar.
+  let currentBinding: BindingInfo | null = null;
+
   // T-P2-006: status bar item + menu command. The status bar reads
   // aggregate state via two getters; refresh fires on each
   // ipcClient/registration state transition. Disposed via
@@ -93,6 +102,9 @@ export function activate(context: vscode.ExtensionContext): void {
     getCurrentMode: () => registration?.getCurrentMode() ?? "per_call",
     // T-P2-008.8: retry count surfaced during the registering window.
     getRetryCount: () => registration?.getRetryCount() ?? 0,
+    // T-P3-003: the OAuth client this workspace is bound to (set by the
+    // binding_established handler below). null until bound.
+    getBinding: () => currentBinding,
   };
   const statusBar = makeStatusBar(statusBarSources);
   statusBar.refresh();
@@ -110,6 +122,25 @@ export function activate(context: vscode.ExtensionContext): void {
   // T-P2-008: wire the approval-modal handler so daemon-initiated
   // approval_request messages surface as a modal in VS Code.
   ipcClient.onApprovalRequest = makeApprovalHandler(ipcClient);
+
+  // T-P3-003: wire the OAuth consent handlers. The named modal binds THIS
+  // window's workspace; the resolved handler dismisses stale sibling modals.
+  const consentHandlers = makeConsentHandlers(ipcClient, {
+    getCodebaseName: () =>
+      vscode.workspace.workspaceFolders?.[0]?.name ?? "(unknown workspace)",
+  });
+  ipcClient.onAuthConsentRequest = consentHandlers.onAuthConsentRequest;
+  ipcClient.onAuthConsentResolved = consentHandlers.onAuthConsentResolved;
+  ipcClient.onAuthConsentTimeout = consentHandlers.onAuthConsentTimeout;
+  // T-P3-003: when the daemon confirms this window won the binding, record
+  // it and refresh the status bar so the bound client is inspectable.
+  ipcClient.onBindingEstablished = (msg): void => {
+    currentBinding = {
+      client_id: msg.client_id,
+      client_name: msg.client_name,
+    };
+    statusBar.refresh();
+  };
 
   // T-P2-009 / T-P2-010: wire the inspection-tool handlers. Both are
   // read-only and bypass the approval gate — daemon never invokes the

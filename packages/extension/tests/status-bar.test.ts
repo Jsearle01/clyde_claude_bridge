@@ -7,6 +7,7 @@ import {
   makeStatusBar,
   type StatusBarSources,
   type DaemonInfo,
+  type BindingInfo,
 } from "../src/status-bar.js";
 
 function makeSources(overrides: Partial<{
@@ -17,6 +18,7 @@ function makeSources(overrides: Partial<{
   folder: WorkspaceFolder | undefined;
   daemonInfo: DaemonInfo | undefined;
   retryCount: number;
+  binding: BindingInfo | null;
 }>): StatusBarSources {
   const opts = {
     conn: "connected" as const,
@@ -26,6 +28,7 @@ function makeSources(overrides: Partial<{
     folder: { uri: { fsPath: "/projects/myproject" }, name: "myproject" },
     daemonInfo: undefined as DaemonInfo | undefined,
     retryCount: 0,
+    binding: null as BindingInfo | null,
     ...overrides,
   };
   return {
@@ -37,6 +40,7 @@ function makeSources(overrides: Partial<{
     getDaemonInfo: () => opts.daemonInfo,
     getCurrentMode: () => "per_call",
     getRetryCount: () => opts.retryCount,
+    getBinding: () => opts.binding,
   };
 }
 
@@ -237,5 +241,58 @@ describe("makeStatusBar (T-P2-006)", () => {
     handle.refresh();
     expect(itemMock.hide).toHaveBeenCalled();
     expect(itemMock.show).not.toHaveBeenCalled();
+  });
+});
+
+describe("T-P3-003 — status-bar binding display (AC-7b)", () => {
+  it("registered + bound → $(plug) <id> → <client label>", () => {
+    expect(
+      composeStatusBarText("connected", "registered", "myproject-aaaaaa", null, 0, {
+        client_id: "cb_client_0123456789abcdef",
+        client_name: "Project Foo",
+      }),
+    ).toBe("$(plug) myproject-aaaaaa → Project Foo (cb_client_01234567…)");
+  });
+
+  it("registered + no binding → plain $(plug) <id> (back-compat)", () => {
+    expect(
+      composeStatusBarText("connected", "registered", "myproject-aaaaaa", null, 0, null),
+    ).toBe("$(plug) myproject-aaaaaa");
+  });
+
+  it("generic client_name falls back to id-prefix in the binding label", () => {
+    expect(
+      composeStatusBarText("connected", "registered", "x-aaaaaa", null, 0, {
+        client_id: "cb_client_0123456789abcdef",
+        client_name: "unnamed-client",
+      }),
+    ).toBe("$(plug) x-aaaaaa → cb_client_01234567…");
+  });
+
+  it("makeStatusBar.refresh() renders the binding when getBinding returns one", () => {
+    const itemMock = makeStatusBarItemMock();
+    const handle = makeStatusBar(
+      makeSources({
+        binding: { client_id: "cb_client_0123456789abcdef", client_name: "Project Foo" },
+      }),
+      { createStatusBarItem: vi.fn(() => itemMock) as never },
+    );
+    handle.refresh();
+    expect(itemMock.text).toContain("→ Project Foo");
+  });
+
+  it("tooltip shows a 'Bound to:' line when a binding is present", () => {
+    const md = composeStatusBarTooltip(
+      makeSources({
+        binding: { client_id: "cb_client_0123456789abcdef", client_name: "Project Foo" },
+      }),
+    );
+    expect(md.value).toContain("Bound to:");
+    expect(md.value).toContain("Project Foo");
+  });
+
+  it("tooltip omits 'Bound to:' when there is no binding", () => {
+    const md = composeStatusBarTooltip(makeSources({ binding: null }));
+    expect(md.value).not.toContain("Bound to:");
   });
 });

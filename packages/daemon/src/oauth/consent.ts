@@ -131,6 +131,22 @@ export type SendConsentResolved = (msg: {
   request_id: string;
 }) => void;
 
+// T-P3-003: binding-established adapter. TARGETED (best-effort) to the
+// bound workspace's connection on a successful approve, so the winning
+// window's status bar can surface the binding. Under the broadcast race
+// only the daemon knows which window won, so the bound window cannot
+// self-determine its binding — the daemon tells it. main.ts wires this to
+// IpcServer.sendServerMessage(identifier, msg).
+export type SendBindingEstablished = (
+  identifier: string,
+  msg: {
+    kind: "binding_established";
+    client_id: string;
+    client_name: string;
+    bound_workspace: string;
+  },
+) => void;
+
 /** Unguessable 16-byte hex (32 chars) — third parties can't poll someone
  *  else's consent. */
 export function generateRequestId(): string {
@@ -169,6 +185,10 @@ export class ConsentManager {
     // don't exercise dismiss-siblings) keep compiling. Production wiring
     // (main.ts) passes the broadcast adapter.
     private readonly sendConsentResolved?: SendConsentResolved,
+    // T-P3-003: optional targeted binding-established adapter (same
+    // optionality rationale). Fired on a successful approve with a
+    // resolved workspace.
+    private readonly sendBindingEstablished?: SendBindingEstablished,
   ) {}
 
   /**
@@ -448,6 +468,32 @@ export class ConsentManager {
           request_id,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+    }
+    // T-P3-003: on a successful approve that actually bound a workspace,
+    // tell the bound window so its status bar surfaces the binding.
+    // Targeted to the bound workspace; best-effort (failures swallowed).
+    if (
+      result === "transitioned" &&
+      decision === "approve" &&
+      bound_workspace !== null &&
+      this.sendBindingEstablished !== undefined
+    ) {
+      try {
+        this.sendBindingEstablished(bound_workspace, {
+          kind: "binding_established",
+          client_id: record.client_id,
+          client_name: record.client_name,
+          bound_workspace,
+        });
+      } catch (err) {
+        this.deps.logger.warn(
+          "oauth consent: binding-established send failed",
+          {
+            request_id,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
       }
     }
   }
