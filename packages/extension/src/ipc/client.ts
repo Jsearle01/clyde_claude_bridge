@@ -21,6 +21,7 @@ import {
   type AuthConsentResolved,
   type AuthConsentTimeout,
   type BindingEstablished,
+  type BindingCleared,
 } from "@claude-bridge/shared";
 import { diag } from "../diag.js";
 
@@ -145,6 +146,10 @@ export class IpcClient {
   // the bound window). Subscriber records the binding for status-bar
   // display. Ninth instance.
   public onBindingEstablished?: (msg: BindingEstablished) => void;
+  // T-P3-004b: fires when the daemon sends binding_cleared (unbind/revoke,
+  // targeted to the formerly-bound window). Subscriber clears the binding +
+  // refreshes the status bar. Synchronous. Tenth instance.
+  public onBindingCleared?: (msg: BindingCleared) => void;
 
   constructor(
     private readonly endpoint: string,
@@ -375,6 +380,15 @@ export class IpcClient {
               ) {
                 try {
                   this.onBindingEstablished(serverMsg.data);
+                } catch {
+                  // swallow — subscriber errors must not corrupt the buffer
+                }
+              } else if (
+                serverMsg.data.kind === "binding_cleared" &&
+                this.onBindingCleared !== undefined
+              ) {
+                try {
+                  this.onBindingCleared(serverMsg.data);
                 } catch {
                   // swallow — subscriber errors must not corrupt the buffer
                 }

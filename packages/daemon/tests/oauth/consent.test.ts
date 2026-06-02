@@ -38,6 +38,7 @@ interface BindingMessage {
 
 function makeManager(opts?: {
   recipients?: number;
+  totalActive?: number;
   sendThrows?: boolean;
 }): {
   manager: ConsentManager;
@@ -57,10 +58,13 @@ function makeManager(opts?: {
     (msg) => {
       if (opts?.sendThrows === true) throw new Error("send failed");
       const recipients = opts?.recipients ?? 1;
-      // Faithful to broadcastServerMessage: only record sends that
-      // actually had at least one recipient socket to write to.
+      // Faithful to broadcastServerMessageToUnbound: only record sends that
+      // actually had at least one UNBOUND recipient socket to write to.
       if (recipients > 0) sent.push(msg);
-      return recipients;
+      // T-P3-004b: delivered = unbound recipients; totalActive = all active
+      // connections (defaults to recipients unless overridden, e.g. the
+      // all-bound case sets recipients:0 + totalActive>0).
+      return { delivered: recipients, totalActive: opts?.totalActive ?? recipients };
     },
     (msg) => {
       timeouts.push(msg);
@@ -134,6 +138,16 @@ describe("ConsentManager.beginConsent (extension-offline guardrail)", () => {
     const r = manager.beginConsent(dcrArgs());
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("extension_offline");
+    expect(sent).toHaveLength(0);
+    expect(manager.size().consents).toBe(0);
+  });
+
+  it("T-P3-004b: returns no_unbound_workspace when windows exist but all are bound (delivered 0, totalActive > 0)", () => {
+    const { manager, sent } = makeManager({ recipients: 0, totalActive: 2 });
+    const r = manager.beginConsent(dcrArgs());
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("no_unbound_workspace");
+    // Distinct from offline: there ARE windows, just no unbound one.
     expect(sent).toHaveLength(0);
     expect(manager.size().consents).toBe(0);
   });

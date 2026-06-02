@@ -336,8 +336,14 @@ async function main(): Promise<void> {
     { logger },
     (msg) => {
       const server = ipcServerRef.current;
-      if (server === null) return 0;
-      return server.broadcastServerMessage(msg);
+      if (server === null) return { delivered: 0, totalActive: 0 };
+      // T-P3-004b: broadcast the consent request only to UNBOUND windows
+      // (a window already bound to a client can't accept another binding).
+      // The returned counts let beginConsent tell "no windows" (offline)
+      // from "all windows bound" (legible refusal).
+      return server.broadcastServerMessageToUnbound(msg, (id) =>
+        tokenStore.hasActiveBindingFor(id),
+      );
     },
     (msg) => {
       const server = ipcServerRef.current;
@@ -595,6 +601,20 @@ async function main(): Promise<void> {
     // the grant to that workspace.
     recordDecision: (request_id, decision, bound_workspace) =>
       consentManager.recordDecision(request_id, decision, bound_workspace),
+  });
+  // T-P3-004b: wire the binding revoker so unbind_workspace tears down the
+  // durable token AND any un-redeemed auth code bound to that workspace.
+  ipcServer.setBindingRevoker({
+    revoke: async (identifier) => {
+      const codes = consentManager.revokeAuthCodesByWorkspace(identifier);
+      const tokens = await tokenStore.revokeByWorkspace(identifier);
+      logger.info("oauth binding revoked (unbind)", {
+        identifier,
+        tokens_revoked: tokens,
+        auth_codes_revoked: codes,
+      });
+      return tokens;
+    },
   });
 
   components = {

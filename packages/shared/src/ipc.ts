@@ -60,6 +60,15 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
       mode: z.enum(["auto", "per_call", "session_bypass"]),
     })
     .strict(),
+  // T-P3-004b: extension asks the daemon to UNBIND this workspace (tear
+  // down its OAuth binding/token). Response-expected (mirrors
+  // set_workspace_mode) — the daemon replies unbind_workspace_ok.
+  z
+    .object({
+      kind: z.literal("unbind_workspace"),
+      identifier: z.string(),
+    })
+    .strict(),
   // T-P2-008: extension's response to a daemon-initiated approval_request.
   // Carries no IpcResponse — daemon doesn't ack this one (asymmetric).
   z
@@ -231,6 +240,13 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("deregister_workspace_ok") }).strict(),
   // T-P2-008: ack for the set_workspace_mode IPC request
   z.object({ kind: z.literal("set_workspace_mode_ok") }).strict(),
+  // T-P3-004b: ack for unbind_workspace. `revoked_count` = tokens torn down.
+  z
+    .object({
+      kind: z.literal("unbind_workspace_ok"),
+      revoked_count: z.number().int(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("error"),
@@ -375,6 +391,16 @@ export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
       bound_workspace: z.string(),
     })
     .strict(),
+  // T-P3-004b: inverse of binding_established — the daemon tells the
+  // (formerly) bound window its binding was torn down (unbind/revoke), so
+  // the extension clears currentBinding + refreshes the status bar. Targeted
+  // to the bound workspace's connection (mirror sendServerMessage).
+  z
+    .object({
+      kind: z.literal("binding_cleared"),
+      bound_workspace: z.string(),
+    })
+    .strict(),
 ]);
 export type IpcServerMessage = z.infer<typeof IpcServerMessageSchema>;
 export type ApprovalRequest = Extract<
@@ -405,4 +431,8 @@ export type AuthConsentResolved = Extract<
 export type BindingEstablished = Extract<
   IpcServerMessage,
   { kind: "binding_established" }
+>;
+export type BindingCleared = Extract<
+  IpcServerMessage,
+  { kind: "binding_cleared" }
 >;

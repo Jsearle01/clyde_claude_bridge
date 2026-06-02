@@ -11,6 +11,7 @@ import * as vscode from "vscode";
 import type { WorkspaceMode } from "@claude-bridge/shared";
 import type { StatusBarSources, DaemonInfo } from "./status-bar.js";
 import { runStartDaemonCommand } from "./daemon-lifecycle.js";
+import { formatClientLabel } from "./oauth-consent.js";
 
 export type MenuAction =
   | { kind: "show_status" }
@@ -20,7 +21,9 @@ export type MenuAction =
   | { kind: "copy_identifier"; identifier: string }
   | { kind: "info_only"; message: string }
   // T-P2-008: opens a secondary QuickPick to pick a new approval mode.
-  | { kind: "change_approval_mode"; identifier: string; current_mode: WorkspaceMode };
+  | { kind: "change_approval_mode"; identifier: string; current_mode: WorkspaceMode }
+  // T-P3-004b: unbind this workspace from its bound Claude.ai client.
+  | { kind: "unbind_workspace"; identifier: string; client_label: string };
 
 // T-P2-008: apply-mode adapter. The dispatch router calls this after
 // the user selects a new mode in the secondary QuickPick. Implementation
@@ -29,6 +32,10 @@ export type ApplyMode = (
   identifier: string,
   mode: WorkspaceMode,
 ) => Promise<void>;
+
+// T-P3-004b: unbind adapter — sends unbind_workspace via IPC and returns
+// the count of tokens revoked. Wired in extension.ts.
+export type Unbind = (identifier: string) => Promise<number>;
 
 export interface MenuItem {
   label: string;
@@ -48,6 +55,10 @@ export interface StatusBarMenuDeps {
   // T-P2-008: callback used by the change_approval_mode action to send
   // set_workspace_mode via IPC and apply the new mode locally on success.
   applyMode?: ApplyMode;
+  // T-P3-004b: callback used by the unbind_workspace action.
+  unbind?: Unbind;
+  // T-P3-004b: modal confirm for the (destructive) unbind action.
+  showWarningMessage?: typeof vscode.window.showWarningMessage;
 }
 
 const STOP_HINT_TEXT =
@@ -98,6 +109,23 @@ export function composeMenuItems(sources: StatusBarSources): MenuItem[] {
           current_mode: currentMode,
         },
       });
+      // T-P3-004b: Unbind — only when this workspace is bound to a client.
+      const binding = sources.getBinding?.() ?? null;
+      if (binding !== null) {
+        const clientLabel = formatClientLabel(
+          binding.client_id,
+          binding.client_name,
+        );
+        items.push({
+          label: "$(debug-disconnect) Unbind workspace",
+          description: `Bound to ${clientLabel}`,
+          action: {
+            kind: "unbind_workspace",
+            identifier,
+            client_label: clientLabel,
+          },
+        });
+      }
     }
     // Stop hint (descriptive — no spawn).
     items.push({
@@ -148,6 +176,9 @@ export function makeStatusBarMenu(
     ((s: string): PromiseLike<void> => vscode.env.clipboard.writeText(s));
   const runStart = deps.runStartDaemon ?? runStartDaemonCommand;
   const applyMode = deps.applyMode;
+  const unbind = deps.unbind;
+  const showWarning =
+    deps.showWarningMessage ?? vscode.window.showWarningMessage;
   return async (): Promise<void> => {
     const items = composeMenuItems(sources);
     const selected = await showQuickPick(items);
@@ -160,7 +191,9 @@ export function makeStatusBarMenu(
       showInfo,
       showError,
       showQuickPick,
+      showWarning,
       applyMode,
+      unbind,
     });
   };
 }
@@ -173,7 +206,9 @@ interface DispatchDeps {
   showInfo: typeof vscode.window.showInformationMessage;
   showError: typeof vscode.window.showErrorMessage;
   showQuickPick: typeof vscode.window.showQuickPick;
+  showWarning: typeof vscode.window.showWarningMessage;
   applyMode: ApplyMode | undefined;
+  unbind: Unbind | undefined;
 }
 
 interface ModeMenuItem extends vscode.QuickPickItem {
@@ -227,6 +262,29 @@ async function dispatchAction(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         await deps.showError(`Failed to change mode: ${msg}`);
+      }
+      return;
+    }
+    case "unbind_workspace": {
+      const confirm = await deps.showWarning(
+        `Unbind this workspace from ${action.client_label}? ` +
+          `That client will no longer be able to act on this workspace until it re-binds.`,
+        { modal: true },
+        "Unbind",
+      );
+      if (confirm !== "Unbind") return; // dismissed / cancelled
+      if (deps.unbind === undefined) {
+        await deps.showError("unbind dep not wired (test harness?)");
+        return;
+      }
+      try {
+        const revoked = await deps.unbind(action.identifier);
+        await deps.showInfo(
+          `Workspace unbound from ${action.client_label} (${revoked} token${revoked === 1 ? "" : "s"} revoked).`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await deps.showError(`Failed to unbind: ${msg}`);
       }
       return;
     }

@@ -557,6 +557,89 @@ describe("IpcServer workspace registration (T-P2-003)", () => {
     expect(captured[0]?.bound_workspace).toBe(identifier);
   });
 
+  it("T-P3-004b: unbind_workspace calls the revoker, sends binding_cleared, and replies ok", async () => {
+    const { address } = await startServerWithStore();
+    if (server === null) throw new Error("server not started");
+    const revoked: string[] = [];
+    server.setBindingRevoker({
+      revoke: (identifier) => {
+        revoked.push(identifier);
+        return Promise.resolve(2); // pretend 2 tokens torn down
+      },
+    });
+
+    const client = connect(address);
+    client.setEncoding("utf8");
+    const lines: string[] = [];
+    let buf = "";
+    client.on("data", (chunk: string) => {
+      buf += chunk;
+      let idx = buf.indexOf("\n");
+      while (idx !== -1) {
+        lines.push(buf.slice(0, idx));
+        buf = buf.slice(idx + 1);
+        idx = buf.indexOf("\n");
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      client.on("connect", () => resolve());
+      client.on("error", reject);
+    });
+    const send = (obj: unknown): void => {
+      client.write(JSON.stringify(obj) + "\n");
+    };
+    const waitForLines = async (n: number): Promise<void> => {
+      for (let i = 0; i < 100 && lines.length < n; i += 1) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    };
+
+    send({ kind: "hello", version: "1.0", role: "extension", pid: 99 });
+    send({ kind: "register_workspace", abs_path: "/ws/beta", name: "Beta" });
+    send({ kind: "confirm_trust", abs_path: "/ws/beta", name: "Beta" });
+    await waitForLines(3);
+    const ok = JSON.parse(lines[2] ?? "{}") as IpcResponse;
+    if (ok.kind !== "register_workspace_ok") {
+      throw new Error(`expected register_workspace_ok, got ${ok.kind}`);
+    }
+    const identifier = ok.identifier;
+
+    send({ kind: "unbind_workspace", identifier });
+    await waitForLines(5); // + binding_cleared (server msg) + unbind_workspace_ok
+    client.end();
+
+    // The revoker was invoked for this workspace.
+    expect(revoked).toEqual([identifier]);
+    // A binding_cleared server message AND an unbind_workspace_ok reply were
+    // both written.
+    const kinds = lines.map((l) => {
+      try {
+        return (JSON.parse(l) as { kind?: string }).kind;
+      } catch {
+        return undefined;
+      }
+    });
+    expect(kinds).toContain("binding_cleared");
+    const okReply = lines
+      .map((l) => JSON.parse(l) as { kind?: string; revoked_count?: number })
+      .find((m) => m.kind === "unbind_workspace_ok");
+    expect(okReply?.revoked_count).toBe(2);
+  });
+
+  it("T-P3-004b: unbind_workspace from a connection that doesn't hold the registration → protocol_error", async () => {
+    const { address } = await startServerWithStore();
+    if (server === null) throw new Error("server not started");
+    server.setBindingRevoker({ revoke: () => Promise.resolve(0) });
+    // A connection that registers nothing tries to unbind someone else's id.
+    const raw = await rpc(
+      address,
+      JSON.stringify({ kind: "unbind_workspace", identifier: "not-mine-abc123" }),
+    );
+    const resp = JSON.parse(raw) as IpcResponse;
+    expect(resp.kind).toBe("error");
+    if (resp.kind === "error") expect(resp.reason).toBe("protocol_error");
+  });
+
   it("confirm_trust after needs_trust writes file with trusted entry", async () => {
     const { address, store } = await startServerWithStore();
     const responses = await rpcRaw(

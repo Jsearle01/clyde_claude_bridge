@@ -18,6 +18,7 @@ function makeSources(overrides: Partial<{
   folder: WorkspaceFolder | undefined;
   daemonInfo: DaemonInfo | undefined;
   currentMode: ReturnType<StatusBarSources["getCurrentMode"]>;
+  binding: { client_id: string; client_name: string } | null;
 }>): StatusBarSources {
   const opts = {
     conn: "connected" as const,
@@ -27,6 +28,7 @@ function makeSources(overrides: Partial<{
     folder: { uri: { fsPath: "/projects/myproject" }, name: "myproject" },
     daemonInfo: undefined as DaemonInfo | undefined,
     currentMode: "per_call" as const,
+    binding: null as { client_id: string; client_name: string } | null,
     ...overrides,
   };
   return {
@@ -38,6 +40,7 @@ function makeSources(overrides: Partial<{
     getDaemonInfo: () => opts.daemonInfo,
     getCurrentMode: () => opts.currentMode,
     getRetryCount: () => 0,
+    getBinding: () => opts.binding,
   };
 }
 
@@ -350,3 +353,68 @@ describe("makeStatusBarMenu dispatch — change_approval_mode (T-P2-008)", () =>
 // Re-export TRUST_DENIED_HINT for any downstream test consumers (matches
 // the existing pattern of exporting menu text constants).
 void TRUST_DENIED_HINT;
+
+describe("T-P3-004b — unbind menu item + dispatch", () => {
+  it("shows an Unbind item only when the workspace is bound", () => {
+    const bound = composeMenuItems(
+      makeSources({ binding: { client_id: "cb_client_abcdef0123", client_name: "Proj" } }),
+    );
+    expect(bound.map((i) => i.action.kind)).toContain("unbind_workspace");
+
+    const unbound = composeMenuItems(makeSources({ binding: null }));
+    expect(unbound.map((i) => i.action.kind)).not.toContain("unbind_workspace");
+  });
+
+  it("confirming the modal calls the unbind adapter with the identifier", async () => {
+    const unbind = vi.fn(() => Promise.resolve(1));
+    const showWarning = vi.fn(() => Promise.resolve("Unbind"));
+    const showInfo = vi.fn(() => Promise.resolve(undefined));
+    const showQuickPick = vi.fn((items: unknown[]) => {
+      const arr = items as MenuItem[];
+      return Promise.resolve(arr.find((i) => i.action.kind === "unbind_workspace"));
+    });
+    const ctx = { subscriptions: [] } as unknown as vscode.ExtensionContext;
+    const handler = makeStatusBarMenu(
+      makeSources({
+        identifier: "ws-alpha-1234",
+        binding: { client_id: "cb_client_abcdef0123", client_name: "Proj" },
+      }),
+      ctx,
+      {
+        showQuickPick: showQuickPick as never,
+        showInformationMessage: showInfo as never,
+        showWarningMessage: showWarning,
+        unbind,
+      },
+    );
+    await handler();
+    expect(showWarning).toHaveBeenCalledWith(
+      expect.stringContaining("Unbind this workspace"),
+      { modal: true },
+      "Unbind",
+    );
+    expect(unbind).toHaveBeenCalledWith("ws-alpha-1234");
+    expect(showInfo).toHaveBeenCalled();
+  });
+
+  it("cancelling the modal does NOT call the unbind adapter", async () => {
+    const unbind = vi.fn(() => Promise.resolve(0));
+    const showWarning = vi.fn(() => Promise.resolve(undefined)); // dismissed
+    const showQuickPick = vi.fn((items: unknown[]) => {
+      const arr = items as MenuItem[];
+      return Promise.resolve(arr.find((i) => i.action.kind === "unbind_workspace"));
+    });
+    const ctx = { subscriptions: [] } as unknown as vscode.ExtensionContext;
+    const handler = makeStatusBarMenu(
+      makeSources({ binding: { client_id: "cb_client_abcdef0123", client_name: "Proj" } }),
+      ctx,
+      {
+        showQuickPick: showQuickPick as never,
+        showWarningMessage: showWarning as never,
+        unbind,
+      },
+    );
+    await handler();
+    expect(unbind).not.toHaveBeenCalled();
+  });
+});

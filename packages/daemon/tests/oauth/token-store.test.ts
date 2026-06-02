@@ -14,6 +14,8 @@ import {
   hashToken,
   ACCESS_TOKEN_TTL_MS,
 } from "../../src/oauth/token-store.js";
+import { authenticate } from "../../src/mcp/auth.js";
+import type { IncomingMessage } from "node:http";
 
 let tempDir: string;
 let storePath: string;
@@ -137,6 +139,84 @@ describe("TokenStore persistence (daemon restart)", () => {
     await expect(store.load()).rejects.toBeInstanceOf(
       TokensStoreVersionUnsupportedError,
     );
+  });
+});
+
+describe("T-P3-004b — revokeByWorkspace + hasActiveBindingFor", () => {
+  it("revokeByWorkspace deletes only matching tokens; leaves others; returns count", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    const a = await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    const b = await store.mint({ client_id: "c2", bound_workspace: "ws-B" });
+    expect(store.size()).toBe(2);
+
+    const removed = await store.revokeByWorkspace("ws-A");
+    expect(removed).toBe(1);
+    expect(store.lookup(a.access_token)).toBeNull(); // A's token gone
+    expect(store.lookup(b.access_token)?.bound_workspace).toBe("ws-B"); // B intact
+  });
+
+  it("revokeByWorkspace persists (a reload still shows the token gone)", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    const a = await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    await store.revokeByWorkspace("ws-A");
+    const fresh = new TokenStore(storePath);
+    await fresh.load();
+    expect(fresh.lookup(a.access_token)).toBeNull();
+  });
+
+  it("hasActiveBindingFor: true for a live bound token, false after revoke", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    expect(store.hasActiveBindingFor("ws-A")).toBe(true);
+    expect(store.hasActiveBindingFor("ws-B")).toBe(false);
+    await store.revokeByWorkspace("ws-A");
+    expect(store.hasActiveBindingFor("ws-A")).toBe(false);
+  });
+
+  it("hasActiveBindingFor is false for an expired token", async () => {
+    let now = 1_000_000;
+    const store = new TokenStore(storePath, () => now);
+    await store.load();
+    await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    expect(store.hasActiveBindingFor("ws-A")).toBe(true);
+    now += ACCESS_TOKEN_TTL_MS + 1;
+    expect(store.hasActiveBindingFor("ws-A")).toBe(false);
+  });
+});
+
+describe("T-P3-004b — AC-12d: a REVOKED token authenticates as INVALID, never unconstrained", () => {
+  const STATIC_BEARER = "cb_live_STATICSTATICSTATICSTATICSTAT";
+  function reqWith(token: string): IncomingMessage {
+    return { headers: { authorization: `Bearer ${token}` } } as IncomingMessage;
+  }
+
+  it("the inverse-isolation guard: deleting the token → invalid_token (NOT a fall-through to global)", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    const { access_token } = await store.mint({
+      client_id: "c1",
+      bound_workspace: "ws-A",
+    });
+    const lookup = (t: string): { bound_workspace: string | null } | null =>
+      store.lookup(t);
+
+    // Before revoke: the token authenticates, bound to ws-A.
+    const before = authenticate(reqWith(access_token), STATIC_BEARER, lookup);
+    expect(before.ok).toBe(true);
+    if (before.ok) {
+      expect(before.binding).toEqual({ kind: "bound", workspace: "ws-A" });
+    }
+
+    // Revoke (unbind), then present the SAME token again.
+    await store.revokeByWorkspace("ws-A");
+    const after = authenticate(reqWith(access_token), STATIC_BEARER, lookup);
+
+    // CRITICAL: rejected — must NOT be {kind:"unconstrained"} (that would be
+    // an UPGRADE to global access on revocation — the inverse-isolation trap).
+    expect(after).toEqual({ ok: false, reason: "invalid_token" });
   });
 });
 

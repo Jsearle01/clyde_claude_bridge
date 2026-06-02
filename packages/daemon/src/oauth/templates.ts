@@ -110,6 +110,16 @@ export function extensionOfflinePage(): string {
   ].join("\n");
 }
 
+export function noUnboundWorkspacePage(): string {
+  return [
+    chromeOpen({ title: "No workspace available — claude-bridge" }),
+    "<h1 class=\"error\">No unbound workspace available to bind</h1>",
+    "<p>Every connected VS Code window is already bound to a Claude.ai client. A workspace can be bound to one client at a time.</p>",
+    "<p>To bind this client, either <strong>unbind</strong> a workspace (from its VS Code status bar) or <strong>open the VS Code window for the workspace you intend to use</strong>, then try the authorization again.</p>",
+    chromeClose(),
+  ].join("\n");
+}
+
 export function ackTimeoutPage(): string {
   return [
     chromeOpen({ title: "Extension not responding — claude-bridge" }),

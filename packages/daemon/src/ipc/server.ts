@@ -128,6 +128,12 @@ export class IpcServer {
       bound_workspace: string | null,
     ) => void;
   } | null = null;
+  // T-P3-004b: optional binding revoker. Wired by main.ts to tear down a
+  // workspace's OAuth token(s) + transient auth codes on unbind. When
+  // absent, unbind_workspace responds with revoked_count 0.
+  private bindingRevoker:
+    | { revoke: (identifier: string) => Promise<number> }
+    | null = null;
   // T-P2-009 / T-P2-010: optional extension-tool router. Wired in
   // main.ts. When absent, inbound inspection-tool response/error
   // envelopes are silently dropped (the daemon has nothing pending to
@@ -173,6 +179,14 @@ export class IpcServer {
     ) => void;
   }): void {
     this.consentReceiver = receiver;
+  }
+
+  // T-P3-004b: wire the binding revoker (token/auth-code teardown for a
+  // workspace). Called by the unbind_workspace handler.
+  public setBindingRevoker(revoker: {
+    revoke: (identifier: string) => Promise<number>;
+  }): void {
+    this.bindingRevoker = revoker;
   }
 
   // T-P2-009 / T-P2-010: post-construction extension-router wire-up.
@@ -230,6 +244,34 @@ export class IpcServer {
       }
     }
     return count;
+  }
+
+  // T-P3-004b: broadcast only to UNBOUND windows (the consent-request
+  // filter). `isBound(identifier)` is read live against the token store.
+  // Returns `delivered` (unbound recipients written to) and `totalActive`
+  // (all active connections) so the caller can distinguish "no windows
+  // online" from "all windows already bound".
+  public broadcastServerMessageToUnbound(
+    message: IpcServerMessage,
+    isBound: (identifier: string) => boolean,
+  ): { delivered: number; totalActive: number } {
+    let delivered = 0;
+    let totalActive = 0;
+    const encoded = encodeMessage(message);
+    for (const entry of this.activeRegistry.values()) {
+      totalActive += 1;
+      if (isBound(entry.identifier)) continue;
+      try {
+        entry.socket.write(encoded);
+        delivered += 1;
+      } catch (err) {
+        this.logger.warn("ipc broadcast(unbound): socket write failed", {
+          identifier: entry.identifier,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return { delivered, totalActive };
   }
 
   constructor(
@@ -519,7 +561,8 @@ export class IpcServer {
       case "get_diagnostics_response":
       case "extension_tool_error":
       case "auth_consent_ack":
-      case "auth_consent_response": {
+      case "auth_consent_response":
+      case "unbind_workspace": {
         // These are handled inline in dispatchLine (workspace cases need
         // per-socket access; hello is handled in the gate above). They
         // never reach this switch.
@@ -605,7 +648,8 @@ export class IpcServer {
       request.kind !== "get_diagnostics_response" &&
       request.kind !== "extension_tool_error" &&
       request.kind !== "auth_consent_ack" &&
-      request.kind !== "auth_consent_response"
+      request.kind !== "auth_consent_response" &&
+      request.kind !== "unbind_workspace"
     ) {
       return false;
     }
@@ -699,6 +743,39 @@ export class IpcServer {
         request.mode,
       );
       await this.writeResponse(socket, { kind: "set_workspace_mode_ok" });
+      return true;
+    }
+
+    // T-P3-004b: unbind — tear down this workspace's OAuth binding/token.
+    if (request.kind === "unbind_workspace") {
+      // Authorization: only the connection that holds this workspace's
+      // active registration may unbind it (same guard as set_workspace_mode).
+      const found = this.findActiveByIdentifier(request.identifier);
+      if (found === null || found.entry.socket !== socket) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: `unbind_workspace: identifier ${request.identifier} not held by this connection`,
+          reason: "protocol_error",
+        });
+        return true;
+      }
+      let revoked = 0;
+      if (this.bindingRevoker !== null) {
+        revoked = await this.bindingRevoker.revoke(request.identifier);
+      }
+      // Tell the (now-unbound) window so it clears its status-bar binding.
+      // Best-effort targeted send; the ok reply below is the authoritative
+      // confirmation the extension awaits.
+      this.sendServerMessage(request.identifier, {
+        kind: "binding_cleared",
+        bound_workspace: request.identifier,
+      }).catch(() => {
+        // window may have closed between request and this send — non-fatal.
+      });
+      await this.writeResponse(socket, {
+        kind: "unbind_workspace_ok",
+        revoked_count: revoked,
+      });
       return true;
     }
 

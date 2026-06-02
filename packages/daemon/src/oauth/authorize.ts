@@ -25,6 +25,7 @@ import { deriveBaseUrl } from "./metadata.js";
 import {
   ackTimeoutPage,
   extensionOfflinePage,
+  noUnboundWorkspacePage,
   pendingPage,
 } from "./templates.js";
 
@@ -157,10 +158,17 @@ export async function handleAuthorize(
     code_challenge,
   });
   if (!consent.ok) {
-    deps.logger.info("oauth /authorize: extension_offline", {
+    deps.logger.info("oauth /authorize: consent could not begin", {
       client_id,
       reason: consent.reason,
     });
+    // T-P3-004b: distinguish "all windows already bound" (a legible refusal
+    // telling the operator to unbind or open the intended workspace) from a
+    // genuinely-offline daemon (no extension connected at all).
+    if (consent.reason === "no_unbound_workspace") {
+      sendHtml(res, 409, noUnboundWorkspacePage());
+      return;
+    }
     sendHtml(res, 503, extensionOfflinePage());
     return;
   }

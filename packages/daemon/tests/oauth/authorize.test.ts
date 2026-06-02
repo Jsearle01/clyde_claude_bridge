@@ -82,7 +82,7 @@ beforeEach(async () => {
   registeredRedirectUri = "https://example.com/cb";
   manager = new ConsentManager(
     { logger: silentLogger },
-    () => 1, // one extension online by default
+    () => ({ delivered: 1, totalActive: 1 }), // one unbound extension online
     () => undefined,
   );
 });
@@ -276,10 +276,10 @@ describe("handleAuthorize — RFC 6749 §4.1 gating", () => {
 
 describe("handleAuthorize — extension-offline guardrail (AC-P3-4)", () => {
   it("503 extension-offline HTML when no extension is connected; NO IPC fired; NO consent record created", async () => {
-    // Reconfigure manager to have 0 recipients.
+    // Reconfigure manager to have 0 recipients AND 0 active (truly offline).
     const offlineManager = new ConsentManager(
       { logger: silentLogger },
-      () => 0, // no extensions online
+      () => ({ delivered: 0, totalActive: 0 }), // no extensions online
       () => undefined,
     );
     const rec: RecordedResponse = {};
@@ -343,7 +343,7 @@ describe("handleAuthorize — pending-page happy path", () => {
       { logger: silentLogger },
       (msg) => {
         observedRequestId = msg.request_id;
-        return 1;
+        return { delivered: 1, totalActive: 1 };
       },
       () => undefined,
     );

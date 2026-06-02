@@ -141,6 +141,11 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     statusBar.refresh();
   };
+  // T-P3-004b: on unbind/revoke, the daemon clears this window's binding.
+  ipcClient.onBindingCleared = (): void => {
+    currentBinding = null;
+    statusBar.refresh();
+  };
 
   // T-P2-009 / T-P2-010: wire the inspection-tool handlers. Both are
   // read-only and bypass the approval gate — daemon never invokes the
@@ -171,6 +176,27 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       reg.setCurrentMode(mode);
       statusBar.refresh();
+    },
+    // T-P3-004b: unbind sends unbind_workspace via IPC; the daemon's
+    // binding_cleared signal clears currentBinding (handler above), and the
+    // ok reply returns the revoked-token count for the confirmation toast.
+    unbind: async (identifier) => {
+      const client = ipcClient;
+      if (client === null) {
+        throw new Error("ipc client not initialized");
+      }
+      const response = await client.request<{
+        kind?: string;
+        revoked_count?: number;
+        message?: string;
+      }>({
+        kind: "unbind_workspace",
+        identifier,
+      });
+      if (response.kind !== "unbind_workspace_ok") {
+        throw new Error(response.message ?? "unbind failed");
+      }
+      return response.revoked_count ?? 0;
     },
   });
   const statusBarMenuCmd = vscode.commands.registerCommand(

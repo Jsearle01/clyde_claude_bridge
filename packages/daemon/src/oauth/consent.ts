@@ -103,11 +103,14 @@ export interface ConsentManagerDeps {
 }
 
 /**
- * Send-to-extension adapter. Provided by main.ts (wires it to the
- * IpcServer broadcast path for now; T-P3-003 will replace with the real
- * extension's IPC connection). Returns the number of extensions notified;
- * 0 means "no extension is online" → caller surfaces the offline error
- * page BEFORE creating a consent record.
+ * Send-to-extension adapter. Provided by main.ts (broadcasts to the
+ * UNBOUND active extension connections — T-P3-004b). Returns:
+ *  - `delivered`: how many unbound windows received the consent request.
+ *  - `totalActive`: how many extension connections exist at all.
+ *
+ * The two numbers let beginConsent distinguish "no windows online"
+ * (totalActive === 0 → offline page) from "all windows already bound"
+ * (totalActive > 0 but delivered === 0 → a distinct legible refusal).
  */
 export type SendConsentRequest = (msg: {
   kind: "auth_consent_request";
@@ -115,7 +118,7 @@ export type SendConsentRequest = (msg: {
   client_id: string;
   client_name: string;
   redirect_uri: string;
-}) => number;
+}) => { delivered: number; totalActive: number };
 
 export type SendConsentTimeout = (msg: {
   kind: "auth_consent_timeout";
@@ -205,7 +208,9 @@ export class ConsentManager {
     redirect_uri: string;
     state_param: string;
     code_challenge: string;
-  }): { ok: true; request_id: string } | { ok: false; reason: "extension_offline" } {
+  }):
+    | { ok: true; request_id: string }
+    | { ok: false; reason: "extension_offline" | "no_unbound_workspace" } {
     if (this.stopped) {
       return { ok: false, reason: "extension_offline" };
     }
@@ -228,9 +233,9 @@ export class ConsentManager {
     // Optimistic insert so the send-adapter can find the record if it
     // synchronously triggers a callback; if send fails, we delete.
     this.consents.set(request_id, record);
-    let delivered: number;
+    let result: { delivered: number; totalActive: number };
     try {
-      delivered = this.sendConsentRequest({
+      result = this.sendConsentRequest({
         kind: "auth_consent_request",
         request_id,
         client_id: args.client_id,
@@ -245,11 +250,40 @@ export class ConsentManager {
       });
       return { ok: false, reason: "extension_offline" };
     }
-    if (delivered === 0) {
+    if (result.delivered === 0) {
       this.consents.delete(request_id);
-      return { ok: false, reason: "extension_offline" };
+      // Distinguish "no windows at all" (offline) from "all windows already
+      // bound" (T-P3-004b filter) — the latter gets a distinct legible page.
+      return {
+        ok: false,
+        reason:
+          result.totalActive === 0 ? "extension_offline" : "no_unbound_workspace",
+      };
     }
     return { ok: true, request_id };
+  }
+
+  /**
+   * T-P3-004b: drop any un-redeemed auth codes bound to `workspace`. Closes
+   * the unbind-during-pending-redemption window — an auth code issued for a
+   * workspace just unbound must not still mint a token. Returns the count
+   * removed. (The durable token teardown happens in the TokenStore; this is
+   * the transient-consent half.)
+   */
+  revokeAuthCodesByWorkspace(workspace: string): number {
+    let removed = 0;
+    for (const [code, rec] of this.authCodes) {
+      if (rec.bound_workspace === workspace) {
+        this.authCodes.delete(code);
+        const t = this.codeExpiryTimers.get(code);
+        if (t !== undefined) {
+          clearTimeout(t);
+          this.codeExpiryTimers.delete(code);
+        }
+        removed += 1;
+      }
+    }
+    return removed;
   }
 
   /** Awaits the extension's ack (3s window). Resolves with "acked" on

@@ -139,6 +139,37 @@ export class TokenStore {
     };
   }
 
+  /**
+   * T-P3-004b (unbind): delete every token bound to `workspace`. Tears down
+   * the durable binding so the revoked token authenticates as invalid (the
+   * auth-layer lookup returns null → invalid_token, never unconstrained).
+   * Returns the count removed. Other tokens + the DCR registration are
+   * untouched (lighter unbind — the client can re-bind with the same id).
+   */
+  async revokeByWorkspace(workspace: string): Promise<number> {
+    this.assertLoaded();
+    const before = this.store.tokens.length;
+    this.store.tokens = this.store.tokens.filter(
+      (t) => t.bound_workspace !== workspace,
+    );
+    const removed = before - this.store.tokens.length;
+    if (removed > 0) await this.writeFile();
+    return removed;
+  }
+
+  /**
+   * T-P3-004b (broadcast filter): is there a live (non-expired) token bound
+   * to `workspace`? Used to exclude already-bound windows from the consent
+   * broadcast. "Bound" = an active token names the workspace, read live.
+   */
+  hasActiveBindingFor(workspace: string): boolean {
+    this.assertLoaded();
+    const nowMs = this.now();
+    return this.store.tokens.some(
+      (t) => t.bound_workspace === workspace && nowMs < t.expires_at,
+    );
+  }
+
   /** Diagnostic — token count (used in tests/verdict evidence). */
   size(): number {
     this.assertLoaded();
