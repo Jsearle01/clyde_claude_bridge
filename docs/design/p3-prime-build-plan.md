@@ -20,10 +20,11 @@ The binding (isolation) is the load-bearing foundation: granularity, gate re-key
 
 ```
 FOUNDATION (isolation)
-  T-P3-002R  revise consent: bound workspace + targeted delivery        [revises shipped code]
-  T-P3-003   reshaped modal: bind-this-workspace (+ granularity stub)
-  T-P3-004   /token + token carries binding + AUTH-LAYER ENFORCEMENT
-  ── ISOLATION MILESTONE ──  (two bindings; A⊥B proven)
+  T-P3-002R  revise consent: bound workspace + responder-binds + named modal   [revises shipped code]
+  T-P3-003   reshaped modal: bind-this-workspace (named: client + codebase) + status-bar binding display
+  T-P3-003U  unbind / revoke: targeted daemon teardown + VS Code unbind command   [misclick recovery]
+  T-P3-004   /token + token carries binding + AUTH-LAYER ENFORCEMENT + unbound-broadcast filter
+  ── ISOLATION MILESTONE ──  (two bindings; A⊥B proven; misbinding recoverable)
 AUTONOMY (layered on the proven binding)
   T-P3-005   gate re-key (workspace→token) + per-operation granularity
   T-P3-006   gate categories (sandbox-escape / irreversible / recursive floor) + retry limit N=3
@@ -34,6 +35,8 @@ SEPARATE (not a code task)
   methodology codification of the §5/§6.4 disciplines → orchestrator/executor prompting, via the pool
 ```
 
+**Sequencing note (why T-P3-003U lands before T-P3-004):** misclick recovery is an operator requirement, not a P4 nicety. Today the only recovery is daemon restart (which clears in-memory consent state). But T-P3-004 persists the token (30-day TTL) — and a persisted binding is NOT cleared by restart. So if T-P3-004 shipped before an unbind path existed, a misbinding would be written to a persisted token with no recovery short of manual file editing. The unbind/revoke (T-P3-003U) therefore lands **before** token persistence, so the isolation milestone ships with bindings that are always undoable. (Recon 2026-06-01 established no revocation of any kind exists today; /revoke was P4-deferred — this pulls a minimal targeted unbind into P3′.)
+
 ---
 
 ## Tasks
@@ -42,28 +45,50 @@ SEPARATE (not a code task)
 **Goal:** the consent flow binds a client to a specific workspace, replacing the daemon-global broadcast model.
 **Scope:**
 - `ConsentRecord` / `AuthCodeRecord` gain a `bound_workspace` field (the workspace identifier the grant is bound to).
-- The approving extension **supplies its own workspace identifier** at approve-time (it knows it from `register_workspace`/the active registry) — this is how consent learns which workspace to bind.
-- Consent delivery shifts **broadcast → targeted**: the consent request goes to the workspace being bound, not all connected extensions. (Resolves the recon-#2 sibling-modal gap as a side effect — no siblings to dangle if delivery is targeted.)
-- Remove the daemon-global assumption from the consent path (revise, don't leave dead parallel code).
-**Out of scope:** the token (T-P3-004), enforcement (T-P3-004), granularity (T-P3-005).
+- **Responder-binds:** the daemon ties the `auth_consent_response` to the responding extension connection, and reads that connection's workspace from the active registry (`{abs_path, identifier, name, socket}` — the socket is already in scope at the response handler, `server.ts:570/601-606`; the workspace is recovered via `entry.socket === socket`). The workspace is threaded into `recordDecision` and onto the consent/auth-code record. (This is the binding seam recon confirmed available; claude.ai cannot itself carry a workspace identifier — `/authorize` reads only standard OAuth params, the connector UI exposes only URL + client_id/secret, and per-workspace URLs are blocked by the single-quick-tunnel exposure. See §"Binding mechanism" below.)
+- **Consent delivery stays broadcast** (consent is initiated by claude.ai, which gives no target to aim at before a window responds); the BINDING is determined by *which window responds*, not by targeting delivery. The misclick guard is the named modal (T-P3-003), not targeted delivery.
+- **Dismiss-siblings-on-resolve (closes the recon-#2 zombie-modal gap):** when a consent resolves by approve OR deny, the daemon sends a dismiss signal to all the OTHER broadcast recipients so their now-stale modals close immediately. Today the daemon only sends a close on the 30s *timeout* path, and the shared decision-timer is cleared on first resolution — so on approve/deny the siblings get NO signal and their modals hang (zombie modals: won't auto-close, do nothing if clicked due to first-write-wins, must be manually dismissed). This adds a daemon→ext "consent resolved, dismiss" message (or extends `auth_consent_timeout`'s close-path with a resolved reason) sent to the non-responding connections on resolution. (Extension-side handling of the dismiss is in T-P3-003.)
+- Remove the daemon-global *grant* assumption from the consent path where the binding replaces it (revise, don't leave dead parallel code) — but the broadcast *delivery* is retained (it is correct for a remote-initiated consent).
+**Out of scope:** the token (T-P3-004), enforcement (T-P3-004), the modal UI itself (T-P3-003), unbind (T-P3-003U), granularity (T-P3-005, set at operation-time not consent-time — see Open items).
 **ACs:**
-- AC-1: a consent grant records the bound workspace; `AuthCodeRecord` carries it.
-- AC-2: consent request is delivered to the target workspace's extension, not broadcast.
-- AC-3: the prior daemon-global broadcast path is removed (no dead parallel consent flow).
+- AC-1: a consent grant records the bound workspace (recovered from the responding connection); `AuthCodeRecord` carries it.
+- AC-2: the binding is determined by the responding window's workspace; a response from workspace-A's connection binds to workspace-A.
+- AC-2b: on consent resolution (approve/deny), the daemon signals the other broadcast recipients to dismiss their modals (no zombie modals left hanging).
+- AC-3: the daemon-global grant assumption is removed from the consent path (the grant is now workspace-bound, no dead parallel grant logic).
 - AC-4: existing T-P3-001 DCR/metadata + T-P3-002 state-machine behavior otherwise preserved (transitions, timers, first-write-wins) except where binding changes them.
-**Risk note:** touches shipped code (`consent.ts`, `main.ts` wiring). Pre-flight: diff against the shipped behavior; preserve the state-machine/timer correctness recon #2 documented.
+**Risk note:** touches shipped code (`consent.ts`, `main.ts` wiring, `server.ts` response handler). Pre-flight: diff against the shipped behavior; preserve the state-machine/timer correctness recon #2 documented.
 
-### T-P3-003 — Reshaped consent modal: bind-this-workspace (FOUNDATION)
-**Goal:** the extension-side consent modal communicates and confirms the *workspace binding*, not a generic approve/deny.
+**Binding mechanism (decided 2026-06-01, after four recon passes):** responder-binds. Rejected alternatives — (3a) *claude.ai declares target*: impossible, the connector UI exposes no scope/custom-param field and `/authorize` reads only standard params; (URL-encodes-workspace) *workspace in the server URL path/subdomain*: blocked by exposure — the daemon runs behind a single rotating cloudflared quick-tunnel (one random `*.trycloudflare.com` host), and the metadata/discovery chain assumes one global base; per-workspace public URLs would need named-tunnel+DNS or multi-tunnel infra outside the repo. **URL-encodes-workspace is recorded as a future option IF the deployment ever moves to per-workspace public URLs** (named Cloudflare tunnel + DNS) — at which point binding-as-configuration becomes cleanly available and would remove the misclick risk entirely.
+
+### T-P3-003 — Reshaped consent modal (named) + status-bar binding display (FOUNDATION)
+**Goal:** the consent modal names BOTH parties so a misclick is visible; the established binding is shown in the status bar for inspection.
 **Scope:**
-- Extension-side `oauth-consent.ts` (greenfield, parallels `approval-modal.ts`): receives `auth_consent_request`, sends `auth_consent_ack` immediately, shows a modal naming the client AND the workspace being bound, sends `auth_consent_response`, handles `auth_consent_timeout`.
-- Modal copy reflects binding: "claude.ai wants to bind to {workspace}" — accurate to what's granted (the operator must see *which workspace*).
+- Extension-side `oauth-consent.ts` (greenfield, parallels `approval-modal.ts`): receives `auth_consent_request`, sends `auth_consent_ack` immediately, shows the modal, sends `auth_consent_response`, handles `auth_consent_timeout`.
+- **Named modal (the misclick guard):** the modal names BOTH (a) the requesting **claude.ai project** and (b) the **target VS Code codebase**. Codebase = the friendly folder name (`workspaceFolder.name`, always available from the active registry); abs_path available for disambiguation. claude.ai side = `client_name` WHEN meaningful, with the `client_id` prefix (e.g. `cb_client_a1b2c3d4`) shown ALWAYS as the guaranteed distinguisher. (`client_name` meaningfulness is external-to-confirm — it defaults to `"unnamed-client"` and is whatever claude.ai sends; the AC-P3-12 live smoke reveals the real value. Build to show client_name-if-present + client_id-prefix-always so the modal is unambiguous regardless.)
+- Modal copy reflects the binding: e.g. "Bind {claude.ai client} to **{codebase}**?" so approving in the wrong window shows the wrong codebase name — a visible, catchable error.
 - Two callback fields + two dispatch branches in `ipc/client.ts`; wired in `extension.ts`.
-- (Granularity selection at consent: a STUB/placeholder here — full granularity is T-P3-005. Decide in the task's scope conversation whether granularity is set at consent or at operation-dispatch time.)
+- **Status-bar binding display:** after a binding is established, the affected window's status bar shows it (e.g. `$(plug) {identifier} → {client}`), tooltip naming the bound claude.ai client. Requires a NEW daemon→ext message ("binding established: client X") on `IpcServerMessageSchema`, a new settable callback at `ipc/client.ts:295-323`, and a new status-bar source in `status-bar.ts` (composeStatusBarText). Located seam; this task wires it.
+- **Dismiss-siblings handling (extension side of the T-P3-002R signal):** handle the daemon's "consent resolved, dismiss" message — when a sibling window receives it, close its now-stale consent modal. This is what makes the named-broadcast clean: you approve in one window, the others' modals vanish immediately instead of dangling. (Daemon sends the signal — T-P3-002R; extension closes the modal on receipt — here.)
+- (Granularity: NOT set at consent — see Open items / T-P3-005. The modal is binding-only.)
 **ACs:**
-- AC-5: modal shows the client + the bound workspace; approve binds, deny/dismiss don't.
+- AC-5: modal names the claude.ai client (client_name if meaningful + client_id prefix always) AND the target codebase (folder name); approve binds, deny/dismiss don't.
 - AC-6: `auth_consent_ack` sent on receipt (before modal resolves); `auth_consent_response` on decision; `auth_consent_timeout` closes/notifies (best-effort per recon #2 — daemon authority is the real guarantee).
+- AC-6b: when one window resolves the consent, sibling windows' modals dismiss on the daemon's resolved signal (no zombie modals — verified with two windows open).
 - AC-7: AC-P3-3 (full, real-modal path) and AC-P3-5 (modal-close-on-timeout half) satisfied via the real extension, not the harness stub.
+- AC-7b: after binding, the status bar shows the bound claude.ai client; the binding is human-inspectable.
+
+### T-P3-003U — Unbind / revoke: misclick recovery (FOUNDATION; before token-persistence)
+**Goal:** a misbinding can be undone — targeted, without nuking other bindings — BEFORE T-P3-004 makes bindings persist (and thus survive the restart that is today's only recovery).
+**Scope:**
+- **Daemon-side targeted teardown:** drop a specific binding (this workspace ↔ this client), leaving other bindings and the DCR registration intact. (No `removeClient` needed — the lighter unbind drops the binding, keeps the registration; claude.ai can re-bind with the same client_id.) Once T-P3-004 exists, unbind also invalidates/deletes the bound token so it can no longer authenticate.
+- **VS Code-side trigger (operator decision: act in the window you can see is wrong):** a status-bar affordance / command in the affected window — "Unbind this workspace from {client}?" → confirm → daemon teardown. (The status bar from T-P3-003 is where the binding is inspected, so it's where unbind is triggered.) Requires an ext→daemon unbind request message + handler.
+- **claude.ai re-bind after unbind:** the daemon's half is guaranteed (binding/token killed → that client's requests rejected via the existing `invalid_client`/401 machinery). The claude.ai-side re-bind smoothness is **external-to-confirm** (whether claude.ai auto-re-registers/re-prompts on `invalid_client`, or the user must manually reconnect via claude.ai's connector UI). **Build for graceful (return `invalid_client` so a well-behaved client re-prompts); accept the manual-reconnect floor** if claude.ai doesn't auto-re-prompt. Either way recovery is guaranteed — and targeted unbind beats restart (doesn't nuke the good binding) AND survives token-persistence (restart won't).
+**ACs:**
+- AC-7c: a specific binding can be torn down on operator command without affecting other bindings.
+- AC-7d: after unbind, the unbound client can no longer act on the formerly-bound workspace (rejected).
+- AC-7e: the operator triggers unbind from the affected VS Code window (status-bar command).
+- AC-7f (smoke-confirmed): after unbind, re-binding to the correct workspace succeeds (graceful re-prompt if claude.ai supports it; manual reconnect otherwise — confirmed at AC-P3-12).
+**Sequencing:** lands BEFORE T-P3-004 so persisted bindings are always undoable (see Phase map sequencing note).
 
 ### T-P3-004 — /token + binding on the token + auth-layer enforcement (FOUNDATION; the milestone)
 **Goal:** the token carries the binding and the auth layer ENFORCES it — isolation becomes structural and real.
@@ -72,12 +97,14 @@ SEPARATE (not a code task)
 - Auth layer (`auth.ts authenticate()` + the layer after it): an authenticated request may act ONLY on its token's bound workspace. Tool-call workspace resolution is constrained to the binding.
 - Binding-violation attempts (a token targeting a non-bound workspace) are **rejected AND surfaced** (not silent).
 - The `ambiguous_workspace` resolution path is simplified — under a binding there is no ambiguity; the explicit workspace arg validates against the binding rather than resolving against the global registry.
+- **Consent broadcast filtered to unbound windows (now that binding state exists):** the consent request broadcasts only to windows WITHOUT an active binding — a window already bound to a claude.ai can't accept another binding, so it shouldn't prompt. ("Bound," not merely "connected" — every window is connected; filter on active-binding state, read live.) This progressively narrows the prompt set: the first binding still broadcasts to all unbound windows (named modal + dismiss-siblings guard it), but each subsequent binding prompts fewer, until the last prompts exactly one. A window freed by unbind (T-P3-003U) re-enters the set. **Edge case — all windows already bound:** broadcast reaches zero recipients → fail with a LEGIBLE message ("no unbound workspace available to bind; unbind one or open the intended workspace"), not the generic offline error.
 **ACs (the isolation milestone):**
 - AC-8: a token carries its bound workspace; `/token` issues it correctly (PKCE enforced).
 - AC-9: **claude.ai-A (bound to workspace-A) can act on workspace-A.**
 - AC-10: **claude.ai-A CANNOT act on workspace-B — the auth layer rejects it.** (The core isolation proof.)
 - AC-11: a binding-violation attempt is surfaced (logged/reported), not silently denied.
 - AC-12: with two bindings live, A⊥B and B⊥A both hold.
+- AC-12b: consent broadcast excludes already-bound windows; with workspace-A bound, authorizing a second client prompts only the unbound workspace-B window. All-bound → legible refusal.
 **── ISOLATION MILESTONE: at AC-12, the operator's original requirement (no cross-talk) is structurally met and testable. Independently valuable; could be used as-is even before the autonomy layer. ──**
 
 ### T-P3-005 — Gate re-key + per-operation granularity (AUTONOMY)
@@ -125,11 +152,12 @@ The §5/§6.4 disciplines (pre-flight dispatch review; design-vs-implementation 
 ---
 
 ## Open items to resolve in scope conversations (not blocking the plan)
-- T-P3-003: is granularity set at consent-time or at operation-dispatch time? (Affects whether T-P3-003 stubs it or T-P3-005 owns it entirely.)
+- ~~T-P3-003: granularity at consent-time or operation-time?~~ **RESOLVED 2026-06-01: operation-time** — granularity is selected per autonomous operation at handoff (matches design §4 + the operator's "specify granularity for the operation I'm about to perform"). T-P3-003's modal is binding-only; T-P3-005 owns granularity entirely.
 - T-P3-006: per-item BASH_DENY block-vs-gate decisions (§6.6); cost-threshold (all-gate vs budget).
 - T-P3-005: exact `session_bypass` resolution (remove the vestigial mode, or repurpose it).
+- **External-to-confirm at AC-P3-12 live smoke:** (a) claude.ai's actual `client_name` (meaningful per-project vs generic — determines whether the modal/statusbar show a name or only the client_id prefix); (b) claude.ai's re-registration behavior on `invalid_client` (determines whether post-unbind re-bind is graceful or manual-reconnect). Both have guaranteed floors (client_id prefix; manual reconnect), so neither blocks the build.
 
 ## Provenance
-Derived from `05-autonomous-collaboration-model.md` §9 (impact map) and the four recon passes (2026-06-01). Order A + two-binding test scope + revise-shipped-code per operator decisions 2026-06-01.
+Derived from `05-autonomous-collaboration-model.md` §9 (impact map) and the recon passes (2026-06-01). Order A + two-binding test scope + revise-shipped-code per operator decisions 2026-06-01. Binding mechanism = **responder-binds** (decided after four recon passes: 3a and URL-encodes-workspace both ruled out by claude.ai-connector + exposure constraints). Misclick recovery = **targeted unbind pulled into P3′** (T-P3-003U, before token-persistence) per operator decision; the named modal + status-bar binding display are the prevention+inspection legs.
 
 **End of P3′ build plan.**
