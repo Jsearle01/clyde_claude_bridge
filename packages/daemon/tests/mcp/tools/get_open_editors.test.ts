@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { makeGetOpenEditorsTool } from "../../../src/mcp/tools/get_open_editors.js";
 import { ExtensionToolRouter } from "../../../src/mcp/tools/extension-router.js";
 import { ToolHandlerError, type ToolContext } from "../../../src/mcp/dispatch.js";
+import type { WorkspaceBinding } from "../../../src/mcp/auth.js";
 import type { AuditLog } from "../../../src/audit/log.js";
 import type { Logger } from "../../../src/log/logger.js";
 import type { DaemonState } from "../../../src/state.js";
@@ -22,15 +23,33 @@ const stubState: DaemonState = {
   config: {} as never,
 };
 
-function makeCtx(): ToolContext {
+function makeCtx(binding?: WorkspaceBinding): ToolContext {
   return {
     request_id: "req_goe0000",
     remote_addr: "tunnel",
+    workspaceBinding: binding,
     auditLog: {} as AuditLog,
     logger: silentLogger,
     state: stubState,
     setAuditMetadata: () => undefined,
   };
+}
+
+// A router that always answers with an empty editor list — for tests that
+// only care whether the call was ALLOWED past the binding gate.
+function respondingRouter(): ExtensionToolRouter {
+  const router = new ExtensionToolRouter((_, request) => {
+    const req = request as { request_id: string };
+    setImmediate(() => {
+      router.resolveResponse({
+        kind: "get_open_editors_response",
+        request_id: req.request_id,
+        editors: [],
+      });
+    });
+    return Promise.resolve();
+  });
+  return router;
 }
 
 function singleWorkspaceRegistry() {
@@ -218,5 +237,91 @@ describe("get_open_editors tool error shapes", () => {
     await expect(tool.handler({}, makeCtx())).rejects.toBeInstanceOf(
       ToolHandlerError,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-P3-004a — auth-layer binding enforcement (THE isolation proof)
+// ---------------------------------------------------------------------------
+describe("T-P3-004a — binding enforcement via the real tool path", () => {
+  const boundA: WorkspaceBinding = { kind: "bound", workspace: "a" };
+
+  it("AC-9: a token bound to A CAN act on A (explicit arg matches the binding)", async () => {
+    const tool = makeGetOpenEditorsTool({
+      registry: twoWorkspaceRegistry(),
+      extensionRouter: respondingRouter(),
+    });
+    const out = await tool.handler({ workspace: "a" }, makeCtx(boundA));
+    expect(out.editors).toEqual([]);
+  });
+
+  it("AC-9: a token bound to A acts on A even with the arg omitted (binding implies it; no ambiguity)", async () => {
+    // twoWorkspaceRegistry would 400 ambiguous for an unconstrained caller;
+    // a bound token resolves to its workspace instead.
+    const tool = makeGetOpenEditorsTool({
+      registry: twoWorkspaceRegistry(),
+      extensionRouter: respondingRouter(),
+    });
+    const out = await tool.handler({}, makeCtx(boundA));
+    expect(out.editors).toEqual([]);
+  });
+
+  it("AC-10 (the core proof): a token bound to A CANNOT act on B — rejected 403 before any extension call", async () => {
+    // Router throws if reached — proves the rejection happens at the gate,
+    // not downstream.
+    const router = new ExtensionToolRouter(() => {
+      throw new Error("router must not be reached on a binding violation");
+    });
+    const tool = makeGetOpenEditorsTool({
+      registry: twoWorkspaceRegistry(),
+      extensionRouter: router,
+    });
+    await expect(
+      tool.handler({ workspace: "b" }, makeCtx(boundA)),
+    ).rejects.toMatchObject({ code: 403, reason: "workspace_not_bound" });
+  });
+
+  it("AC-12: with two bindings, B's token cannot reach A and A's token cannot reach B", async () => {
+    const boundB: WorkspaceBinding = { kind: "bound", workspace: "b" };
+    const tool = makeGetOpenEditorsTool({
+      registry: twoWorkspaceRegistry(),
+      extensionRouter: respondingRouter(),
+    });
+    // A⊥B
+    await expect(
+      tool.handler({ workspace: "b" }, makeCtx(boundA)),
+    ).rejects.toMatchObject({ code: 403, reason: "workspace_not_bound" });
+    // B⊥A
+    await expect(
+      tool.handler({ workspace: "a" }, makeCtx(boundB)),
+    ).rejects.toMatchObject({ code: 403, reason: "workspace_not_bound" });
+    // each on its own → allowed
+    expect((await tool.handler({ workspace: "a" }, makeCtx(boundA))).editors).toEqual([]);
+    expect((await tool.handler({ workspace: "b" }, makeCtx(boundB))).editors).toEqual([]);
+  });
+
+  it("a bound-to-null token (non-binding approve) acts on NOTHING", async () => {
+    const router = new ExtensionToolRouter(() => {
+      throw new Error("router must not be reached");
+    });
+    const tool = makeGetOpenEditorsTool({
+      registry: singleWorkspaceRegistry(),
+      extensionRouter: router,
+    });
+    await expect(
+      tool.handler({}, makeCtx({ kind: "bound", workspace: null })),
+    ).rejects.toMatchObject({ code: 403, reason: "workspace_not_bound" });
+  });
+
+  it("the legacy unconstrained Bearer is unaffected (acts globally)", async () => {
+    const tool = makeGetOpenEditorsTool({
+      registry: singleWorkspaceRegistry(),
+      extensionRouter: respondingRouter(),
+    });
+    const out = await tool.handler(
+      {},
+      makeCtx({ kind: "unconstrained" }),
+    );
+    expect(out.editors).toEqual([]);
   });
 });

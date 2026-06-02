@@ -28,6 +28,8 @@ import type {
   GetDiagnosticsResponseMessage,
 } from "@claude-bridge/shared";
 import { ToolHandlerError } from "../dispatch.js";
+import type { WorkspaceBinding } from "../auth.js";
+import type { Logger } from "../../log/logger.js";
 
 // The extension router only sends inspection-tool requests today; if the
 // surface grows past these two, the union widens here.
@@ -210,6 +212,58 @@ export class ExtensionToolRouter {
 export interface WorkspaceListReader {
   list(): Array<{ id: string }>;
   resolve(id?: string): { id: string } | null;
+}
+
+/**
+ * T-P3-004a: the auth-layer isolation guarantee. Constrains a tool call's
+ * target workspace to the authenticated token's binding BEFORE registry
+ * resolution. This is the load-bearing enforcement point — every
+ * workspace-targeting tool routes its requested workspace through here.
+ *
+ *  - unconstrained (legacy global Bearer) / no binding → pass `requested`
+ *    through unchanged (pre-P3 behavior).
+ *  - bound to workspace W → the call may target only W: a `requested` that
+ *    differs is a binding violation (403, logged + surfaced); an omitted
+ *    `requested` resolves to W (the binding implies it — no ambiguity).
+ *  - bound to null (a non-binding approve, T-P3-002R) → acts on nothing;
+ *    every workspace-targeting tool is rejected.
+ *
+ * Returns the workspace identifier the call is permitted to target (or
+ * `requested` unchanged when unconstrained). Throws ToolHandlerError(403)
+ * on a binding violation.
+ */
+export function enforceBoundWorkspace(
+  binding: WorkspaceBinding | undefined,
+  requested: string | undefined,
+  logger?: Logger,
+): string | undefined {
+  if (binding === undefined || binding.kind === "unconstrained") {
+    return requested;
+  }
+  // Bound OAuth token.
+  if (binding.workspace === null) {
+    logger?.warn(
+      "auth: binding violation — bound token has no workspace; rejecting workspace-targeting tool",
+      { requested: requested ?? null },
+    );
+    throw new ToolHandlerError(
+      403,
+      "workspace_not_bound",
+      "this token is not bound to any workspace and may not act on a workspace",
+    );
+  }
+  if (requested !== undefined && requested !== binding.workspace) {
+    logger?.warn(
+      "auth: binding violation — token attempted cross-workspace access",
+      { bound_workspace: binding.workspace, requested },
+    );
+    throw new ToolHandlerError(
+      403,
+      "workspace_not_bound",
+      `this token is bound to workspace '${binding.workspace}' and may not act on '${requested}'`,
+    );
+  }
+  return binding.workspace;
 }
 
 export function resolveInspectionWorkspace(

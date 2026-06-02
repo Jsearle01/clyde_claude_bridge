@@ -14,9 +14,27 @@ export type AuthFailureReason =
   | "malformed_header"
   | "invalid_token";
 
+// T-P3-004a: the workspace constraint an authenticated request carries.
+// - "unconstrained": the legacy global static Bearer — no binding, retains
+//   pre-P3 global behavior (any registered workspace, per the tool's own
+//   resolution).
+// - "bound": an OAuth access token — may act ONLY on `workspace`. A null
+//   workspace (a non-binding approve, T-P3-002R) acts on NOTHING; the
+//   enforcement layer rejects every workspace-targeting tool.
+export type WorkspaceBinding =
+  | { kind: "unconstrained" }
+  | { kind: "bound"; workspace: string | null };
+
 export type AuthResult =
-  | { ok: true; token_suffix: string }
+  | { ok: true; token_suffix: string; binding: WorkspaceBinding }
   | { ok: false; reason: AuthFailureReason };
+
+// T-P3-004a: resolve a presented OAuth access token to its binding, or null
+// if unknown/expired. Injected by the caller (wraps TokenStore.lookup) so
+// auth.ts stays free of the token-store/persistence layer.
+export type OAuthTokenLookup = (
+  token: string,
+) => { bound_workspace: string | null } | null;
 
 // Resolve the Authorization header to a single string. Handles the array form
 // that Node's HTTP module can deliver in principle (cf. NodeJS.Dict index
@@ -38,6 +56,9 @@ function readAuthHeader(req: IncomingMessage): string | undefined {
 export function authenticate(
   req: IncomingMessage,
   expectedToken: string,
+  // T-P3-004a: optional OAuth-token resolver. When a presented token isn't
+  // the static Bearer, it is looked up here; a hit yields a bound result.
+  lookupOAuthToken?: OAuthTokenLookup,
 ): AuthResult {
   const header = readAuthHeader(req);
   if (header === undefined || header === "") {
@@ -56,9 +77,24 @@ export function authenticate(
     return { ok: false, reason: "malformed_header" };
   }
 
-  if (!constantTimeEqual(presented, expectedToken)) {
-    return { ok: false, reason: "invalid_token" };
+  // 1. Legacy global static Bearer (constant-time compare). Unconstrained.
+  if (constantTimeEqual(presented, expectedToken)) {
+    return {
+      ok: true,
+      token_suffix: presented.slice(-4),
+      binding: { kind: "unconstrained" },
+    };
   }
 
-  return { ok: true, token_suffix: presented.slice(-4) };
+  // 2. OAuth access token (T-P3-004a). A hit is workspace-bound.
+  const oauth = lookupOAuthToken?.(presented) ?? null;
+  if (oauth !== null) {
+    return {
+      ok: true,
+      token_suffix: presented.slice(-4),
+      binding: { kind: "bound", workspace: oauth.bound_workspace },
+    };
+  }
+
+  return { ok: false, reason: "invalid_token" };
 }

@@ -41,6 +41,13 @@ export function getClientsStorePath(): string {
   return join(getConfigDir(), "clients.json");
 }
 
+// T-P3-004a: durable OAuth access-token store (the binding's persistent
+// home). Separate file from clients.json (which holds DCR registrations) —
+// tokens have their own lifecycle (30-day TTL, single-use mint, unbind).
+export function getTokensStorePath(): string {
+  return join(getConfigDir(), "tokens.json");
+}
+
 export function expandTilde(p: string): string {
   if (p === "~") return getHome();
   if (p.startsWith("~/")) {

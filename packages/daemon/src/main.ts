@@ -35,9 +35,14 @@ import { TunnelManager } from "./tunnel/manager.js";
 import { IpcServer, type IpcHandlers } from "./ipc/server.js";
 import { WorkspacesStore } from "./workspace/store.js";
 import { ClientsStore } from "./oauth/clients-store.js";
+import { TokenStore } from "./oauth/token-store.js";
 import { ConsentManager } from "./oauth/consent.js";
 import { makeOAuthRouter } from "./oauth/router.js";
-import { getWorkspacesStorePath, getClientsStorePath } from "./config/paths.js";
+import {
+  getWorkspacesStorePath,
+  getClientsStorePath,
+  getTokensStorePath,
+} from "./config/paths.js";
 import { makeInitialState } from "./state.js";
 import { WorkspaceRegistryImpl } from "./workspace/registry.js";
 import { validateWorkspaceConfig } from "./workspace/config.js";
@@ -269,6 +274,13 @@ async function main(): Promise<void> {
   logger.info("oauth clients store initialized", {
     client_count: clientsStore.list().length,
   });
+  // T-P3-004a: durable access-token store (the binding's persistent home).
+  // Loaded once at startup; sweeps expired tokens on load.
+  const tokenStore = new TokenStore(getTokensStorePath(), Date.now, logger);
+  await tokenStore.load();
+  logger.info("oauth token store initialized", {
+    token_count: tokenStore.size(),
+  });
   const ipcServerRef: { current: IpcServer | null } = { current: null };
   const workspaceRegistry = new WorkspaceRegistryImpl(
     workspacesStore,
@@ -455,9 +467,21 @@ async function main(): Promise<void> {
     state,
     registry,
     // T-P3-001: OAuth bootstrap router mounted ahead of Bearer auth.
-    // Handles `/.well-known/oauth-authorization-server` and `/register`
+    // Handles `/.well-known/oauth-authorization-server`, `/register`,
+    // `/authorize`, `/authorize/status`, and (T-P3-004a) `/token`
     // unauthenticated; other paths fall through to MCP.
-    oauthHandler: makeOAuthRouter({ logger, clientsStore, consentManager }),
+    oauthHandler: makeOAuthRouter({
+      logger,
+      clientsStore,
+      consentManager,
+      tokenStore,
+    }),
+    // T-P3-004a: resolve OAuth access tokens to their binding at the auth
+    // layer, so a bound token is enforced to its workspace.
+    lookupOAuthToken: (token) => {
+      const b = tokenStore.lookup(token);
+      return b === null ? null : { bound_workspace: b.bound_workspace };
+    },
   });
   await mcpServer.start();
 

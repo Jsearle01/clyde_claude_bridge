@@ -29,7 +29,12 @@ import {
 import type { Logger } from "../log/logger.js";
 import type { AuditLog } from "../audit/log.js";
 import type { DaemonState } from "../state.js";
-import { authenticate, type AuthFailureReason } from "./auth.js";
+import {
+  authenticate,
+  type AuthFailureReason,
+  type WorkspaceBinding,
+  type OAuthTokenLookup,
+} from "./auth.js";
 import { onceOrError, promisifyCallback } from "../util/promises.js";
 import {
   ToolRegistry,
@@ -50,6 +55,10 @@ interface RequestContextData {
   // tools/call. Threaded into ToolContext so the approval gate can key
   // session-bypass state by (mcp_session_id + workspace_id).
   mcp_session_id?: string;
+  // T-P3-004a: the authenticated request's workspace binding (from
+  // authenticate()). Threaded into ToolContext so tool handlers enforce
+  // that an OAuth-bound token acts only on its bound workspace.
+  workspace_binding?: WorkspaceBinding;
 }
 
 // Module-scope ALS — one per process. Each HTTP request runs its async
@@ -88,6 +97,10 @@ export interface McpServerOpts {
   // Returns true when the request was handled (caller short-circuits);
   // false when the request should fall through to MCP routing.
   oauthHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  // T-P3-004a: resolve a presented OAuth access token to its binding (wraps
+  // TokenStore.lookup). Optional — when absent, only the static Bearer
+  // authenticates (legacy behavior; all OAuth tokens fail as invalid_token).
+  lookupOAuthToken?: OAuthTokenLookup;
 }
 
 export class McpBindError extends Error {
@@ -226,7 +239,11 @@ export class McpServer {
     mcpSessionId: string | undefined,
     startMs: number,
   ): void {
-    const authResult = authenticate(req, this.opts.getExpectedToken());
+    const authResult = authenticate(
+      req,
+      this.opts.getExpectedToken(),
+      this.opts.lookupOAuthToken,
+    );
     if (!authResult.ok) {
       res.writeHead(401);
       res.end();
@@ -241,12 +258,14 @@ export class McpServer {
     }
 
     // Authenticated — run the SDK dispatch inside an ALS context so the
-    // tools/call handler can read request_id and remote_addr.
+    // tools/call handler can read request_id, remote_addr, and the
+    // workspace binding (T-P3-004a) the enforcement layer uses.
     void requestContext.run(
       {
         request_id: requestId,
         remote_addr: remoteAddr,
         mcp_session_id: mcpSessionId,
+        workspace_binding: authResult.binding,
       },
       () =>
         transport.handleRequest(req, res).catch((err: unknown) => {
@@ -281,6 +300,7 @@ export class McpServer {
       request_id: ctxData.request_id,
       remote_addr: ctxData.remote_addr,
       mcp_session_id: ctxData.mcp_session_id,
+      workspaceBinding: ctxData.workspace_binding,
       auditLog: this.opts.auditLog,
       logger: this.opts.logger,
       state: this.opts.state,

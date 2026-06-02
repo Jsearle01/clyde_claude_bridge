@@ -92,3 +92,33 @@ export const OAuthClientsStoreSchema = z
   .strict();
 
 export type OAuthClientsStore = z.infer<typeof OAuthClientsStoreSchema>;
+
+// T-P3-004a: persisted access-token record (tokens.json entry). The
+// durable home for the workspace binding. The plaintext token is NEVER
+// stored — `token_hash` is its SHA-256 (fast per-request lookup; a 32-byte
+// random token has no brute-force concern, unlike a client_secret which
+// uses bcrypt). `bound_workspace` is the workspace identifier the token may
+// act on (null = a non-binding approve, which enforcement treats as
+// act-on-nothing). `granularity` is reserved for T-P3-005 (null here).
+export const OAuthTokenRecordSchema = z
+  .object({
+    token_hash: z.string().min(1),
+    client_id: z.string().min(1),
+    bound_workspace: z.string().nullable(),
+    granularity: z.string().nullable(),
+    issued_at: z.string(),
+    // Epoch milliseconds; expired tokens are rejected + swept.
+    expires_at: z.number().int(),
+  })
+  .strict();
+
+export type OAuthTokenRecord = z.infer<typeof OAuthTokenRecordSchema>;
+
+export const OAuthTokensStoreSchema = z
+  .object({
+    version: z.literal("1"),
+    tokens: z.array(OAuthTokenRecordSchema),
+  })
+  .strict();
+
+export type OAuthTokensStore = z.infer<typeof OAuthTokensStoreSchema>;

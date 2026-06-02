@@ -20,6 +20,7 @@ import type { WorkspaceRegistry } from "../../workspace/registry.js";
 import {
   ExtensionToolRouter,
   resolveInspectionWorkspace,
+  enforceBoundWorkspace,
 } from "./extension-router.js";
 
 export interface GetDiagnosticsDeps {
@@ -36,10 +37,14 @@ export function makeGetDiagnosticsTool(
       "Return LSP/extension diagnostics for the registered VS Code workspace, filtered by severity threshold. Read-only.",
     inputSchema: GetDiagnosticsInputSchema,
     async handler(input, ctx) {
-      const identifier = resolveInspectionWorkspace(
-        deps.registry,
+      // T-P3-004a: constrain the target to the token's binding before
+      // registry resolution (no-op for the legacy unbound Bearer).
+      const requested = enforceBoundWorkspace(
+        ctx.workspaceBinding,
         input.workspace,
+        ctx.logger,
       );
+      const identifier = resolveInspectionWorkspace(deps.registry, requested);
       ctx.setAuditMetadata?.({ workspace_id: identifier });
       const threshold = input.severity ?? "all";
       const severities = expandSeverityThreshold(threshold);

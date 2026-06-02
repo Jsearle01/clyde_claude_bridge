@@ -12,6 +12,7 @@ import {
   type DelegateOutput,
 } from "@claude-bridge/shared";
 import { ToolHandlerError, type ToolDef } from "../dispatch.js";
+import { enforceBoundWorkspace } from "./extension-router.js";
 import type { JobQueue } from "../../jobs/queue.js";
 import type { JobRunner } from "../../jobs/runner.js";
 import type { WorkspaceRegistry } from "../../workspace/registry.js";
@@ -99,15 +100,24 @@ export function makeDelegateTool(
       "Delegate a task to Claude Code running against a registered workspace. Returns a job id for polling.",
     inputSchema: DelegateInputSchema,
     async handler(input, ctx) {
+      // T-P3-004a: constrain the target to the token's binding before
+      // resolution. For a bound OAuth token, input.workspace must equal the
+      // bound workspace (else 403 binding violation); for the legacy unbound
+      // Bearer this is a no-op pass-through.
+      const requested = enforceBoundWorkspace(
+        ctx.workspaceBinding,
+        input.workspace,
+        ctx.logger,
+      );
       // Workspace resolution (T-P2-007: strict rejection on unknown
       // identifier; the wire schema now requires the workspace field, so
       // input.workspace is always defined here).
-      const workspace = deps.registry.resolve(input.workspace);
+      const workspace = deps.registry.resolve(requested);
       if (workspace === null) {
         throw new ToolHandlerError(
           503,
           "no_workspace_registered",
-          `no workspace registered with identifier '${input.workspace}'`,
+          `no workspace registered with identifier '${requested ?? input.workspace}'`,
         );
       }
 

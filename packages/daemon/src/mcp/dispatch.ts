@@ -12,6 +12,7 @@ import type { AuditLog } from "../audit/log.js";
 import type { Logger } from "../log/logger.js";
 import type { DaemonState } from "../state.js";
 import { hashInput } from "../audit/hash.js";
+import type { WorkspaceBinding } from "./auth.js";
 
 /** Optional metadata a tool handler may attach to its audit entry.
  * P1 delegation tools use this to record job_id + workspace_id. P0 tools
@@ -32,6 +33,10 @@ export interface ToolContext {
   // change. The approval gate uses it to key session-bypass state by
   // (mcp_session_id + workspace_id) so bypass never leaks across sessions.
   readonly mcp_session_id?: string;
+  // T-P3-004a: the authenticated request's workspace binding. Optional so
+  // P0 ctx-construction sites (tests, ping) compile unchanged; undefined is
+  // treated as "unconstrained" (legacy global) by the enforcement helper.
+  readonly workspaceBinding?: WorkspaceBinding;
   readonly auditLog: AuditLog;
   readonly logger: Logger;
   readonly state: DaemonState;

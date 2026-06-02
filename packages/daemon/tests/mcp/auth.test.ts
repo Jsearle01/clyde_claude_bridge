@@ -88,4 +88,54 @@ describe("authenticate", () => {
     expect(result.token_suffix).toBe("AAAA");
     expect(INERT_TOKEN).toContain(result.token_suffix);
   });
+
+  // T-P3-004a: binding + OAuth-token coexistence.
+  it("the static Bearer authenticates as UNCONSTRAINED (legacy global)", () => {
+    const result = authenticate(
+      makeReq({ authorization: `Bearer ${INERT_TOKEN}` }),
+      INERT_TOKEN,
+      () => null, // OAuth lookup present but the Bearer wins first
+    );
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.binding).toEqual({ kind: "unconstrained" });
+  });
+
+  it("an OAuth token (not the Bearer) authenticates as BOUND to its workspace", () => {
+    const result = authenticate(
+      makeReq({ authorization: "Bearer cb_tok_deadbeef" }),
+      INERT_TOKEN,
+      (tok) =>
+        tok === "cb_tok_deadbeef" ? { bound_workspace: "workspace-A" } : null,
+    );
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.binding).toEqual({ kind: "bound", workspace: "workspace-A" });
+    expect(result.token_suffix).toBe("beef");
+  });
+
+  it("an OAuth token bound to null authenticates as bound-to-null (acts on nothing)", () => {
+    const result = authenticate(
+      makeReq({ authorization: "Bearer cb_tok_nullbind" }),
+      INERT_TOKEN,
+      () => ({ bound_workspace: null }),
+    );
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.binding).toEqual({ kind: "bound", workspace: null });
+  });
+
+  it("an unknown token (neither Bearer nor in the OAuth store) → invalid_token", () => {
+    const result = authenticate(
+      makeReq({ authorization: "Bearer cb_tok_unknown" }),
+      INERT_TOKEN,
+      () => null,
+    );
+    expect(result).toEqual({ ok: false, reason: "invalid_token" });
+  });
+
+  it("with no OAuth lookup provided, a non-Bearer token → invalid_token (legacy behavior)", () => {
+    const result = authenticate(
+      makeReq({ authorization: "Bearer cb_tok_whatever" }),
+      INERT_TOKEN,
+    );
+    expect(result).toEqual({ ok: false, reason: "invalid_token" });
+  });
 });

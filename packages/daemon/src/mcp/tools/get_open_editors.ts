@@ -17,6 +17,7 @@ import type { WorkspaceRegistry } from "../../workspace/registry.js";
 import {
   ExtensionToolRouter,
   resolveInspectionWorkspace,
+  enforceBoundWorkspace,
 } from "./extension-router.js";
 
 export interface GetOpenEditorsDeps {
@@ -33,10 +34,14 @@ export function makeGetOpenEditorsTool(
       "Return the list of currently-open editor tabs in the registered VS Code workspace, with active/dirty metadata. Read-only.",
     inputSchema: GetOpenEditorsInputSchema,
     async handler(input, ctx) {
-      const identifier = resolveInspectionWorkspace(
-        deps.registry,
+      // T-P3-004a: constrain the target to the token's binding before
+      // registry resolution (no-op for the legacy unbound Bearer).
+      const requested = enforceBoundWorkspace(
+        ctx.workspaceBinding,
         input.workspace,
+        ctx.logger,
       );
+      const identifier = resolveInspectionWorkspace(deps.registry, requested);
       ctx.setAuditMetadata?.({ workspace_id: identifier });
       const response = await deps.extensionRouter.send(
         identifier,

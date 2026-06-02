@@ -18,12 +18,16 @@ import { handleAuthorize } from "./authorize.js";
 import { handleMetadata } from "./metadata.js";
 import { handleRegister } from "./register.js";
 import { handleStatus } from "./status.js";
+import { handleToken } from "./token-endpoint.js";
+import type { TokenStore } from "./token-store.js";
 
 const METADATA_PATH = "/.well-known/oauth-authorization-server";
 const REGISTER_PATH = "/register";
 // T-P3-002: consent flow endpoints.
 const AUTHORIZE_PATH = "/authorize";
 const AUTHORIZE_STATUS_PATH = "/authorize/status";
+// T-P3-004a: token endpoint.
+const TOKEN_PATH = "/token";
 
 export interface OAuthRouterDeps {
   logger: Logger;
@@ -32,6 +36,10 @@ export interface OAuthRouterDeps {
   // route to false (MCP fall-through) so legacy callers don't suddenly
   // see new endpoints. Production wiring passes a real manager.
   consentManager?: ConsentManager;
+  // T-P3-004a: optional. When omitted, /token falls through. Production
+  // wiring passes a real store; /token needs both consentManager (redeem)
+  // and tokenStore (mint) to function.
+  tokenStore?: TokenStore;
 }
 
 function pathOf(req: IncomingMessage): string {
@@ -72,6 +80,19 @@ export function makeOAuthRouter(
       await handleStatus(req, res, {
         logger: deps.logger,
         consentManager: deps.consentManager,
+      });
+      return true;
+    }
+    if (
+      path === TOKEN_PATH &&
+      deps.consentManager !== undefined &&
+      deps.tokenStore !== undefined
+    ) {
+      await handleToken(req, res, {
+        logger: deps.logger,
+        clientsStore: deps.clientsStore,
+        consentManager: deps.consentManager,
+        tokenStore: deps.tokenStore,
       });
       return true;
     }
