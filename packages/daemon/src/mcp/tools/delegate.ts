@@ -169,6 +169,11 @@ export function makeDelegateTool(
             },
             timestamp: new Date().toISOString(),
           },
+          // T-P3-005: per-operation granularity (the operator's handoff
+          // choice) + the token binding (its default granularity, or the
+          // Bearer fallback to the per-workspace mode).
+          input.granularity,
+          ctx.workspaceBinding,
         );
         if (decision === "deny") {
           throw new ToolHandlerError(

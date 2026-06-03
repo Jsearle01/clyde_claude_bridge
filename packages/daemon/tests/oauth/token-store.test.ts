@@ -200,14 +200,25 @@ describe("T-P3-004b — AC-12d: a REVOKED token authenticates as INVALID, never 
       client_id: "c1",
       bound_workspace: "ws-A",
     });
-    const lookup = (t: string): { bound_workspace: string | null } | null =>
-      store.lookup(t);
+    const lookup = (
+      t: string,
+    ): { bound_workspace: string | null; granularity: null } | null => {
+      const b = store.lookup(t);
+      return b === null
+        ? null
+        : { bound_workspace: b.bound_workspace, granularity: null };
+    };
 
-    // Before revoke: the token authenticates, bound to ws-A.
+    // Before revoke: the token authenticates, bound to ws-A (T-P3-005: the
+    // binding now carries a default granularity, null here).
     const before = authenticate(reqWith(access_token), STATIC_BEARER, lookup);
     expect(before.ok).toBe(true);
     if (before.ok) {
-      expect(before.binding).toEqual({ kind: "bound", workspace: "ws-A" });
+      expect(before.binding).toEqual({
+        kind: "bound",
+        workspace: "ws-A",
+        granularity: null,
+      });
     }
 
     // Revoke (unbind), then present the SAME token again.

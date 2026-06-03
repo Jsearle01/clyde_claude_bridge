@@ -10,10 +10,12 @@ import { WorkspacesStore } from "../../src/workspace/store.js";
 import {
   ApprovalGateImpl,
   awaitApprovalForDelegation,
+  resolveOperationGranularity,
   truncateForApproval,
   generateDelegationId,
 } from "../../src/approval/gate.js";
 import { PendingApprovalRegistry } from "../../src/approval/pending.js";
+import type { WorkspaceBinding } from "../../src/mcp/auth.js";
 import type { ApprovalRequest } from "@claude-bridge/shared";
 
 function makeRequest(delegation_id = "d_test_1", identifier = "ws-aaaaaa"): ApprovalRequest {
@@ -267,5 +269,139 @@ describe("helpers (T-P2-008)", () => {
     const b = generateDelegationId();
     expect(a).not.toBe(b);
     expect(a.startsWith("d_")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-P3-005 — per-operation granularity + gate re-key
+// ---------------------------------------------------------------------------
+
+const BOUND = (
+  granularity: "per_call" | "task" | "auto" | null,
+): WorkspaceBinding => ({ kind: "bound", workspace: "ws-aaaaaa", granularity });
+const UNCONSTRAINED: WorkspaceBinding = { kind: "unconstrained" };
+
+describe("resolveOperationGranularity (T-P3-005 — resolution order)", () => {
+  let tempDir: string;
+  let store: WorkspacesStore;
+  let gate: ApprovalGateImpl;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "cb-gran-"));
+    store = new WorkspacesStore(join(tempDir, "workspaces.json"));
+    await store.load();
+    await store.addTrustedEntry({ abs_path: "/p", identifier: "ws-aaaaaa", name: "WS" });
+    gate = new ApprovalGateImpl(store, new PendingApprovalRegistry(), () => Promise.resolve());
+  });
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("1. the operation's explicit granularity wins over everything", () => {
+    expect(resolveOperationGranularity("auto", BOUND("per_call"), gate, "ws-aaaaaa")).toBe("auto");
+  });
+
+  it("2. else an OAuth binding's default granularity is used", () => {
+    expect(resolveOperationGranularity(undefined, BOUND("task"), gate, "ws-aaaaaa")).toBe("task");
+  });
+
+  it("2b. an OAuth binding with NULL default → per_call fail-safe (never the per-workspace mode)", async () => {
+    await gate.setModeForWorkspace("ws-aaaaaa", "auto"); // would be 'auto' for Bearer
+    // but a bound token with null default must NOT borrow it — fail-safe to per_call.
+    expect(resolveOperationGranularity(undefined, BOUND(null), gate, "ws-aaaaaa")).toBe("per_call");
+  });
+
+  it("3. legacy Bearer (unconstrained) falls back to the per-workspace mode", async () => {
+    await gate.setModeForWorkspace("ws-aaaaaa", "auto");
+    expect(resolveOperationGranularity(undefined, UNCONSTRAINED, gate, "ws-aaaaaa")).toBe("auto");
+  });
+
+  it("3b. no binding info (internal/test callers) also uses the per-workspace mode", () => {
+    expect(resolveOperationGranularity(undefined, undefined, gate, "ws-aaaaaa")).toBe("per_call");
+  });
+
+  it("deprecated session_bypass mode normalizes to per_call", async () => {
+    await gate.setModeForWorkspace("ws-aaaaaa", "session_bypass");
+    expect(resolveOperationGranularity(undefined, UNCONSTRAINED, gate, "ws-aaaaaa")).toBe("per_call");
+  });
+
+  it("fail-safe: unspecified everywhere → per_call (never auto/unsupervised)", () => {
+    expect(resolveOperationGranularity(undefined, BOUND(null), gate, "ws-aaaaaa")).toBe("per_call");
+  });
+});
+
+describe("awaitApprovalForDelegation — granularity behavior (T-P3-005 AC-13/14/15)", () => {
+  let tempDir: string;
+  let store: WorkspacesStore;
+  let pending: PendingApprovalRegistry;
+  let gate: ApprovalGateImpl;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "cb-gran-await-"));
+    store = new WorkspacesStore(join(tempDir, "workspaces.json"));
+    await store.load();
+    await store.addTrustedEntry({ abs_path: "/p", identifier: "ws-aaaaaa", name: "WS" });
+    pending = new PendingApprovalRegistry();
+    gate = new ApprovalGateImpl(store, pending, () => Promise.resolve());
+  });
+  afterEach(async () => {
+    await pending.stop();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("AC-13: granularity=auto skips the prompt (approve, no modal)", async () => {
+    const d = await awaitApprovalForDelegation(gate, "s", "ws-aaaaaa", makeRequest(), "auto");
+    expect(d).toBe("approve");
+    expect(gate.pendingSize()).toBe(0);
+  });
+
+  it("AC-13: granularity=per_call prompts each call (no bypass set on plain approve)", async () => {
+    const req = makeRequest();
+    const p = awaitApprovalForDelegation(gate, "s", "ws-aaaaaa", req, "per_call");
+    gate.resolveApproval(req.delegation_id, "approve");
+    await expect(p).resolves.toBe("approve");
+    // plain approve under per_call does NOT bypass → next call still prompts.
+    expect(gate.isSessionBypassed("s", "ws-aaaaaa")).toBe(false);
+  });
+
+  it("AC-13: granularity=task approves once then runs (first prompts + sets bypass; second skips)", async () => {
+    const req1 = makeRequest("d1");
+    const p1 = awaitApprovalForDelegation(gate, "s", "ws-aaaaaa", req1, "task");
+    gate.resolveApproval(req1.delegation_id, "approve"); // a PLAIN approve
+    await expect(p1).resolves.toBe("approve");
+    expect(gate.isSessionBypassed("s", "ws-aaaaaa")).toBe(true); // task → approve-once
+
+    // Second call in the same operation/session: no prompt.
+    const d2 = await awaitApprovalForDelegation(gate, "s", "ws-aaaaaa", makeRequest("d2"), "task");
+    expect(d2).toBe("approve");
+    expect(gate.pendingSize()).toBe(0);
+  });
+
+  it("AC-14: the call's granularity governs regardless of the per-workspace mode", async () => {
+    await gate.setModeForWorkspace("ws-aaaaaa", "auto"); // workspace mode says auto…
+    const req = makeRequest();
+    // …but the operation specifies per_call → it prompts (operation wins).
+    const p = awaitApprovalForDelegation(gate, "s", "ws-aaaaaa", req, "per_call");
+    expect(gate.pendingSize()).toBe(1);
+    gate.resolveApproval(req.delegation_id, "approve");
+    await p;
+  });
+
+  it("AC-15 / Bearer: a bound token's default granularity drives the gate", async () => {
+    const req = makeRequest();
+    // No call granularity; the bound binding carries default=auto.
+    const d = await awaitApprovalForDelegation(
+      gate, "s", "ws-aaaaaa", req, undefined, BOUND("auto"),
+    );
+    expect(d).toBe("approve");
+    expect(gate.pendingSize()).toBe(0);
+  });
+
+  it("legacy Bearer path preserved: unconstrained binding uses the per-workspace mode", async () => {
+    await gate.setModeForWorkspace("ws-aaaaaa", "auto");
+    const d = await awaitApprovalForDelegation(
+      gate, "s", "ws-aaaaaa", makeRequest(), undefined, UNCONSTRAINED,
+    );
+    expect(d).toBe("approve"); // workspace auto mode → approve
   });
 });

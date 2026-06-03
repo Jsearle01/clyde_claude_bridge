@@ -93,6 +93,23 @@ export const OAuthClientsStoreSchema = z
 
 export type OAuthClientsStore = z.infer<typeof OAuthClientsStoreSchema>;
 
+// T-P3-005: per-operation approval granularity. Selected by the operator
+// at handoff and relayed on the delegate call; the token may carry a
+// non-null DEFAULT. Resolution (at the gate): operation → binding default →
+// per_call fail-safe.
+//   per_call — gate every gated step (watch closely).
+//   task     — approve once, then the operation runs (reuses the runtime
+//              session-bypass mechanic).
+//   auto     — no discretionary delegation prompt. (At T-P3-005 this only
+//              governs the existing prompt; the always-gate floor `auto`
+//              runs within is T-P3-006 — `auto` is NOT "never stops".)
+export const OperationGranularitySchema = z.enum([
+  "per_call",
+  "task",
+  "auto",
+]);
+export type OperationGranularity = z.infer<typeof OperationGranularitySchema>;
+
 // T-P3-004a: persisted access-token record (tokens.json entry). The
 // durable home for the workspace binding. The plaintext token is NEVER
 // stored — `token_hash` is its SHA-256 (fast per-request lookup; a 32-byte
@@ -105,7 +122,9 @@ export const OAuthTokenRecordSchema = z
     token_hash: z.string().min(1),
     client_id: z.string().min(1),
     bound_workspace: z.string().nullable(),
-    granularity: z.string().nullable(),
+    // T-P3-005: the binding's DEFAULT granularity (enum-or-null; null =
+    // unspecified → the gate falls through to its per_call fail-safe).
+    granularity: OperationGranularitySchema.nullable(),
     issued_at: z.string(),
     // Epoch milliseconds; expired tokens are rejected + swept.
     expires_at: z.number().int(),

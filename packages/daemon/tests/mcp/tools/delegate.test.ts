@@ -323,6 +323,36 @@ describe("delegate_to_claude_code — approval gate (T-P2-008)", () => {
     expect(gate.requestApproval).toHaveBeenCalledTimes(1);
   });
 
+  it("T-P3-005: a per-operation granularity=auto on the delegate call skips the gate even when the workspace mode is per_call", async () => {
+    const gate = makeStubGate("per_call"); // workspace default would prompt…
+    const requestSpy = vi.fn(gate.requestApproval);
+    const wrapped: ApprovalGate = { ...gate, requestApproval: requestSpy };
+    const deps = makeDeps({ gate: wrapped });
+    const tool = makeDelegateTool(deps);
+    // …but the operation specifies auto → no prompt (operation wins).
+    const out = await tool.handler(
+      { ...baseInput, granularity: "auto" },
+      makeCtx(auditLog),
+    );
+    expect(out.status).toBe("queued");
+    expect(requestSpy).not.toHaveBeenCalled();
+  });
+
+  it("T-P3-005: granularity=per_call on the call prompts even when the workspace mode is auto", async () => {
+    const gate: ApprovalGate = {
+      ...makeStubGate("auto"), // workspace default would skip…
+      requestApproval: vi.fn(() => Promise.resolve("approve")),
+    };
+    const deps = makeDeps({ gate });
+    const tool = makeDelegateTool(deps);
+    const out = await tool.handler(
+      { ...baseInput, granularity: "per_call" },
+      makeCtx(auditLog),
+    );
+    expect(out.status).toBe("queued");
+    expect(gate.requestApproval).toHaveBeenCalledTimes(1); // operation forced a prompt
+  });
+
   it("session_bypass when cached short-circuits the gate", async () => {
     const gate = makeStubGate("session_bypass");
     // makeCtx leaves mcp_session_id undefined → handler passes undefined as

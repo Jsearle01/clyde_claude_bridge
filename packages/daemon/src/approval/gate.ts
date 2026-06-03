@@ -4,13 +4,18 @@
 // whether to skip (auto mode), prompt (per_call or session_bypass-cold), or
 // pass-through (session_bypass-warm).
 
-import type { ApprovalRequest, WorkspaceMode } from "@claude-bridge/shared";
+import type {
+  ApprovalRequest,
+  WorkspaceMode,
+  OperationGranularity,
+} from "@claude-bridge/shared";
 import {
   PendingApprovalRegistry,
   type ApprovalDecision,
   ApprovalRejectedError,
 } from "./pending.js";
 import type { WorkspacesStore } from "../workspace/store.js";
+import type { WorkspaceBinding } from "../mcp/auth.js";
 
 export interface ApprovalGate {
   getModeForWorkspace(identifier: string): WorkspaceMode;
@@ -139,28 +144,71 @@ export class ApprovalGateImpl implements ApprovalGate {
 //
 // The gate's calling convention: caller pre-computes the workspace's mode
 // (cheap: store lookup) and only calls this when the mode is not "auto".
+/**
+ * T-P3-005: resolve the granularity that governs THIS delegation.
+ * Resolution order — operation overrides binding-default overrides fail-safe:
+ *   1. the delegate call's explicit `granularity` (the per-operation choice);
+ *   2. else, for an OAuth-bound token, its default granularity (or per_call
+ *      if the token carries none — the fail-safe, NEVER the per-workspace mode);
+ *   3. else (legacy global Bearer, or no binding info — e.g. internal/test
+ *      callers) the per-workspace mode (auto|per_call; the deprecated
+ *      `session_bypass` value normalizes to per_call). This is the only
+ *      surviving use of `getModeForWorkspace` — the Bearer fallback.
+ * Unspecified never means "unsupervised": the floor is always per_call.
+ */
+export function resolveOperationGranularity(
+  callGranularity: OperationGranularity | undefined,
+  binding: WorkspaceBinding | undefined,
+  gate: ApprovalGate,
+  identifier: string,
+): OperationGranularity {
+  if (callGranularity !== undefined) return callGranularity;
+  if (binding !== undefined && binding.kind === "bound") {
+    return binding.granularity ?? "per_call";
+  }
+  // Legacy Bearer (unconstrained) or no binding info: the per-workspace mode.
+  const mode = gate.getModeForWorkspace(identifier);
+  return mode === "session_bypass" ? "per_call" : mode;
+}
+
 export async function awaitApprovalForDelegation(
   gate: ApprovalGate,
   sessionId: string | undefined,
   identifier: string,
   request: ApprovalRequest,
+  // T-P3-005: optional so existing internal/test callers (no binding) keep
+  // compiling — they fall through to the per-workspace-mode (Bearer) path,
+  // preserving pre-005 behavior exactly.
+  callGranularity?: OperationGranularity,
+  binding?: WorkspaceBinding,
 ): Promise<ApprovalDecision> {
-  const mode = gate.getModeForWorkspace(identifier);
-  if (mode === "auto") {
+  const granularity = resolveOperationGranularity(
+    callGranularity,
+    binding,
+    gate,
+    identifier,
+  );
+
+  // `auto` — no discretionary delegation prompt. NOTE: this is NOT "never
+  // stops": the always-gate floor (sandbox-escape / irreversible / recursive)
+  // that `auto` runs within arrives in T-P3-006. At this layer `auto` only
+  // skips the existing delegation prompt.
+  if (granularity === "auto") {
     return "approve";
   }
-  // C-30 fix (T-P2-008.7): honor a prior "Approve for this session"
-  // regardless of the persistent mode. Previously this check was gated on
-  // `mode === "session_bypass"`, which never held for the default
-  // `per_call` mode — so the bypass that approve_session set was never
-  // consulted and the modal re-fired on every call. Bypass is runtime-only
-  // state keyed by (mcp_session_id + workspace_id); once set, subsequent
-  // calls in the same MCP session for the same workspace skip the modal.
+  // Honor a prior approve-once bypass (C-30 / T-P2-008.7), keyed by
+  // (mcp_session_id + workspace_id). `task` is exactly this approve-once
+  // mechanic; `per_call` also honors a bypass set by an explicit
+  // "approve for this session" escalation.
   if (gate.isSessionBypassed(sessionId, identifier)) {
     return "approve";
   }
   const decision = await gate.requestApproval(request);
-  if (decision === "approve_session") {
+  const approved = decision === "approve" || decision === "approve_session";
+  // `task`: ANY approve becomes approve-once for the operation/session.
+  // `per_call`: only an explicit "approve for this session" sets the bypass
+  // (the operator can still escalate mid-operation).
+  if (approved && (granularity === "task" || decision === "approve_session")) {
     gate.markSessionBypassed(sessionId, identifier);
   }
   return decision;

@@ -7,6 +7,7 @@
 // On mismatch, `constantTimeEqual` from T-0006 enforces timing-safety.
 
 import type { IncomingMessage } from "node:http";
+import type { OperationGranularity } from "@claude-bridge/shared";
 import { constantTimeEqual } from "../config/token.js";
 
 export type AuthFailureReason =
@@ -23,7 +24,13 @@ export type AuthFailureReason =
 //   enforcement layer rejects every workspace-targeting tool.
 export type WorkspaceBinding =
   | { kind: "unconstrained" }
-  | { kind: "bound"; workspace: string | null };
+  | {
+      kind: "bound";
+      workspace: string | null;
+      // T-P3-005: the binding's default operation granularity (null =
+      // unspecified → the gate resolves to its per_call fail-safe).
+      granularity: OperationGranularity | null;
+    };
 
 export type AuthResult =
   | { ok: true; token_suffix: string; binding: WorkspaceBinding }
@@ -31,10 +38,14 @@ export type AuthResult =
 
 // T-P3-004a: resolve a presented OAuth access token to its binding, or null
 // if unknown/expired. Injected by the caller (wraps TokenStore.lookup) so
-// auth.ts stays free of the token-store/persistence layer.
+// auth.ts stays free of the token-store/persistence layer. T-P3-005: carries
+// the token's default granularity through to the binding.
 export type OAuthTokenLookup = (
   token: string,
-) => { bound_workspace: string | null } | null;
+) => {
+  bound_workspace: string | null;
+  granularity: OperationGranularity | null;
+} | null;
 
 // Resolve the Authorization header to a single string. Handles the array form
 // that Node's HTTP module can deliver in principle (cf. NodeJS.Dict index
@@ -92,7 +103,11 @@ export function authenticate(
     return {
       ok: true,
       token_suffix: presented.slice(-4),
-      binding: { kind: "bound", workspace: oauth.bound_workspace },
+      binding: {
+        kind: "bound",
+        workspace: oauth.bound_workspace,
+        granularity: oauth.granularity,
+      },
     };
   }
 

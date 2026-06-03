@@ -10,6 +10,7 @@
 import { z } from "zod";
 import { JobStatusSchema } from "./jobs.js";
 import { PartialProgressSchema } from "./jobs.js";
+import { OperationGranularitySchema } from "./oauth.js";
 
 // ---------- nested record types ----------
 
@@ -117,6 +118,11 @@ export const DelegateInputSchema = z
     model: z.string().optional(),
     max_turns: z.number().int().min(1).max(200).optional(),
     working_directory: z.string().optional(),
+    // T-P3-005: per-operation approval granularity (the operator's
+    // handoff-time choice, relayed by claude.ai). Optional — when omitted,
+    // the gate resolves binding-default → per_call fail-safe. Distinct from
+    // `mode` (read_only/agentic = the SDK permission level, not approval).
+    granularity: OperationGranularitySchema.optional(),
   })
   .strict();
 export type DelegateInput = z.infer<typeof DelegateInputSchema>;

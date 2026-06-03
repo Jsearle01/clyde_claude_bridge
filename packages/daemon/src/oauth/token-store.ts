@@ -21,6 +21,7 @@ import {
   OAuthTokensStoreSchema,
   type OAuthTokenRecord,
   type OAuthTokensStore,
+  type OperationGranularity,
 } from "@claude-bridge/shared";
 import type { Logger } from "../log/logger.js";
 
@@ -56,7 +57,7 @@ export class TokensStoreVersionUnsupportedError extends Error {
 export interface TokenBinding {
   client_id: string;
   bound_workspace: string | null;
-  granularity: string | null;
+  granularity: OperationGranularity | null;
 }
 
 export class TokenStore {
@@ -100,7 +101,7 @@ export class TokenStore {
   async mint(args: {
     client_id: string;
     bound_workspace: string | null;
-    granularity?: string | null;
+    granularity?: OperationGranularity | null;
   }): Promise<{ access_token: string; expires_in_s: number }> {
     this.assertLoaded();
     const token = generateAccessToken();

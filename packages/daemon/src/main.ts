@@ -486,7 +486,11 @@ async function main(): Promise<void> {
     // layer, so a bound token is enforced to its workspace.
     lookupOAuthToken: (token) => {
       const b = tokenStore.lookup(token);
-      return b === null ? null : { bound_workspace: b.bound_workspace };
+      // T-P3-005: carry the token's default granularity so the gate can
+      // read the binding-default (resolution: operation → default → per_call).
+      return b === null
+        ? null
+        : { bound_workspace: b.bound_workspace, granularity: b.granularity };
     },
   });
   await mcpServer.start();

@@ -215,10 +215,13 @@ interface ModeMenuItem extends vscode.QuickPickItem {
   mode: WorkspaceMode;
 }
 
+// T-P3-005: the per-workspace mode is the legacy Bearer fallback (OAuth
+// operations carry per-operation granularity instead). The deprecated
+// `session_bypass` value is no longer offered — it behaved identically to
+// per_call (its approve-once role is now the `task` granularity).
 const MODE_PICK_ITEMS: ModeMenuItem[] = [
   { label: "Auto (no prompts)", mode: "auto" },
   { label: "Per call (default)", mode: "per_call" },
-  { label: "Session bypass", mode: "session_bypass" },
 ];
 
 async function dispatchAction(
