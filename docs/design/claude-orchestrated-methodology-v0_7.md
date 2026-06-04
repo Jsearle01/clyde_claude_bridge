@@ -215,6 +215,10 @@ Every task's actual elapsed time and variance gets recorded in a calibration log
 
 This data drives the empirical band table refinement (§5.2). Without explicit arithmetic in verdicts, the data is unreliable.
 
+**Standing executor step (end-of-dispatch — added 2026-06-03 after CB-CALIBRATION-AUDIT).** Maintaining the log is **not** a verdict-time-only activity: appending the datapoint is a **standing step in the executor's end-of-dispatch protocol**, performed every task alongside commit-and-push — exactly parallel to §3.6's pool capture. Immediately after the commit-push that completes the task, the executor appends one row to `docs/calibration-log.md` recording: task id, task shape, the **dispatch-receipt timestamp and the commit-push timestamp with the computed wall-clock delta** (the *measured* C-35 value per §10.8 — a real clock reading, not an estimate), the dispatch's predicted band(s), and the C-14 classification. The measured number thus flows to **both** the report's C-35 block (§10.8) **and** the log row, by default, every task.
+
+This step is mandatory because it once **silently dropped**: from the v0.6 codification task (T-P2-014) through all of P3 (T-P3-002R … T-P3-005), the C-35 block appeared in reports but **no log row was appended** — measured/estimated numbers flowed into a void and the §5.2 band table went stale (zero P3 datapoints). Codifying the measurement rule (§10.8) was necessary but **not sufficient**: a metrics-fed loop also requires that the data **destination** be a standing step that cannot quietly fall out of a dispatch. Verify periodically that the data still *flows* end-to-end (measured → logged → consumed in §5.2), not merely that the rule still exists in the document. (The estimate escape-hatch in §10.8 applies **only** to a *named* interruption — never as a blanket "no precise clock" default; that default was the drift this step exists to prevent.)
+
 ### 3.5 Report formats
 
 **Form B (standard):** the structure described in §2.4 above. Used for all non-trivial tasks. Required for empirical-band-feeding tasks.

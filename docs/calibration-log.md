@@ -4,6 +4,15 @@ Per methodology v0.4 §3.5.1 timing block and Appendix D. Captures predicted-buc
 
 P0 timing data lives in `project-state.md` § "Final P0 calibration summary" and Appendix D of `claude-orchestrated-methodology-v0_4.md`. This log starts at P1.
 
+## P3 (P3-prime / OAuth + autonomy)
+
+> **⚠️ MEASUREMENT/LOGGING GAP — T-P3-002R through T-P3-005 (no data, honest hole).**
+> These five P3 tasks have **no calibration-log rows**. Per CB-CALIBRATION-AUDIT (2026-06-03): from the v0.6-codification task (T-P2-014) onward, executor reports shifted to estimate-grade C-35 blocks, and after the P2 gate close (T-P2-015) the per-task **log-append step silently dropped out of dispatches** — so even the reported numbers never reached this log. The numbers cannot be honestly reconstructed (reconstructing from commit timestamps would be the exact estimate-as-measurement failure being repaired), so the gap is **left as documented empty space, not back-filled**. Measurement + logging are restored as a standing executor step (methodology §3.4) starting with CB-CALIBRATION-REPAIR below.
+
+| Task | Shape | Predicted band | Actual (measured) | C-14 class | Notes |
+|---|---|---|---|---|---|
+| CB-CALIBRATION-REPAIR | methodology-repair + pool-capture | (none stated in dispatch; analog: doc-edit + pool-capture ~10-20 min) | **≈5 min — MEASURED** (20:18:20 dispatch-receipt → ~20:23 commit-push; 4.5 min to work-complete) | sub-band-low (vs ~10-20 analog) | First restored P3-era datapoint — real clock reading (not an estimate), proving the restored pipeline end-to-end. Small surgical scope: methodology §3.4 standing log-append step + this gap-marker + 2 pool candidates (M-N correction + degradation lesson). Docs/pool only; no source/test. Sub-band because the edits were few + targeted and the analog band assumed more surface. |
+
 ## P1
 
 | Task | Phase | Predicted bucket | Predicted range | Actual | Variance vs midpoint | Notes |
