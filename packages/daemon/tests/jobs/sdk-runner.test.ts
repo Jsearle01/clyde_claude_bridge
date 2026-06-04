@@ -154,7 +154,8 @@ describe.skipIf(!HAS_KEY)("SdkJobRunner — live smoke (ANTHROPIC_API_KEY requir
     // The block message should appear in the transcript as a tool_result.
     const transcriptPath = join(configDir, "transcripts", `${job.id}.jsonl`);
     const content = readFileSync(transcriptPath, "utf8");
-    expect(content).toMatch(/Blocked by claude-bridge deny list/);
+    // T-P3-006: the deny-list is now part of the floor; message prefix changed.
+    expect(content).toMatch(/Blocked by claude-bridge floor/);
   }, 90_000);
 
   it("smoke #4 cancellation: long delegation cancelled reaches terminal cancelled within 15s", async () => {

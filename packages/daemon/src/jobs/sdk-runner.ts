@@ -38,6 +38,8 @@ import type {
 } from "@claude-bridge/shared";
 import type { Logger } from "../log/logger.js";
 import type { JobQueue } from "./queue.js";
+import { checkToolFloor } from "./floor.js";
+import { getConfigDir } from "../config/paths.js";
 import { assembleReport } from "./report.js";
 import { takeSnapshot } from "./snapshot.js";
 import { TranscriptWriter, transcriptPath } from "./transcript.js";
@@ -47,20 +49,10 @@ import type { WorkspaceRegistry } from "../workspace/registry.js";
 
 const INTERRUPT_TIMEOUT_MS = 10_000;
 
-// Bash command deny patterns sourced from `docs/design/00-overview.md`
-// §"Bash deny list". P1 hardcoded set — P2 will layer per-workspace
-// .claude-bridge.json overrides on top of this base.
-const BASH_DENY_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\brm\s+(-[rRf]+\s+)*\/(?:\s|$)/, reason: "rm of root filesystem" },
-  { pattern: /\bdd\s+.*of=\/dev\//, reason: "dd to device file" },
-  { pattern: /\bsudo\b/, reason: "sudo invocation" },
-  { pattern: /\bnpm\s+install\b/, reason: "npm install" },
-  { pattern: /\bpip\s+install\b/, reason: "pip install" },
-  { pattern: /\bapt(-get)?\s+install\b/, reason: "apt install" },
-  { pattern: /\bbrew\s+install\b/, reason: "brew install" },
-  { pattern: /(\$HOME|~|\/)\/?\.ssh(\/|\b)/, reason: "~/.ssh access" },
-  { pattern: /(\$HOME|~|\/)\/?\.aws(\/|\b)/, reason: "~/.aws access" },
-];
+// T-P3-006: the Bash deny-list + the always-gate floor (force-push, remote-
+// ref deletion, rm-rf outside-workspace / workspace-root / .git, and the
+// ~/.claude-bridge self-protection) live in `floor.ts` and apply to Bash
+// commands AND Write/Edit target paths via `checkToolFloor`.
 
 function mapMode(mode: "read_only" | "agentic"): PermissionMode {
   return mode === "read_only" ? "plan" : "acceptEdits";
@@ -80,33 +72,19 @@ const READ_ONLY_DISALLOWED_TOOLS: ReadonlyArray<string> = [
   "ExitPlanMode",
 ];
 
-function commandToString(value: unknown): string {
-  // Avoid Object's default stringification ("[object Object]") for the
-  // common-error case where input.command is missing or non-string.
-  if (typeof value === "string") return value;
-  if (value === undefined || value === null) return "";
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "";
-  }
-}
-
-function makeCanUseTool(): CanUseTool {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  return (toolName, input, options) => {
-    if (toolName !== "Bash") {
-      return Promise.resolve({ behavior: "allow", updatedInput: input });
-    }
-    const command = commandToString((input as { command?: unknown }).command);
-    for (const { pattern, reason } of BASH_DENY_PATTERNS) {
-      if (pattern.test(command)) {
-        return Promise.resolve({
-          behavior: "deny",
-          message: `Blocked by claude-bridge deny list: ${reason}`,
-        });
-      }
+// T-P3-006: hard-deny floor. `canUseTool` is the only in-execution daemon
+// interception point (the delegate gate fires once, pre-execution, blind to
+// concrete ops). It returns a HARD-DENY — not an approval prompt: there is no
+// mid-run human channel; the floor BLOCKS and Clyde abort-reports the reason.
+// Inspects Bash commands AND Write/Edit/MultiEdit/NotebookEdit target paths.
+function makeCanUseTool(workspaceRoot: string, configDir: string): CanUseTool {
+  return (toolName, input) => {
+    const decision = checkToolFloor(toolName, input, workspaceRoot, configDir);
+    if (decision.denied) {
+      return Promise.resolve({
+        behavior: "deny",
+        message: `Blocked by claude-bridge floor: ${decision.reason ?? "forbidden operation"}`,
+      });
     }
     return Promise.resolve({ behavior: "allow", updatedInput: input });
   };
@@ -267,7 +245,9 @@ export class SdkJobRunner implements JobRunner {
       cwd: workspace.abs_path,
       maxTurns: job.max_turns,
       permissionMode: mapMode(job.mode),
-      canUseTool: makeCanUseTool(),
+      // T-P3-006: floor keyed to this job's workspace root (the SDK cwd) +
+      // the daemon's auth dir (~/.claude-bridge), for the self-protection rule.
+      canUseTool: makeCanUseTool(workspace.abs_path, getConfigDir()),
       abortController,
       settingSources: [],
     };
