@@ -17,6 +17,10 @@ import type { Workspace } from "@claude-bridge/shared";
 import { JobQueue } from "../../../src/jobs/queue.js";
 import { StubJobRunner } from "../../../src/jobs/runner.js";
 import { AuditLog } from "../../../src/audit/log.js";
+import type {
+  InteractionEvent,
+  InteractionRecorder,
+} from "../../../src/audit/interaction.js";
 import type { Logger } from "../../../src/log/logger.js";
 import type { DaemonState } from "../../../src/state.js";
 import type { ApprovalGate } from "../../../src/approval/gate.js";
@@ -471,5 +475,60 @@ describe("delegate_to_claude_code — runner tickle + audit metadata", () => {
     expect(entry.workspace_id).toBe(out.workspace_id);
     // Re-open auditLog so afterEach's stop() doesn't double-close.
     auditLog = new AuditLog(join(auditDir, "audit.jsonl"), 30);
+  });
+});
+
+describe("delegate_to_claude_code — interaction log (T-P3-007)", () => {
+  function recordingRecorder(): {
+    rec: InteractionRecorder;
+    events: InteractionEvent[];
+  } {
+    const events: InteractionEvent[] = [];
+    const rec = {
+      record: (b: Omit<InteractionEvent, "ts">) =>
+        events.push({ ...b, ts: "t" } as InteractionEvent),
+      stop: () => Promise.resolve(),
+    } as unknown as InteractionRecorder;
+    return { rec, events };
+  }
+
+  it("emits gate_decision + delegation_dispatched on approve; prompt is HASHED not raw", async () => {
+    const { rec, events } = recordingRecorder();
+    const deps = { ...makeDeps({ mode: "auto" }), interactionRecorder: rec };
+    const tool = makeDelegateTool(deps);
+    const out = await tool.handler(baseInput, makeCtx(auditLog));
+    expect(out.status).toBe("queued");
+    const kinds = events.map((e) => e.kind);
+    expect(kinds).toContain("gate_decision");
+    expect(kinds).toContain("delegation_dispatched");
+    const dispatched = events.find((e) => e.kind === "delegation_dispatched");
+    if (dispatched?.kind === "delegation_dispatched") {
+      expect(dispatched.prompt_hash).toMatch(/^sha256:/);
+      expect(dispatched.job_id.length).toBeGreaterThan(0);
+    }
+    // The raw prompt text must NOT appear anywhere in the events.
+    expect(JSON.stringify(events)).not.toContain("do the thing");
+  });
+
+  it("a denied delegation emits gate_decision with job_id null and NO dispatched", async () => {
+    const { rec, events } = recordingRecorder();
+    const gate: ApprovalGate = {
+      ...makeStubGate("per_call"),
+      requestApproval: vi.fn(() => Promise.resolve("deny")),
+    };
+    const deps = { ...makeDeps({ gate }), interactionRecorder: rec };
+    const tool = makeDelegateTool(deps);
+    await expect(
+      tool.handler(baseInput, makeCtx(auditLog)),
+    ).rejects.toMatchObject({ code: 403 });
+    const gd = events.find((e) => e.kind === "gate_decision");
+    expect(gd?.kind).toBe("gate_decision");
+    if (gd?.kind === "gate_decision") {
+      expect(gd.job_id).toBeNull();
+      expect(gd.decision).toBe("deny");
+    }
+    expect(
+      events.find((e) => e.kind === "delegation_dispatched"),
+    ).toBeUndefined();
   });
 });

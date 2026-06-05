@@ -16,7 +16,7 @@ import {
   unlink,
   type FileHandle,
 } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, basename } from "node:path";
 import type { AuditEntry } from "@claude-bridge/shared";
 
 function isErrnoCode(err: unknown, code: string): boolean {
@@ -26,13 +26,23 @@ function isErrnoCode(err: unknown, code: string): boolean {
   );
 }
 
-const ARCHIVE_PATTERN = /^audit-(\d{4}-\d{2}-\d{2})\.jsonl$/;
-
-export class AuditLog {
+/**
+ * Append-only daily-rotated JSONL sink. Generic over the entry type so the
+ * same mechanism (queue/handle/close discipline, midnight rotation, retention
+ * prune, 0700 dir / 0600 file) backs both the per-tool-call audit log
+ * (`AuditEntry`) and T-P3-007's delegation interaction log (`InteractionEvent`)
+ * without reimplementation. The archive prefix is derived from the active
+ * file's basename (`audit.jsonl` → `audit-YYYY-MM-DD.jsonl`,
+ * `interaction.jsonl` → `interaction-YYYY-MM-DD.jsonl`), so `audit.jsonl`
+ * behavior is unchanged.
+ */
+export class AuditLog<E = AuditEntry> {
   private readonly path: string;
   private readonly dir: string;
   private readonly retentionDays: number;
   private readonly clock: () => Date;
+  private readonly archivePrefix: string;
+  private readonly archivePattern: RegExp;
 
   private queue: Promise<void> = Promise.resolve();
   private handlePromise: Promise<FileHandle> | null = null;
@@ -48,6 +58,10 @@ export class AuditLog {
     this.dir = dirname(path);
     this.retentionDays = retentionDays;
     this.clock = clock;
+    // e.g. "audit.jsonl" → "audit"; "interaction.jsonl" → "interaction".
+    this.archivePrefix = basename(path).replace(/\.jsonl$/, "");
+    const escaped = this.archivePrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    this.archivePattern = new RegExp(`^${escaped}-(\\d{4}-\\d{2}-\\d{2})\\.jsonl$`);
   }
 
   private todayUtc(): string {
@@ -76,7 +90,7 @@ export class AuditLog {
       }
       this.handlePromise = null;
     }
-    const archive = join(this.dir, `audit-${previousDate}.jsonl`);
+    const archive = join(this.dir, `${this.archivePrefix}-${previousDate}.jsonl`);
     try {
       await rename(this.path, archive);
     } catch (err) {
@@ -99,7 +113,7 @@ export class AuditLog {
     this.currentDate = today;
   }
 
-  async append(entry: AuditEntry): Promise<void> {
+  async append(entry: E): Promise<void> {
     if (this.closed) return;
 
     let resolveWrite!: () => void;
@@ -174,7 +188,7 @@ export class AuditLog {
     }
 
     for (const name of entries) {
-      const match = ARCHIVE_PATTERN.exec(name);
+      const match = this.archivePattern.exec(name);
       if (match === null) continue;
       const dateStr = match[1];
       if (dateStr === undefined) continue;

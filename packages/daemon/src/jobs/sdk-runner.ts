@@ -40,6 +40,8 @@ import type { Logger } from "../log/logger.js";
 import type { JobQueue } from "./queue.js";
 import { checkToolFloor } from "./floor.js";
 import { getConfigDir } from "../config/paths.js";
+import { hashInput } from "../audit/hash.js";
+import type { InteractionRecorder, ReportSummary } from "../audit/interaction.js";
 import { assembleReport } from "./report.js";
 import { takeSnapshot } from "./snapshot.js";
 import { TranscriptWriter, transcriptPath } from "./transcript.js";
@@ -72,19 +74,64 @@ const READ_ONLY_DISALLOWED_TOOLS: ReadonlyArray<string> = [
   "ExitPlanMode",
 ];
 
+// T-P3-007: compact mechanical summary of a DelegationReport for the
+// interaction log's terminal events.
+function reportSummary(report: DelegationReport): ReportSummary {
+  return {
+    status: report.status,
+    files_created: report.files_created.length,
+    files_modified: report.files_modified.length,
+    files_deleted: report.files_deleted.length,
+    shell_commands: report.shell_commands.length,
+    turns: report.turns,
+  };
+}
+
 // T-P3-006: hard-deny floor. `canUseTool` is the only in-execution daemon
 // interception point (the delegate gate fires once, pre-execution, blind to
 // concrete ops). It returns a HARD-DENY — not an approval prompt: there is no
 // mid-run human channel; the floor BLOCKS and Clyde abort-reports the reason.
 // Inspects Bash commands AND Write/Edit/MultiEdit/NotebookEdit target paths.
-function makeCanUseTool(workspaceRoot: string, configDir: string): CanUseTool {
+// T-P3-007: also emits accountability events — floor_denied on a block, and
+// push_observed when a (NOT-floored) git push is seen. Exported for tests.
+export function makeCanUseTool(
+  workspaceRoot: string,
+  configDir: string,
+  recorder: InteractionRecorder | undefined,
+  job_id: string,
+  workspace_id: string,
+): CanUseTool {
   return (toolName, input) => {
     const decision = checkToolFloor(toolName, input, workspaceRoot, configDir);
     if (decision.denied) {
+      const reason = decision.reason ?? "forbidden operation";
+      recorder?.record({
+        kind: "floor_denied",
+        job_id,
+        workspace_id,
+        tool: toolName,
+        reason,
+      });
       return Promise.resolve({
         behavior: "deny",
-        message: `Blocked by claude-bridge floor: ${decision.reason ?? "forbidden operation"}`,
+        message: `Blocked by claude-bridge floor: ${reason}`,
       });
+    }
+    // Observe (do not block) a git push — non-force push is authorization-
+    // governed, but OBSERVING it is the accountability record's job.
+    if (toolName === "Bash" && recorder !== undefined) {
+      const command =
+        typeof (input as { command?: unknown }).command === "string"
+          ? (input as { command: string }).command
+          : "";
+      if (/\bgit\s+push\b/.test(command)) {
+        recorder.record({
+          kind: "push_observed",
+          job_id,
+          workspace_id,
+          command_hash: hashInput(command),
+        });
+      }
     }
     return Promise.resolve({ behavior: "allow", updatedInput: input });
   };
@@ -158,6 +205,10 @@ export class SdkJobRunner implements JobRunner {
     private readonly registry: WorkspaceRegistry,
     private readonly configDir: string,
     private readonly logger: Logger,
+    // T-P3-007: optional so existing constructions (tests) compile unchanged;
+    // production wiring (main.ts) passes the recorder for terminal +
+    // floor_denied + push_observed events.
+    private readonly interactionRecorder?: InteractionRecorder,
   ) {}
 
   tickle(): void {
@@ -247,7 +298,14 @@ export class SdkJobRunner implements JobRunner {
       permissionMode: mapMode(job.mode),
       // T-P3-006: floor keyed to this job's workspace root (the SDK cwd) +
       // the daemon's auth dir (~/.claude-bridge), for the self-protection rule.
-      canUseTool: makeCanUseTool(workspace.abs_path, getConfigDir()),
+      // T-P3-007: also emits floor_denied + push_observed to the interaction log.
+      canUseTool: makeCanUseTool(
+        workspace.abs_path,
+        getConfigDir(),
+        this.interactionRecorder,
+        job.id,
+        workspace.id,
+      ),
       abortController,
       settingSources: [],
     };
@@ -327,6 +385,13 @@ export class SdkJobRunner implements JobRunner {
         workspace_root: workspace.abs_path,
       });
       this.queue.markCancelled(job.id, report);
+      this.interactionRecorder?.record({
+        kind: "delegation_cancelled",
+        job_id: job.id,
+        workspace_id: workspace.id,
+        duration_ms: Date.now() - startedAt,
+        report_summary: reportSummary(report),
+      });
     } else if (caughtErr !== null) {
       const errDetail = classifyError(caughtErr);
       const report = await assembleReport({
@@ -342,6 +407,14 @@ export class SdkJobRunner implements JobRunner {
         workspace_root: workspace.abs_path,
       });
       this.queue.markFailed(job.id, errDetail, report);
+      this.interactionRecorder?.record({
+        kind: "delegation_aborted",
+        job_id: job.id,
+        workspace_id: workspace.id,
+        duration_ms: Date.now() - startedAt,
+        error_category: errDetail.category,
+        report_summary: reportSummary(report),
+      });
     } else {
       const report = await assembleReport({
         job,
@@ -356,6 +429,13 @@ export class SdkJobRunner implements JobRunner {
         workspace_root: workspace.abs_path,
       });
       this.queue.markComplete(job.id, report);
+      this.interactionRecorder?.record({
+        kind: "delegation_completed",
+        job_id: job.id,
+        workspace_id: workspace.id,
+        duration_ms: Date.now() - startedAt,
+        report_summary: reportSummary(report),
+      });
     }
 
     this.finishCycle();

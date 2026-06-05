@@ -19,10 +19,13 @@ import type { WorkspaceRegistry } from "../../workspace/registry.js";
 import type { ApprovalGate } from "../../approval/gate.js";
 import {
   awaitApprovalForDelegation,
+  resolveOperationGranularity,
   generateDelegationId,
   truncateForApproval,
 } from "../../approval/gate.js";
 import { ApprovalRejectedError } from "../../approval/pending.js";
+import { hashInput } from "../../audit/hash.js";
+import type { InteractionRecorder } from "../../audit/interaction.js";
 
 const MAX_EXHIBITS = 100;
 const MAX_INLINE_BYTES = 256 * 1024;
@@ -38,6 +41,9 @@ export interface DelegateDeps {
   queue: JobQueue;
   runner: JobRunner;
   approvalGate: ApprovalGate;
+  // T-P3-007: optional so existing constructions (tests) compile unchanged;
+  // production wiring (main.ts) passes the recorder for the accountability log.
+  interactionRecorder?: InteractionRecorder;
 }
 
 /** Strict cwd resolution per Decision 1, T-P1-004. Returns the resolved
@@ -152,6 +158,11 @@ export function makeDelegateTool(
       // enqueue. The gate decides whether to skip (auto mode), prompt
       // the user, or pass-through (session-bypassed). Decision flows back
       // into the gate; only "deny"/error short-circuits this handler.
+      // T-P3-007: `gateDecision` is hoisted so the post-enqueue interaction
+      // events (gate_decision + dispatched, which need job_id) can read it.
+      // Assigned inside the try before any non-throwing exit; the catch always
+      // rethrows, so post-try reads see the real decision.
+      let gateDecision: "approve" | "deny" | "approve_session";
       try {
         const decision = await awaitApprovalForDelegation(
           deps.approvalGate,
@@ -175,7 +186,22 @@ export function makeDelegateTool(
           input.granularity,
           ctx.workspaceBinding,
         );
+        gateDecision = decision;
         if (decision === "deny") {
+          // T-P3-007: a denied delegation creates no job; record the gate
+          // decision (job_id null — nothing ran) for the accountability log.
+          deps.interactionRecorder?.record({
+            kind: "gate_decision",
+            job_id: null,
+            workspace_id: workspace.id,
+            decision,
+            granularity: resolveOperationGranularity(
+              input.granularity,
+              ctx.workspaceBinding,
+              deps.approvalGate,
+              workspace.id,
+            ),
+          });
           throw new ToolHandlerError(
             403,
             "delegation_denied",
@@ -229,6 +255,38 @@ export function makeDelegateTool(
         max_turns: input.max_turns ?? 30,
         working_directory: cwd === workspace.abs_path ? null : cwd,
       });
+
+      // T-P3-007: accountability log — the dispatch + the gate verdict that
+      // approved it (now that job.id exists to correlate the lifecycle).
+      // bound_workspace + resolved granularity are only available here in the
+      // MCP ctx (not on the Job the runner sees).
+      if (deps.interactionRecorder !== undefined) {
+        const resolvedGranularity = resolveOperationGranularity(
+          input.granularity,
+          ctx.workspaceBinding,
+          deps.approvalGate,
+          workspace.id,
+        );
+        const boundWorkspace =
+          ctx.workspaceBinding?.kind === "bound"
+            ? ctx.workspaceBinding.workspace
+            : null;
+        deps.interactionRecorder.record({
+          kind: "gate_decision",
+          job_id: job.id,
+          workspace_id: workspace.id,
+          decision: gateDecision,
+          granularity: resolvedGranularity,
+        });
+        deps.interactionRecorder.record({
+          kind: "delegation_dispatched",
+          job_id: job.id,
+          workspace_id: workspace.id,
+          prompt_hash: hashInput(input.prompt),
+          bound_workspace: boundWorkspace,
+          granularity: resolvedGranularity,
+        });
+      }
 
       // Audit metadata side-channel (optional-chained: invoke() always
       // wraps a real setAuditMetadata in, but the interface is optional

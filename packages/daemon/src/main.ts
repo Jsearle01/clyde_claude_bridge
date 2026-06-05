@@ -20,6 +20,7 @@ import { getConfigPath, getPidPath } from "./config/paths.js";
 import { generateToken } from "./config/token.js";
 import { createLogger, type Logger } from "./log/logger.js";
 import { AuditLog } from "./audit/log.js";
+import { makeInteractionLog, InteractionRecorder } from "./audit/interaction.js";
 import { ToolRegistry } from "./mcp/dispatch.js";
 import { pingTool } from "./mcp/tools/ping.js";
 import { makeDelegateTool } from "./mcp/tools/delegate.js";
@@ -71,6 +72,7 @@ export interface DaemonComponents {
   pendingApprovals: PendingApprovalRegistry;
   extensionRouter: ExtensionToolRouter;
   consentManager: ConsentManager;
+  interactionRecorder: InteractionRecorder;
   logger: Logger;
   pidPath: string;
 }
@@ -128,6 +130,7 @@ export async function shutdown(
     { name: "mcp", stop: () => components.mcpServer.stop() },
     { name: "tunnel", stop: () => components.tunnelManager.stop() },
     { name: "audit", stop: () => components.auditLog.stop() },
+    { name: "interaction-log", stop: () => components.interactionRecorder.stop() },
     { name: "daily-timer", stop: (): Promise<void> => {
         components.dailyTimer.stop();
         return Promise.resolve();
@@ -399,6 +402,16 @@ async function main(): Promise<void> {
   });
   dailyTimer.start();
 
+  // 5.75. T-P3-007: interaction log — the daemon-authoritative, Clyde-
+  // untamperable accountability spine (~/.claude-bridge/interaction.jsonl,
+  // reusing AuditLog; in the 006-self-protected dir). Wired into the runner
+  // (terminal + floor/push events) and the delegate handler (dispatch + gate).
+  const interactionLog = makeInteractionLog(
+    configDir,
+    config.audit.retention_days,
+  );
+  const interactionRecorder = new InteractionRecorder(interactionLog);
+
   // 5.8. Job runner. SdkJobRunner is the default (T-P1-009); StubJobRunner
   // remains available behind --allow-stub-config + stub_behavior for the
   // T-P1-005 acceptance harness.
@@ -430,6 +443,7 @@ async function main(): Promise<void> {
       workspaceRegistry,
       configDir,
       logger,
+      interactionRecorder,
     );
     logger.info("job runner: SdkJobRunner");
   }
@@ -442,6 +456,9 @@ async function main(): Promise<void> {
     queue: jobQueue,
     runner: jobRunner,
     approvalGate,
+    // T-P3-007: accountability log — the delegate handler emits
+    // gate_decision + delegation_dispatched (binding/granularity live here).
+    interactionRecorder,
   };
   registry.register(makeDelegateTool(toolDeps));
   registry.register(makePollTool({ queue: jobQueue }));
@@ -630,6 +647,7 @@ async function main(): Promise<void> {
     pendingApprovals,
     extensionRouter,
     consentManager,
+    interactionRecorder,
     logger,
     pidPath,
   };
