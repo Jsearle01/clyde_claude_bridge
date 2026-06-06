@@ -133,16 +133,23 @@ export function makeConsentHandlers(
     // handler.
     if (entry.resolvedElsewhere) return;
 
-    let decision: "approve" | "deny" | "dismiss";
-    if (choice === BTN_APPROVE) {
-      decision = "approve";
-    } else if (choice === BTN_DENY) {
-      decision = "deny";
-    } else {
-      // Esc / window-close / programmatic undefined — distinct from an
-      // explicit Deny (the consent enum carries the distinction).
-      decision = "dismiss";
+    // CB-SMOKE-READINESS-BATCH (the two-window fix): only an EXPLICIT
+    // approve/deny resolves the consent request. `undefined` means the modal
+    // closed WITHOUT a decision — Esc, focus loss, the OS auto-dismissing an
+    // UNFOCUSED window's modal (the two-window auto-cancel: a second window's
+    // modal returns undefined near-instantly when it isn't focused), or our
+    // own dismiss-siblings cleanup. That is BENIGN — NOT a user decision — so
+    // we send NOTHING. The request stays pending until a real decision in some
+    // window or the 30s daemon timeout. (Previously this sent
+    // decision:'dismiss', which the unfocused window emitted immediately and
+    // which won the race as a denial, auto-cancelling the bind before the user
+    // could approve in the window they intended. The daemon also now ignores a
+    // stray dismiss — defense in depth.)
+    if (choice !== BTN_APPROVE && choice !== BTN_DENY) {
+      return;
     }
+    const decision: "approve" | "deny" =
+      choice === BTN_APPROVE ? "approve" : "deny";
     try {
       ipcClient.send({
         kind: "auth_consent_response",

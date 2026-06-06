@@ -22,6 +22,13 @@ import {
   TokenRotateTimeoutError,
 } from "./commands/token.js";
 import {
+  unbindCommand,
+  UnbindTargetRequiredError,
+  UnbindTargetAndAllError,
+  UnbindConnectionLostError,
+  UnbindTimeoutError,
+} from "./commands/unbind.js";
+import {
   tunnelRestartCommand,
   TunnelRestartConnectionLostError,
   TunnelRestartTimeoutError,
@@ -75,7 +82,11 @@ function reportErrorBody(err: unknown): void {
     err instanceof TokenRotateTimeoutError ||
     err instanceof TunnelRestartConnectionLostError ||
     err instanceof TunnelRestartTimeoutError ||
-    err instanceof TunnelRestartFailedError
+    err instanceof TunnelRestartFailedError ||
+    err instanceof UnbindTargetRequiredError ||
+    err instanceof UnbindTargetAndAllError ||
+    err instanceof UnbindConnectionLostError ||
+    err instanceof UnbindTimeoutError
   ) {
     process.stderr.write(`${err.message}\n`);
     return;
@@ -152,6 +163,19 @@ tokenCmd
   .action(async () => {
     try {
       await tokenRotateCommand();
+    } catch (err) {
+      process.exit(reportError(err));
+    }
+  });
+
+program
+  .command("unbind")
+  .argument("[target]", "binding to unbind (a workspace identifier or client id)")
+  .option("--all", "unbind ALL bindings (opt-in; required to clear everything)")
+  .description("Tear down an OAuth binding (or --all). Requires an explicit target.")
+  .action(async (target: string | undefined, opts: { all?: boolean }) => {
+    try {
+      await unbindCommand({ target, all: opts.all });
     } catch (err) {
       process.exit(reportError(err));
     }

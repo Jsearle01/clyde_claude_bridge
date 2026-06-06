@@ -90,7 +90,12 @@ describe("formatStatusPayload", () => {
     expect(out).toContain("Endpoint:  127.0.0.1:7423");
     expect(out).toContain("Tunnel:    up");
     expect(out).toContain("URL:       https://plum-otter-7821.trycloudflare.com");
-    expect(out).toContain("Token:     cb_live_…d219 (last 4)");
+    // CB-SMOKE-READINESS-BATCH: relabeled from "Token:" so a stale Bearer line
+    // is never misread as an OAuth binding.
+    expect(out).toContain(
+      "Bearer:    cb_live_…d219 (daemon Bearer token — not an OAuth binding)",
+    );
+    expect(out).not.toContain("Token:     cb_live_");
     expect(out).toContain("Audit:     ~/.claude-bridge/audit.jsonl (current size: 14 KB)");
   });
 
@@ -129,6 +134,41 @@ describe("formatStatusPayload", () => {
     const payload = makeStatusPayload(); // no connected_extensions
     expect(formatStatusPayload(payload, 84231, "/home/user")).toContain(
       "Sessions:  (not reported by this daemon)",
+    );
+  });
+
+  // CB-SMOKE-READINESS-BATCH: OAuth bindings are surfaced so a real bind is
+  // visible (the smoke's candidate 3 — a bind was invisible in status).
+  it("lists active OAuth bindings (client → workspace, issued/expires)", () => {
+    const payload = makeStatusPayload({
+      oauth_bindings: [
+        {
+          client_id: "cb_client_0123456789abcdef",
+          bound_workspace: "myproj-aaaaaa",
+          issued_at: "2026-06-06T12:00:00.000Z",
+          expires_at: Date.parse("2026-07-06T12:00:00.000Z"),
+        },
+      ],
+    });
+    const out = formatStatusPayload(payload, 84231, "/home/user");
+    expect(out).toContain("Bindings:  1 active");
+    expect(out).toContain("cb_client_01234567…"); // truncated client id (18-char prefix)
+    expect(out).toContain("→ myproj-aaaaaa");
+    expect(out).toContain("issued 2026-06-06T12:00:00.000Z");
+    expect(out).toContain("expires 2026-07-06T12:00:00.000Z");
+  });
+
+  it("renders 'none' when the binding store is empty (status never implies a phantom bind)", () => {
+    const payload = makeStatusPayload({ oauth_bindings: [] });
+    expect(formatStatusPayload(payload, 84231, "/home/user")).toContain(
+      "Bindings:  none (no active OAuth bindings)",
+    );
+  });
+
+  it("renders '(not reported)' for bindings when a pre-fix daemon omits the field", () => {
+    const payload = makeStatusPayload(); // no oauth_bindings
+    expect(formatStatusPayload(payload, 84231, "/home/user")).toContain(
+      "Bindings:  (not reported by this daemon)",
     );
   });
 });
@@ -195,6 +235,6 @@ describe("statusCommand", () => {
     const out = stdoutSpy.mock.calls[0]?.[0] as string;
     expect(out).toContain("Daemon:    up");
     expect(out).toContain("Endpoint:  127.0.0.1:7423");
-    expect(out).toContain("Token:     cb_live_…d219");
+    expect(out).toContain("Bearer:    cb_live_…d219");
   });
 });

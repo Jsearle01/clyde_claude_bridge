@@ -159,6 +159,46 @@ export class TokenStore {
   }
 
   /**
+   * CB-SMOKE-READINESS-BATCH: list the active (non-expired) bindings — one
+   * summary per live token record. Read live; used by `claude-bridge status`
+   * (surface a real bind) and `claude-bridge unbind` (resolve a target). The
+   * plaintext token / hash is never exposed — only the binding metadata.
+   */
+  listBindings(): Array<{
+    client_id: string;
+    bound_workspace: string | null;
+    issued_at: string;
+    expires_at: number;
+  }> {
+    this.assertLoaded();
+    const nowMs = this.now();
+    return this.store.tokens
+      .filter((t) => nowMs < t.expires_at)
+      .map((t) => ({
+        client_id: t.client_id,
+        bound_workspace: t.bound_workspace,
+        issued_at: t.issued_at,
+        expires_at: t.expires_at,
+      }));
+  }
+
+  /**
+   * CB-SMOKE-READINESS-BATCH: tear down EVERY token (the `unbind --all` path).
+   * Returns the count removed. Distinct from revokeByWorkspace — it also clears
+   * non-binding (null-bound) tokens, so tokens.json ends empty. Opt-in only;
+   * the CLI refuses a no-args clear-all (footgun guard).
+   */
+  async revokeAll(): Promise<number> {
+    this.assertLoaded();
+    const removed = this.store.tokens.length;
+    if (removed > 0) {
+      this.store.tokens = [];
+      await this.writeFile();
+    }
+    return removed;
+  }
+
+  /**
    * T-P3-004b (broadcast filter): is there a live (non-expired) token bound
    * to `workspace`? Used to exclude already-bound windows from the consent
    * broadcast. "Bound" = an active token names the workspace, read live.

@@ -424,6 +424,24 @@ async function main(): Promise<void> {
   );
   logger.info("oauth consent manager initialized");
 
+  // CB-SMOKE-READINESS-BATCH: the single 004b unbind/revoke capability —
+  // tear down a workspace's durable token(s) AND any un-redeemed auth code
+  // bound to it. Shared by the extension's unbind_workspace (setBindingRevoker
+  // below) and the operator's `claude-bridge unbind` (the unbindBinding
+  // handler) so both paths revoke identically — no reimplementation.
+  const revokeBindingForWorkspace = async (
+    identifier: string,
+  ): Promise<number> => {
+    const codes = consentManager.revokeAuthCodesByWorkspace(identifier);
+    const tokens = await tokenStore.revokeByWorkspace(identifier);
+    logger.info("oauth binding revoked (unbind)", {
+      identifier,
+      tokens_revoked: tokens,
+      auth_codes_revoked: codes,
+    });
+    return tokens;
+  };
+
   // 5.6. Job queue (P1). In-memory single-concurrent queue; 24h retention
   // via the daily timer below. Threaded into tool factories at Phase 4.
   const jobQueue = new JobQueue();
@@ -618,6 +636,10 @@ async function main(): Promise<void> {
         audit_size_bytes: auditSizeBytes,
         attached_workspaces: connected_extensions.length,
         connected_extensions,
+        // CB-SMOKE-READINESS-BATCH: surface the active OAuth bindings (from
+        // tokens.json) so a real bind is VISIBLE in `status`. Distinct from the
+        // daemon Bearer token (token_suffix above).
+        oauth_bindings: tokenStore.listBindings(),
       };
       return payload;
     },
@@ -648,6 +670,66 @@ async function main(): Promise<void> {
       const newUrl = await tunnelManager.restart();
       // Listeners already updated state.
       return { new_url: newUrl };
+    },
+    // CB-SMOKE-READINESS-BATCH: `claude-bridge unbind`. Resolve {target, all}
+    // against the durable token store, then tear down the matching binding(s)
+    // via the SAME 004b revoke capability the extension uses. Reports each
+    // binding cleared (empty = no match → CLI prints "no such binding").
+    unbindBinding: async ({ target, all }) => {
+      const bindings = tokenStore.listBindings();
+      // The natural key is the bound_workspace identifier (the binding's
+      // durable home + what status shows); we ALSO accept an exact client_id
+      // or a client_id PREFIX (status truncates the id), for operator
+      // convenience. `--all` ignores the target and clears everything.
+      const matches = all
+        ? bindings
+        : bindings.filter(
+            (b) =>
+              b.bound_workspace === target ||
+              b.client_id === target ||
+              (target !== null &&
+                target.length >= 8 &&
+                b.client_id.startsWith(target)),
+          );
+
+      // Group by bound_workspace so we revoke each workspace once (a workspace
+      // may have >1 live token). Null-bound (non-binding) tokens can't be
+      // revoked by workspace; they're swept by the --all revokeAll() below.
+      const byWorkspace = new Map<string, string>(); // ws → a client_id (for the report)
+      for (const b of matches) {
+        if (b.bound_workspace !== null && !byWorkspace.has(b.bound_workspace)) {
+          byWorkspace.set(b.bound_workspace, b.client_id);
+        }
+      }
+
+      const unbound: Array<{
+        client_id: string;
+        bound_workspace: string | null;
+        tokens_revoked: number;
+      }> = [];
+      for (const [ws, client_id] of byWorkspace) {
+        const tokens_revoked = await revokeBindingForWorkspace(ws);
+        // Tell the (now-unbound) window so it clears its status-bar binding.
+        // Best-effort targeted send — the window may be closed.
+        ipcServerRef.current
+          ?.sendServerMessage(ws, { kind: "binding_cleared", bound_workspace: ws })
+          .catch(() => undefined);
+        unbound.push({ client_id, bound_workspace: ws, tokens_revoked });
+      }
+
+      // --all also sweeps any leftover non-binding (null-bound) tokens so
+      // tokens.json ends fully empty (the smoke's invariant).
+      if (all) {
+        const swept = await tokenStore.revokeAll();
+        if (swept > 0 && byWorkspace.size === 0) {
+          unbound.push({
+            client_id: "(non-binding tokens)",
+            bound_workspace: null,
+            tokens_revoked: swept,
+          });
+        }
+      }
+      return { unbound };
     },
   };
 
@@ -688,18 +770,7 @@ async function main(): Promise<void> {
   });
   // T-P3-004b: wire the binding revoker so unbind_workspace tears down the
   // durable token AND any un-redeemed auth code bound to that workspace.
-  ipcServer.setBindingRevoker({
-    revoke: async (identifier) => {
-      const codes = consentManager.revokeAuthCodesByWorkspace(identifier);
-      const tokens = await tokenStore.revokeByWorkspace(identifier);
-      logger.info("oauth binding revoked (unbind)", {
-        identifier,
-        tokens_revoked: tokens,
-        auth_codes_revoked: codes,
-      });
-      return tokens;
-    },
-  });
+  ipcServer.setBindingRevoker({ revoke: revokeBindingForWorkspace });
 
   components = {
     ipcServer,

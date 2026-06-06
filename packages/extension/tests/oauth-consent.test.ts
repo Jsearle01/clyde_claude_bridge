@@ -155,7 +155,12 @@ describe("makeConsentHandlers.onAuthConsentRequest (T-P3-003)", () => {
     );
   });
 
-  it("maps dismissal (undefined) → 'dismiss' (distinct from deny)", async () => {
+  // CB-SMOKE-READINESS-BATCH (the two-window fix): an undefined modal result
+  // (Esc, focus loss, the OS auto-dismissing an unfocused window's modal) is
+  // BENIGN — NOT a decision. The extension must send NOTHING (was: sent
+  // decision:'dismiss', which the unfocused window emitted instantly and which
+  // won the consent race as a denial). Only Approve/Deny send a response.
+  it("dismissal (undefined) sends NO response — only an explicit decision resolves", async () => {
     const showWarning = vi.fn(() => Promise.resolve(undefined));
     const client = makeFakeClient();
     const { onAuthConsentRequest } = makeConsentHandlers(client, {
@@ -163,8 +168,14 @@ describe("makeConsentHandlers.onAuthConsentRequest (T-P3-003)", () => {
       getCodebaseName: () => "my-app",
     });
     await onAuthConsentRequest(makeRequest());
-    expect(client.send).toHaveBeenCalledWith(
-      expect.objectContaining({ decision: "dismiss" }),
+    // The ack was sent (ack-before-resolve); the RESPONSE was not.
+    expect(client.send).toHaveBeenCalledTimes(1);
+    expect(client.send).toHaveBeenCalledWith({
+      kind: "auth_consent_ack",
+      request_id: "req-abc",
+    });
+    expect(client.send).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "auth_consent_response" }),
     );
   });
 });

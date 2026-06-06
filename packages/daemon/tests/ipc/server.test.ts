@@ -238,6 +238,49 @@ describe("IpcServer", () => {
     }
   });
 
+  // CB-SMOKE-READINESS-BATCH: CLI unbind routing.
+  it("unbind_binding routes to the handler and returns unbind_binding_ok", async () => {
+    const handlers = makeHandlers();
+    const seen: Array<{ target: string | null; all: boolean }> = [];
+    handlers.unbindBinding = (args) => {
+      seen.push(args);
+      return Promise.resolve({
+        unbound: [
+          {
+            client_id: "cb_client_x",
+            bound_workspace: "ws-A",
+            tokens_revoked: 2,
+          },
+        ],
+      });
+    };
+    const { s, address } = startConfig(handlers);
+    await s.start();
+    const line = await rpc(
+      address,
+      JSON.stringify({ kind: "unbind_binding", target: "ws-A", all: false }),
+    );
+    const response = JSON.parse(line) as IpcResponse;
+    expect(response.kind).toBe("unbind_binding_ok");
+    if (response.kind === "unbind_binding_ok") {
+      expect(response.unbound).toHaveLength(1);
+      expect(response.unbound[0]?.bound_workspace).toBe("ws-A");
+      expect(response.unbound[0]?.tokens_revoked).toBe(2);
+    }
+    expect(seen).toEqual([{ target: "ws-A", all: false }]);
+  });
+
+  it("unbind_binding returns an error when the daemon has no unbind handler wired", async () => {
+    const { s, address } = startConfig(makeHandlers()); // no unbindBinding
+    await s.start();
+    const line = await rpc(
+      address,
+      JSON.stringify({ kind: "unbind_binding", target: "ws-A", all: false }),
+    );
+    const response = JSON.parse(line) as IpcResponse;
+    expect(response.kind).toBe("error");
+  });
+
   it("invalid JSON returns error but connection stays open (11.f)", async () => {
     const { s, address } = startConfig();
     await s.start();

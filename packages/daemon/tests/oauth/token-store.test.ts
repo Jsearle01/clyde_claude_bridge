@@ -187,6 +187,60 @@ describe("T-P3-004b — revokeByWorkspace + hasActiveBindingFor", () => {
   });
 });
 
+// CB-SMOKE-READINESS-BATCH: listBindings (status + unbind resolution) +
+// revokeAll (unbind --all).
+describe("CB-SMOKE-READINESS-BATCH — listBindings + revokeAll", () => {
+  it("listBindings returns one summary per ACTIVE token (client, workspace, issued, expires)", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    await store.mint({ client_id: "c2", bound_workspace: "ws-B" });
+    const bindings = store.listBindings();
+    expect(bindings).toHaveLength(2);
+    const a = bindings.find((b) => b.bound_workspace === "ws-A");
+    expect(a?.client_id).toBe("c1");
+    expect(typeof a?.issued_at).toBe("string");
+    expect(typeof a?.expires_at).toBe("number");
+  });
+
+  it("listBindings omits expired tokens", async () => {
+    let now = 1_000_000;
+    const store = new TokenStore(storePath, () => now);
+    await store.load();
+    await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    expect(store.listBindings()).toHaveLength(1);
+    now += ACCESS_TOKEN_TTL_MS + 1;
+    expect(store.listBindings()).toHaveLength(0);
+  });
+
+  it("listBindings includes null-bound (non-binding) tokens", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    await store.mint({ client_id: "c1", bound_workspace: null });
+    expect(store.listBindings()[0]?.bound_workspace).toBeNull();
+  });
+
+  it("revokeAll empties the store (the --all invariant: tokens.json ends empty) + persists", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    await store.mint({ client_id: "c2", bound_workspace: null });
+    expect(store.size()).toBe(2);
+    const removed = await store.revokeAll();
+    expect(removed).toBe(2);
+    expect(store.size()).toBe(0);
+    const fresh = new TokenStore(storePath);
+    await fresh.load();
+    expect(fresh.size()).toBe(0);
+  });
+
+  it("revokeAll on an empty store removes nothing", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    expect(await store.revokeAll()).toBe(0);
+  });
+});
+
 describe("T-P3-004b — AC-12d: a REVOKED token authenticates as INVALID, never unconstrained", () => {
   const STATIC_BEARER = "cb_live_STATICSTATICSTATICSTATICSTAT";
   function reqWith(token: string): IncomingMessage {

@@ -53,6 +53,20 @@ export interface IpcHandlers {
   stop(): Promise<void>;
   tokenRotate(): Promise<{ new_token: string }>;
   tunnelRestart(): Promise<{ new_url: string }>;
+  // CB-SMOKE-READINESS-BATCH: CLI-initiated unbind (`claude-bridge unbind`).
+  // Optional so existing handler constructions (tests) keep compiling; when
+  // absent the dispatch returns an error. Production wiring (main.ts) resolves
+  // the target against the token store and revokes via the 004b capability.
+  unbindBinding?(args: {
+    target: string | null;
+    all: boolean;
+  }): Promise<{
+    unbound: Array<{
+      client_id: string;
+      bound_workspace: string | null;
+      tokens_revoked: number;
+    }>;
+  }>;
 }
 
 // IPC protocol-version constants (distinct from package version).
@@ -567,6 +581,25 @@ export class IpcServer {
       case "tunnel_restart": {
         const { new_url } = await this.handlers.tunnelRestart();
         return { kind: "tunnel_restart_ok", new_url };
+      }
+      case "unbind_binding": {
+        // CB-SMOKE-READINESS-BATCH: CLI unbind. A top-level (non-socket-scoped)
+        // request, unlike the extension's unbind_workspace — the daemon owns
+        // the token store, so the operator can tear down a binding from any
+        // shell. The no-args footgun is refused CLI-side; here we trust the
+        // validated {target, all}.
+        if (this.handlers.unbindBinding === undefined) {
+          return {
+            kind: "error",
+            message: "unbind not supported by this daemon",
+            reason: "protocol_error",
+          };
+        }
+        const { unbound } = await this.handlers.unbindBinding({
+          target: request.target,
+          all: request.all,
+        });
+        return { kind: "unbind_binding_ok", unbound };
       }
       case "hello":
       case "register_workspace":

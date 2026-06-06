@@ -210,7 +210,13 @@ describe("handleStatus — denied", () => {
     expect(rec.body).toContain("Authorization declined");
   });
 
-  it("200 deny page with 'cancelled' copy when decision was 'dismiss'", async () => {
+  // CB-SMOKE-READINESS-BATCH: a `dismiss` is a benign modal close, NOT a
+  // decision — it no longer resolves the consent (was: a 'cancelled' deny
+  // page). The request stays pending; /authorize/status falls through to the
+  // 30s decision timer and renders the timeout page. (The two-window fix:
+  // an incidental close must never resolve-as-denied the whole request.)
+  it("a dismiss does NOT resolve — the request stays pending and ends at the 30s timeout page", async () => {
+    vi.useFakeTimers();
     const r = manager.beginConsent({
       client_id: "cb_client_x",
       client_name: "X",
@@ -220,16 +226,20 @@ describe("handleStatus — denied", () => {
     });
     if (!r.ok) throw new Error("expected ok");
     manager.recordAck(r.request_id);
+    // Incidental dismiss — ignored; state remains pending.
     manager.recordDecision(r.request_id, "dismiss");
+    expect(manager.getConsent(r.request_id)?.state).toBe("pending");
 
     const rec: RecordedResponse = {};
-    await handleStatus(
+    const promise = handleStatus(
       makeReq({ url: statusUrl(r.request_id) }),
       makeRes(rec),
       { logger: silentLogger, consentManager: manager },
     );
+    await vi.advanceTimersByTimeAsync(30_100);
+    await promise;
     expect(rec.status).toBe(200);
-    expect(rec.body).toContain("Authorization cancelled");
+    expect(rec.body).toContain("Authorization timed out");
   });
 });
 

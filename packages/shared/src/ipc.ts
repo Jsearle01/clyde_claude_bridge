@@ -17,6 +17,20 @@ export const ConnectedExtensionSchema = z
   .strict();
 export type ConnectedExtension = z.infer<typeof ConnectedExtensionSchema>;
 
+// CB-SMOKE-READINESS-BATCH: one active OAuth binding, as surfaced by
+// `claude-bridge status` and resolved by `claude-bridge unbind`. Sourced from
+// the durable token store (tokens.json) — distinct from the daemon Bearer
+// token. `bound_workspace` is null for a non-binding approve (acts on nothing).
+export const OAuthBindingSummarySchema = z
+  .object({
+    client_id: z.string(),
+    bound_workspace: z.string().nullable(),
+    issued_at: z.string(),
+    expires_at: z.number().int(),
+  })
+  .strict();
+export type OAuthBindingSummary = z.infer<typeof OAuthBindingSummarySchema>;
+
 export const StatusPayloadSchema = z
   .object({
     daemon_pid: z.number().int().nonnegative(),
@@ -34,6 +48,11 @@ export const StatusPayloadSchema = z
     // Optional for wire compat (a pre-fix daemon won't send it; the CLI
     // degrades to "unknown"), matching the `mode`-optional precedent below.
     connected_extensions: z.array(ConnectedExtensionSchema).optional(),
+    // CB-SMOKE-READINESS-BATCH: the active OAuth bindings from tokens.json, so
+    // a real bind is VISIBLE in `status` (it wasn't). Optional for wire compat
+    // (a pre-fix daemon won't send it; the CLI prints "not reported"). Distinct
+    // from `token_suffix` (the daemon Bearer token, not an OAuth binding).
+    oauth_bindings: z.array(OAuthBindingSummarySchema).optional(),
   })
   .strict();
 export type StatusPayload = z.infer<typeof StatusPayloadSchema>;
@@ -86,6 +105,21 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("unbind_workspace"),
       identifier: z.string(),
+    })
+    .strict(),
+  // CB-SMOKE-READINESS-BATCH: CLI-initiated unbind. Unlike unbind_workspace
+  // (extension-only, socket-scoped to the window that HOLDS the registration),
+  // this is the operator's `claude-bridge unbind` path — it resolves a target
+  // (a bound_workspace identifier or a client_id / client_id prefix) against
+  // the durable token store and tears down the matching binding(s) via the
+  // same 004b revoke capability. `all: true` clears every binding; `target` is
+  // the explicit single-binding selector. The no-args footgun (clear-all by
+  // omission) is refused CLI-side before this is ever sent.
+  z
+    .object({
+      kind: z.literal("unbind_binding"),
+      target: z.string().nullable(),
+      all: z.boolean(),
     })
     .strict(),
   // T-P2-008: extension's response to a daemon-initiated approval_request.
@@ -269,6 +303,23 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("unbind_workspace_ok"),
       revoked_count: z.number().int(),
+    })
+    .strict(),
+  // CB-SMOKE-READINESS-BATCH: ack for unbind_binding (CLI). `unbound` lists
+  // each binding torn down (empty = the target matched nothing → the CLI
+  // prints "no such binding").
+  z
+    .object({
+      kind: z.literal("unbind_binding_ok"),
+      unbound: z.array(
+        z
+          .object({
+            client_id: z.string(),
+            bound_workspace: z.string().nullable(),
+            tokens_revoked: z.number().int(),
+          })
+          .strict(),
+      ),
     })
     .strict(),
   z

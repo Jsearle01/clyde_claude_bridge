@@ -63,7 +63,13 @@ export function formatStatusPayload(
   } else {
     lines.push(`URL:       (not assigned)`);
   }
-  lines.push(`Token:     cb_live_…${payload.token_suffix} (last 4)`);
+  // CB-SMOKE-READINESS-BATCH: label this clearly as the daemon BEARER token —
+  // it is NOT an OAuth binding. The old `Token:` line misled the smoke into
+  // reading a stale Bearer line as evidence of a binding. OAuth bindings are
+  // listed separately below (from tokens.json).
+  lines.push(
+    `Bearer:    cb_live_…${payload.token_suffix} (daemon Bearer token — not an OAuth binding)`,
+  );
   lines.push(
     `Audit:     ${collapsePath(payload.audit_path, home)} (current size: ${formatBytes(payload.audit_size_bytes)})`,
   );
@@ -84,7 +90,38 @@ export function formatStatusPayload(
       );
     }
   }
+  // CB-SMOKE-READINESS-BATCH: surface the ACTIVE OAuth bindings from the token
+  // store (tokens.json) so a real bind is visible here (it wasn't). Optional on
+  // the wire — a pre-fix daemon won't send it (distinguish "not reported" from
+  // "0 bindings"); an empty array prints a clear "none" so status never implies
+  // a binding exists when the store is empty.
+  const bindings = payload.oauth_bindings;
+  if (bindings === undefined) {
+    lines.push(`Bindings:  (not reported by this daemon)`);
+  } else if (bindings.length === 0) {
+    lines.push(`Bindings:  none (no active OAuth bindings)`);
+  } else {
+    lines.push(`Bindings:  ${bindings.length} active`);
+    for (const b of bindings) {
+      const ws = b.bound_workspace ?? "(no workspace — non-binding)";
+      lines.push(
+        `           - ${formatBindingClient(b.client_id)} → ${ws}`,
+      );
+      lines.push(
+        `             issued ${b.issued_at}, expires ${new Date(b.expires_at).toISOString()}`,
+      );
+    }
+  }
   return lines.join("\n") + "\n";
+}
+
+// Truncate a client_id for display (the full id is long). Mirrors the
+// extension's formatClientLabel prefix length so the operator can copy the
+// shown prefix straight into `claude-bridge unbind`.
+const CLIENT_ID_DISPLAY_LEN = 18;
+export function formatBindingClient(client_id: string): string {
+  if (client_id.length <= CLIENT_ID_DISPLAY_LEN) return client_id;
+  return `${client_id.slice(0, CLIENT_ID_DISPLAY_LEN)}…`;
 }
 
 export async function statusCommand(opts: StatusOpts = {}): Promise<void> {

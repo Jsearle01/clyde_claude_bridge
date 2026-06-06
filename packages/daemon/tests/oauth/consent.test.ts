@@ -242,15 +242,27 @@ describe("ConsentManager — denial + dismissal", () => {
     expect(manager.getConsent(r.request_id)?.state).toBe("denied");
   });
 
-  it("ack → dismiss → awaitDecision resolves with denied{dismiss}", async () => {
-    const { manager } = makeManager({ recipients: 1 });
+  // CB-SMOKE-READINESS-BATCH: a `dismiss` is a BENIGN modal close, NOT a
+  // decision — it must NOT resolve the consent (was: resolved as
+  // denied{dismiss}). The consent stays pending until a real decision or the
+  // 30s timeout. This is the daemon-authoritative half of the two-window fix.
+  it("ack → dismiss is IGNORED — consent stays pending (benign close, not a decision)", async () => {
+    vi.useFakeTimers();
+    const { manager, resolved } = makeManager({ recipients: 1 });
     const r = manager.beginConsent(dcrArgs());
     if (!r.ok) throw new Error("expected ok");
     manager.recordAck(r.request_id);
-    manager.recordDecision(r.request_id, "dismiss");
+    // An incidental dismiss arrives — it does NOT transition the state.
+    expect(() => manager.recordDecision(r.request_id, "dismiss")).not.toThrow();
+    expect(manager.getConsent(r.request_id)?.state).toBe("pending");
+    // No auth code issued, no dismiss-siblings broadcast (nothing resolved).
+    expect(manager.size().auth_codes).toBe(0);
+    expect(resolved).toHaveLength(0);
+    // A subsequent EXPLICIT approve still resolves normally.
+    manager.recordDecision(r.request_id, "approve", "workspace-A");
     const outcome = await manager.awaitDecision(r.request_id);
-    expect(outcome.kind).toBe("denied");
-    if (outcome.kind === "denied") expect(outcome.denial_kind).toBe("dismiss");
+    expect(outcome.kind).toBe("approved");
+    expect(manager.getConsent(r.request_id)?.bound_workspace).toBe("workspace-A");
   });
 
   it("deny issues NO auth code", async () => {
@@ -511,6 +523,77 @@ describe("T-P3-002R — dismiss-siblings on resolve (AC-2b)", () => {
     // Timeout fires auth_consent_timeout, NOT auth_consent_resolved.
     expect(timeouts).toHaveLength(1);
     expect(resolved).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// CB-SMOKE-READINESS-BATCH — two-window consent: ONLY explicit approve/deny
+// resolves. The required proof that gates the A⊥B isolation test. Models the
+// live bug: with two registered (unbound) windows, the daemon broadcasts to
+// both; the UNFOCUSED window's modal returns undefined near-instantly, which
+// the old code emitted as decision:'dismiss' and which won the race as a
+// denial — auto-cancelling the bind before the user could approve.
+// ===========================================================================
+describe("CB-SMOKE-READINESS-BATCH — two-window consent (only explicit decision resolves)", () => {
+  it("incidental sibling-close (dismiss) does NOT resolve; explicit approve in the other window binds + dismisses the sibling", async () => {
+    // Two unbound windows online → broadcast reaches both (recipients: 2).
+    const { manager, resolved, bindings } = makeManager({ recipients: 2 });
+    const r = manager.beginConsent(dcrArgs({ client_id: "cb_client_zzz" }));
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+
+    // Window B is unfocused: its modal auto-closes → an incidental dismiss.
+    // This must NOT resolve the request (the bug: it used to, as a denial).
+    manager.recordDecision(r.request_id, "dismiss", "workspace-B");
+    expect(manager.getConsent(r.request_id)?.state).toBe("pending");
+    expect(resolved).toHaveLength(0); // nothing resolved → no sibling-dismiss yet
+    expect(bindings).toHaveLength(0);
+
+    // Window A (the one the user wants) explicitly approves → binds to A.
+    manager.recordDecision(r.request_id, "approve", "workspace-A");
+    const outcome = await manager.awaitDecision(r.request_id);
+    expect(outcome.kind).toBe("approved");
+    expect(manager.getConsent(r.request_id)?.state).toBe("approved");
+    expect(manager.getConsent(r.request_id)?.bound_workspace).toBe("workspace-A");
+    // NOW the sibling-dismiss fires (a real decision was recorded) + the bound
+    // window is told — cleanly, AFTER the decision, never AS the decision.
+    expect(resolved).toHaveLength(1);
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.identifier).toBe("workspace-A");
+  });
+
+  it("explicit deny in one window denies the request (dismiss never reaches this)", async () => {
+    const { manager, resolved } = makeManager({ recipients: 2 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    // A benign close on the sibling first — ignored.
+    manager.recordDecision(r.request_id, "dismiss", "workspace-B");
+    expect(manager.getConsent(r.request_id)?.state).toBe("pending");
+    // Then an explicit Deny — this DOES resolve (deny is a real decision).
+    manager.recordDecision(r.request_id, "deny", "workspace-A");
+    const outcome = await manager.awaitDecision(r.request_id);
+    expect(outcome.kind).toBe("denied");
+    if (outcome.kind === "denied") expect(outcome.denial_kind).toBe("deny");
+    expect(resolved).toHaveLength(1); // deny fires the sibling-dismiss too
+  });
+
+  it("two incidental closes leave the consent pending → it can only end via a real decision or the 30s timeout", async () => {
+    vi.useFakeTimers();
+    const { manager, resolved, timeouts } = makeManager({ recipients: 2 });
+    const r = manager.beginConsent(dcrArgs());
+    if (!r.ok) throw new Error("expected ok");
+    manager.recordAck(r.request_id);
+    const decisionPromise = manager.awaitDecision(r.request_id);
+    // Both windows close incidentally — neither resolves.
+    manager.recordDecision(r.request_id, "dismiss", "workspace-A");
+    manager.recordDecision(r.request_id, "dismiss", "workspace-B");
+    expect(manager.getConsent(r.request_id)?.state).toBe("pending");
+    expect(resolved).toHaveLength(0);
+    // Only the timer ends it.
+    vi.advanceTimersByTime(DECISION_TIMEOUT_MS + 1);
+    expect((await decisionPromise).kind).toBe("timeout");
+    expect(timeouts).toHaveLength(1);
   });
 });
 

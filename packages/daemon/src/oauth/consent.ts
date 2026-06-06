@@ -444,6 +444,25 @@ export class ConsentManager {
       });
       return;
     }
+    // CB-SMOKE-READINESS-BATCH (the two-window fix): only an EXPLICIT
+    // approve/deny resolves a consent. A `dismiss` is a BENIGN modal close
+    // (focus loss, Esc, the OS auto-dismissing an UNFOCUSED window's modal,
+    // or our own dismiss-siblings cleanup) — NOT a user decision. Daemon-
+    // authoritative: ignore it here so an incidental close of one broadcast
+    // window's modal can never resolve-as-denied the whole request before the
+    // user approves in the window they actually want (the auto-cancel bug
+    // surfaced live with two windows open). The consent stays `pending` until
+    // a real decision arrives in some window or the 30s decision timer fires.
+    // Belt-and-suspenders: the patched extension no longer SENDS a dismiss,
+    // but a stale (un-reinstalled) extension still might — this is the
+    // authoritative guard.
+    if (decision === "dismiss") {
+      this.deps.logger.info(
+        "oauth consent: dismiss ignored (benign modal close, not a decision)",
+        { request_id },
+      );
+      return;
+    }
     let result: "transitioned" | "noop";
     if (decision === "approve") {
       // T-P3-002R: bind the grant to the responding connection's workspace.
