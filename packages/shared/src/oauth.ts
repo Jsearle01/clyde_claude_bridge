@@ -69,6 +69,26 @@ export const OAuthMetadataSchema = z
 
 export type OAuthMetadata = z.infer<typeof OAuthMetadataSchema>;
 
+// Protected Resource Metadata — RFC 9728. Served publicly at
+// `/.well-known/oauth-protected-resource`; MCP clients (claude.ai) fetch it
+// as the FIRST step of the discovery chain to learn which authorization
+// server(s) protect this resource. Like the RFC 8414 document it MUST be
+// unauthenticated (it is read before any credential exists). URLs are built
+// at request time from the inbound `Host` (same tunnel-rotation invariant).
+// `resource` is this daemon's identifier; `authorization_servers` points at
+// our own issuer (the RFC 8414 metadata's `issuer`).
+export const OAuthProtectedResourceMetadataSchema = z
+  .object({
+    resource: z.string(),
+    authorization_servers: z.array(z.string()),
+    bearer_methods_supported: z.array(z.string()),
+  })
+  .strict();
+
+export type OAuthProtectedResourceMetadata = z.infer<
+  typeof OAuthProtectedResourceMetadataSchema
+>;
+
 // Persisted client record (clients.json entry) — design §3.3. The
 // plaintext `client_secret` is NEVER stored; `client_secret_hash` is the
 // bcryptjs hash (Decision a).

@@ -339,3 +339,123 @@ describe("OAuth router — T-P3-002 extended (authorize + status + negative path
     expect(rec.status).toBe(404); // unknown request_id, but routed
   });
 });
+
+// ===========================================================================
+// CB-OAUTH-DISCOVERY-FIX — the RFC 9728 protected-resource route + the
+// DISCOVERY-CHAIN test. The live smoke failed because claude.ai walks a
+// multi-STEP discovery chain (RFC 9728 protected-resource -> RFC 8414
+// auth-server -> DCR -> authorize) and the FIRST step returned 401 (the
+// route was unimplemented -> fell through to the Bearer gate), aborting the
+// whole flow before /register. Each endpoint passed its own UNIT test; no
+// test replayed the client's actual chain. These tests close that gap:
+// every step must be reachable by an UNAUTHENTICATED client (no Bearer
+// header) and the documents must reference one coherent issuer.
+// ===========================================================================
+describe("OAuth discovery chain (CB-OAUTH-DISCOVERY-FIX, RFC 9728 → RFC 8414 → DCR)", () => {
+  it("routes /.well-known/oauth-protected-resource → 200, publicly (no auth header)", async () => {
+    const rec: RecordedResponse = {};
+    // makeReq sets NO Authorization header — proving the route is reachable
+    // before any credential exists (NOT behind the Bearer gate; the router
+    // is consulted before McpServer's authenticate()).
+    const req = makeReq({
+      method: "GET",
+      url: "/.well-known/oauth-protected-resource",
+      host: "tunnel.trycloudflare.com",
+    });
+    const handled = await router(req, makeRes(rec));
+    expect(handled).toBe(true); // router short-circuits → never hits auth
+    expect(rec.status).toBe(200);
+    const body = JSON.parse(rec.body ?? "{}") as {
+      resource: string;
+      authorization_servers: string[];
+    };
+    expect(body.resource).toBe("https://tunnel.trycloudflare.com");
+    expect(body.authorization_servers).toEqual([
+      "https://tunnel.trycloudflare.com",
+    ]);
+  });
+
+  it("a bogus Bearer token does NOT change the protected-resource response (it's public, not token-checked)", async () => {
+    // The smoke saw an identical 401 with/without a bogus token — the tell of
+    // a blanket gate. Post-fix the route is public: handled regardless of any
+    // (even bogus) Authorization header, and never 401.
+    const rec: RecordedResponse = {};
+    const req = makeReq({
+      method: "GET",
+      url: "/.well-known/oauth-protected-resource",
+      host: "tunnel.trycloudflare.com",
+    });
+    // Inject a bogus auth header onto the mock request.
+    (req.headers as Record<string, string>).authorization = "Bearer cb_live_test";
+    const handled = await router(req, makeRes(rec));
+    expect(handled).toBe(true);
+    expect(rec.status).toBe(200);
+    expect(rec.status).not.toBe(401);
+  });
+
+  it("walks the full chain as an unauthenticated client: protected-resource → auth-server → DCR, one coherent issuer", async () => {
+    const host = "abc.trycloudflare.com";
+    const base = `https://${host}`;
+
+    // STEP 1 — RFC 9728 protected-resource metadata (the step that 401'd).
+    const prRec: RecordedResponse = {};
+    const prHandled = await router(
+      makeReq({
+        method: "GET",
+        url: "/.well-known/oauth-protected-resource",
+        host,
+      }),
+      makeRes(prRec),
+    );
+    expect(prHandled).toBe(true);
+    expect(prRec.status).toBe(200);
+    const pr = JSON.parse(prRec.body ?? "{}") as {
+      authorization_servers: string[];
+    };
+    const authServer = pr.authorization_servers[0];
+    expect(authServer).toBe(base);
+
+    // STEP 2 — follow authorization_servers[0] to RFC 8414 auth-server
+    // metadata. It must be reachable unauthenticated and self-describe the
+    // same issuer, exposing the registration_endpoint.
+    const asRec: RecordedResponse = {};
+    const asHandled = await router(
+      makeReq({
+        method: "GET",
+        url: "/.well-known/oauth-authorization-server",
+        host,
+      }),
+      makeRes(asRec),
+    );
+    expect(asHandled).toBe(true);
+    expect(asRec.status).toBe(200);
+    const as = JSON.parse(asRec.body ?? "{}") as {
+      issuer: string;
+      registration_endpoint: string;
+    };
+    expect(as.issuer).toBe(authServer); // chain resolves to one server
+    expect(as.registration_endpoint).toBe(`${base}/register`);
+
+    // STEP 3 — DCR at the advertised registration_endpoint, still
+    // unauthenticated, mints a client. This is the point credentials appear;
+    // everything before it had to be reachable without any.
+    const regRec: RecordedResponse = {};
+    const regHandled = await router(
+      makeReq({
+        method: "POST",
+        url: "/register",
+        host,
+        body: JSON.stringify({
+          redirect_uris: ["https://example.com/cb"],
+          client_name: "discovery-chain",
+        }),
+      }),
+      makeRes(regRec),
+    );
+    expect(regHandled).toBe(true);
+    expect(regRec.status).toBe(201);
+    const reg = JSON.parse(regRec.body ?? "{}") as { client_id: string };
+    expect(reg.client_id).toBeTruthy();
+    expect(store.findByClientId(reg.client_id)).not.toBeNull();
+  });
+});

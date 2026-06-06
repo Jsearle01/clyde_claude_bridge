@@ -16,12 +16,17 @@ import type { ClientsStore } from "./clients-store.js";
 import type { ConsentManager } from "./consent.js";
 import { handleAuthorize } from "./authorize.js";
 import { handleMetadata } from "./metadata.js";
+import { handleProtectedResourceMetadata } from "./protected-resource.js";
 import { handleRegister } from "./register.js";
 import { handleStatus } from "./status.js";
 import { handleToken } from "./token-endpoint.js";
 import type { TokenStore } from "./token-store.js";
 
 const METADATA_PATH = "/.well-known/oauth-authorization-server";
+// CB-OAUTH-DISCOVERY-FIX: RFC 9728 protected-resource metadata — the FIRST
+// discovery step claude.ai fetches; MUST be public (was unimplemented →
+// fell through to the Bearer gate → 401 → discovery aborted before /register).
+const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
 const REGISTER_PATH = "/register";
 // T-P3-002: consent flow endpoints.
 const AUTHORIZE_PATH = "/authorize";
@@ -56,6 +61,10 @@ export function makeOAuthRouter(
     const path = pathOf(req);
     if (path === METADATA_PATH) {
       handleMetadata(req, res, { logger: deps.logger });
+      return true;
+    }
+    if (path === PROTECTED_RESOURCE_PATH) {
+      handleProtectedResourceMetadata(req, res, { logger: deps.logger });
       return true;
     }
     if (path === REGISTER_PATH) {
