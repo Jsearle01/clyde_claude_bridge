@@ -67,10 +67,27 @@ export function resolvePath(token: string, workspaceRoot: string): string {
   return normalize(isAbsolute(p) ? p : pathResolve(workspaceRoot, p));
 }
 
-/** True when `child` is `parent` itself or nested under it. */
+// AC-P3-13 (T-P3-008 floor parity finding): the Windows filesystem is
+// case-INSENSITIVE, so a case-variant of a floored path (e.g.
+// `c:\users\jay\.claude-bridge` vs `C:\Users\jay\.claude-bridge`) names the
+// SAME object. Case-sensitive comparison let such variants SLIP the auth-dir
+// self-protection (a silent under-block — confirmed: `variant write` allowed).
+// On win32 we therefore canonicalize case before every path comparison; on
+// POSIX (case-sensitive FS) we must NOT, or `/Foo` and `/foo` — genuinely
+// distinct dirs — would be conflated. Canonicalization is applied uniformly
+// (isUnder, root-equality, .git basename) so the rm floor cannot regress:
+// making isUnder case-insensitive alone would have flipped a case-variant
+// `rm -rf <root>` from denied to allowed.
+const NOCASE = process.platform === "win32";
+function canon(p: string): string {
+  const n = normalize(p);
+  return NOCASE ? n.toLowerCase() : n;
+}
+
+/** True when `child` is `parent` itself or nested under it (case-aware per FS). */
 export function isUnder(child: string, parent: string): boolean {
-  const c = normalize(child);
-  const pa = normalize(parent);
+  const c = canon(child);
+  const pa = canon(parent);
   if (c === pa) return true;
   const prefix = pa.endsWith(sep) ? pa : pa + sep;
   return c.startsWith(prefix);
@@ -95,12 +112,19 @@ function checkConfigDirReference(
   // auth/gate/binding dir at all during a delegation. Mirrors the wholesale
   // ~/.ssh / ~/.aws block. Match the tilde/HOME shorthand AND the resolved
   // absolute config dir (so it can't be reached by the literal path either).
-  if (/(\$HOME|~)[/\\]\.?claude-bridge([/\\]|\b)/.test(command)) {
+  // On win32 the FS (and thus dir name) is case-insensitive, so match the
+  // tilde/HOME shorthand case-insensitively too (AC-P3-13 parity).
+  const tilde = NOCASE
+    ? /(\$HOME|~)[/\\]\.?claude-bridge([/\\]|\b)/i
+    : /(\$HOME|~)[/\\]\.?claude-bridge([/\\]|\b)/;
+  if (tilde.test(command)) {
     return deny("write/read of the claude-bridge auth dir (~/.claude-bridge)");
   }
-  // Absolute config-dir path appearing literally in the command.
-  const normConfig = normalize(configDir);
-  if (command.includes(normConfig) || command.includes(configDir)) {
+  // Absolute config-dir path appearing literally in the command (case-folded
+  // on win32 so a case-variant of the auth-dir path cannot slip the check).
+  const hay = NOCASE ? command.toLowerCase() : command;
+  const normConfig = canon(configDir);
+  if (hay.includes(normConfig) || hay.includes(NOCASE ? configDir.toLowerCase() : configDir)) {
     return deny("write/read of the claude-bridge auth dir (config path)");
   }
   return ALLOW;
@@ -154,10 +178,10 @@ function checkRmFloor(
   const paths = args.filter((a) => !a.startsWith("-"));
   for (const raw of paths) {
     const resolved = resolvePath(raw, workspaceRoot);
-    if (resolved === normalize(workspaceRoot)) {
+    if (canon(resolved) === canon(workspaceRoot)) {
       return deny("rm -rf of the workspace root (the sandbox root is inviolable)");
     }
-    if (basename(resolved) === ".git") {
+    if (canon(basename(resolved)) === canon(".git")) {
       return deny("rm -rf of a .git directory (repository destruction)");
     }
     if (!isUnder(resolved, workspaceRoot)) {

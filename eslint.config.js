@@ -23,8 +23,9 @@ export default tseslint.config(
           ],
           // Bumped past the v8 default of 8 — tests are growing past that
           // threshold. Each entry is a small file with no transitive imports
-          // beyond src + node_modules; perf impact is minimal.
-          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 50,
+          // beyond src + node_modules; perf impact is minimal. (Raised 50→64
+          // when the T-P3-008 acceptance suite tipped the daemon over 50.)
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 64,
         },
         tsconfigRootDir: import.meta.dirname,
       },

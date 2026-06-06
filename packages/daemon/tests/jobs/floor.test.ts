@@ -156,4 +156,17 @@ describe("checkBashFloor / checkWritePathFloor direct units", () => {
     expect(checkBashFloor(`rm -rf ${sibling}`, WS, CFG).denied).toBe(true); // outside
     expect(checkWritePathFloor(join(WS, "ok.ts"), WS, CFG).denied).toBe(false);
   });
+
+  // T-P3-008 parity finding: path comparison must follow the host FS case
+  // semantics. On win32 (case-insensitive FS) a case-variant of the auth dir
+  // names the SAME dir and MUST be floored; on POSIX it is a distinct dir.
+  it("auth-dir self-protection follows host FS case semantics (win32 case-fold)", () => {
+    const variant = join(CFG.toUpperCase(), "tokens.json");
+    if (process.platform === "win32") {
+      expect(checkWritePathFloor(variant, WS, CFG).denied).toBe(true);
+      expect(checkBashFloor(`cat ${variant}`, WS, CFG).denied).toBe(true);
+    } else {
+      expect(checkWritePathFloor(variant, WS, CFG).denied).toBe(false);
+    }
+  });
 });
