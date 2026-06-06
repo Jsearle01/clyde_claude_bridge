@@ -17,6 +17,7 @@ function makeSources(overrides: Partial<{
   existingPid: number | null;
   folder: WorkspaceFolder | undefined;
   daemonInfo: DaemonInfo | undefined;
+  daemonPid: number | null;
   retryCount: number;
   binding: BindingInfo | null;
 }>): StatusBarSources {
@@ -27,6 +28,7 @@ function makeSources(overrides: Partial<{
     existingPid: null,
     folder: { uri: { fsPath: "/projects/myproject" }, name: "myproject" },
     daemonInfo: undefined as DaemonInfo | undefined,
+    daemonPid: null as number | null,
     retryCount: 0,
     binding: null as BindingInfo | null,
     ...overrides,
@@ -38,6 +40,7 @@ function makeSources(overrides: Partial<{
     getRegistrationExistingPid: () => opts.existingPid,
     getWorkspaceFolder: () => opts.folder,
     getDaemonInfo: () => opts.daemonInfo,
+    getDaemonPid: () => opts.daemonPid,
     getCurrentMode: () => "per_call",
     getRetryCount: () => opts.retryCount,
     getBinding: () => opts.binding,
@@ -156,6 +159,28 @@ describe("composeStatusBarTooltip (T-P2-006)", () => {
     expect(md.value).toContain("connected (pid 12345)");
     expect(md.value).toContain("https://x.trycloudflare.com");
     expect(md.value).toContain("Click for actions.");
+  });
+
+  // CB-TOOLTIP-PID-FIX: point #3 of the chain — the PRODUCTION path uses
+  // getDaemonPid() (the hello handshake pid), NOT getDaemonInfo() (a stub that
+  // returns undefined). This is the path the operator actually hits.
+  it("connected via getDaemonPid only (getDaemonInfo undefined): tooltip shows the daemon pid", () => {
+    const md = composeStatusBarTooltip(
+      makeSources({
+        conn: "connected",
+        daemonInfo: undefined, // the production stub
+        daemonPid: 24232, // captured from hello_ok
+      }),
+    );
+    expect(md.value).toContain("connected (pid 24232)");
+  });
+
+  it("connected with no daemon pid available: shows 'connected' without 'pid' (older-daemon compat)", () => {
+    const md = composeStatusBarTooltip(
+      makeSources({ conn: "connected", daemonInfo: undefined, daemonPid: null }),
+    );
+    expect(md.value).toContain("connected");
+    expect(md.value).not.toContain("pid");
   });
 
   it("disconnected: tooltip shows 'not running' daemon label; no URL line", () => {

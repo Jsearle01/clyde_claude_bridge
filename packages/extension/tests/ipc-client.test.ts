@@ -98,6 +98,55 @@ describe("IpcClient (T-P2-002)", () => {
     expect(client.getConnectionState()).toBe("connected");
   });
 
+  // CB-TOOLTIP-PID-FIX: point #2 of the chain — does IpcClient capture
+  // daemon_pid from hello_ok into getDaemonPid()?
+  it("captures daemon_pid from hello_ok (getDaemonPid)", async () => {
+    expect(client.getDaemonPid()).toBeNull(); // none before connect
+    const connectPromise = client.connect();
+    fakeSocket.simulateConnect();
+    fakeSocket.simulateData(
+      JSON.stringify({
+        kind: "hello_ok",
+        daemon_version: "1.0",
+        min_supported: "1.0",
+        daemon_pid: 24232,
+      }),
+    );
+    await connectPromise;
+    expect(client.getDaemonPid()).toBe(24232);
+  });
+
+  it("getDaemonPid is null when hello_ok omits daemon_pid (older-daemon compat)", async () => {
+    const connectPromise = client.connect();
+    fakeSocket.simulateConnect();
+    fakeSocket.simulateData(
+      JSON.stringify({
+        kind: "hello_ok",
+        daemon_version: "1.0",
+        min_supported: "1.0",
+      }),
+    );
+    await connectPromise;
+    expect(client.getDaemonPid()).toBeNull();
+  });
+
+  it("clears daemon_pid on disconnect (stale once the socket drops)", async () => {
+    const connectPromise = client.connect();
+    fakeSocket.simulateConnect();
+    fakeSocket.simulateData(
+      JSON.stringify({
+        kind: "hello_ok",
+        daemon_version: "1.0",
+        min_supported: "1.0",
+        daemon_pid: 777,
+      }),
+    );
+    await connectPromise;
+    expect(client.getDaemonPid()).toBe(777);
+    fakeSocket.emit("close");
+    expect(client.getDaemonPid()).toBeNull();
+  });
+
   it("rejects connect, transitions to version_mismatch, and surfaces showErrorMessage on error reason=version_mismatch", async () => {
     const connectPromise = client.connect();
     fakeSocket.simulateConnect();
