@@ -47,8 +47,13 @@ interface CliConfigShape {
 
 // Locate the daemon's config file. Mirrors CLI's util/paths.ts logic.
 // Returns the IPC endpoint (socket path on Unix; named pipe on Windows).
-export function discoverDaemonEndpoint(): string {
-  if (process.platform === "win32") {
+// `platform` is injectable (defaulted to the host) so the win32-vs-posix
+// branch is unit-testable without mutating the global process.platform —
+// matches the cross-platform-test-inputs pattern used across this package.
+export function discoverDaemonEndpoint(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
     return WINDOWS_PIPE_PATH;
   }
   const configPath = join(homedir(), ".claude-bridge", "config.json");

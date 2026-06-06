@@ -27,10 +27,18 @@ const SPAWN_OBSERVATION_WINDOW_MS = 5_000;
 // is explicit and avoids the shell:true escape hazard. The bare name is
 // kept at the end of the Windows list as a defensive fallback in case a
 // future host resolves it natively. T-P2-004.5 fix.
-export const CLI_CANDIDATES: readonly string[] =
-  process.platform === "win32"
+//
+// Computed from `platform` (defaulted to the host) rather than an
+// import-time const so the win32-vs-posix selection is directly assertable
+// in tests (CB-LINUX-LAUNCH-TESTS) — Linux-native takes the single-element
+// bare-name arm.
+export function candidatesFor(
+  platform: NodeJS.Platform = process.platform,
+): readonly string[] {
+  return platform === "win32"
     ? ["claude-bridge.cmd", "claude-bridge.exe", "claude-bridge"]
     : ["claude-bridge"];
+}
 
 export class CliBinaryNotFoundError extends Error {
   constructor(public readonly searchedNames: readonly string[]) {
@@ -56,15 +64,19 @@ export class DaemonSpawnFailedError extends Error {
 
 export type LocateCliDeps = {
   spawnSync?: typeof nodeSpawnSync;
-  // Test injection point: defaults to CLI_CANDIDATES (Windows-aware list).
-  // Tests pass explicit platform-shaped lists rather than mutating
+  // Test injection point: defaults to candidatesFor(platform) (Windows-aware
+  // list). Tests pass explicit platform-shaped lists rather than mutating
   // process.platform — matches cross-platform-test-inputs pattern.
   candidates?: readonly string[];
+  // Injectable platform (defaulted to the host) — drives both the default
+  // candidate list and the probe's shell flag, so the win32-vs-posix
+  // behavior is assertable without mutating the global process.platform.
+  platform?: NodeJS.Platform;
 };
 
 // Returns the binary name to invoke. If `configOverride` is non-empty, it
 // wins (no liveness check — spawn will surface a clear error if wrong).
-// Otherwise iterates platform candidates (CLI_CANDIDATES by default) and
+// Otherwise iterates platform candidates (candidatesFor(platform) by default) and
 // returns the first name where `spawnSync(name, ["--version"])` returns
 // status 0. On all-fail, throws CliBinaryNotFoundError with the full list
 // of names that were tried.
@@ -76,7 +88,8 @@ export function locateCliBinary(
     return configOverride;
   }
   const spawnSync = deps.spawnSync ?? nodeSpawnSync;
-  const candidates = deps.candidates ?? CLI_CANDIDATES;
+  const platform = deps.platform ?? process.platform;
+  const candidates = deps.candidates ?? candidatesFor(platform);
   const tried: string[] = [];
   for (const name of candidates) {
     tried.push(name);
@@ -88,7 +101,7 @@ export function locateCliBinary(
       // naming. Args here are literal ("--version") so cmd.exe parsing
       // is unambiguous; if future args carry user-controlled content
       // they need explicit quoting at that future call site.
-      shell: process.platform === "win32",
+      shell: platform === "win32",
     });
     if (probe.error === undefined && probe.status === 0) {
       return name;
@@ -142,6 +155,10 @@ export type StartDaemonDeps = {
   showInputBox?: typeof vscode.window.showInputBox;
   envValue?: string | undefined;
   observationWindowMs?: number;
+  // Injectable platform (defaulted to the host) — drives the spawn's shell
+  // flag and the candidate list, so the win32-vs-posix spawn contract is
+  // assertable without mutating the global process.platform.
+  platform?: NodeJS.Platform;
 };
 
 export type StartDaemonResult =
@@ -160,9 +177,13 @@ export async function startDaemon(
   config: { cliPath: string | undefined },
   deps: StartDaemonDeps = {},
 ): Promise<StartDaemonResult> {
+  const platform = deps.platform ?? process.platform;
   let binary: string;
   try {
-    binary = locateCliBinary(config.cliPath, { spawnSync: deps.spawnSync });
+    binary = locateCliBinary(config.cliPath, {
+      spawnSync: deps.spawnSync,
+      platform,
+    });
   } catch (err) {
     if (err instanceof CliBinaryNotFoundError) {
       return { ok: false, kind: "binary_not_found", error: err.message };
@@ -193,7 +214,7 @@ export async function startDaemon(
       // CVE-2024-27980: same workaround as the locateCliBinary probe —
       // required for spawning a .cmd shim on Windows. Args are literal
       // ("start") so cmd.exe parsing is unambiguous.
-      shell: process.platform === "win32",
+      shell: platform === "win32",
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

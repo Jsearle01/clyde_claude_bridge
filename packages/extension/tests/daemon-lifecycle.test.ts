@@ -9,6 +9,7 @@ import { EventEmitter } from "node:events";
 import * as vscode from "vscode";
 import {
   locateCliBinary,
+  candidatesFor,
   getApiKey,
   startDaemon,
   runStartDaemonCommand,
@@ -394,6 +395,92 @@ describe("startDaemon (T-P2-004)", () => {
       | { env?: Record<string, string> }
       | undefined;
     expect(spawnOpts?.env?.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+});
+
+// CB-LINUX-LAUNCH-TESTS: the platform-driven launch contract. Locks in the
+// Linux-native (generic-POSIX) decision logic — bare binary + shell:false —
+// alongside the win32 contract, by injecting `platform` rather than mutating
+// the global process.platform. CEILING: correct-by-construction +
+// mocked-platform-covered, NOT live-confirmed (a real unix-socket connect /
+// detached-spawn / bare-binary PATH resolution needs a real Linux host; P4 CI).
+
+describe("platform launch contract — Linux-native + win32 (CB-LINUX-LAUNCH-TESTS)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("candidatesFor: linux/darwin -> single bare binary; win32 -> .cmd/.exe/bare", () => {
+    expect(candidatesFor("linux")).toEqual(["claude-bridge"]);
+    expect(candidatesFor("darwin")).toEqual(["claude-bridge"]);
+    expect(candidatesFor("win32")).toEqual([
+      "claude-bridge.cmd",
+      "claude-bridge.exe",
+      "claude-bridge",
+    ]);
+  });
+
+  it("locateCliBinary on linux: probes bare 'claude-bridge' with shell:false", () => {
+    const spawnSync = vi.fn(() => ({ status: 0, error: undefined })) as never;
+    const result = locateCliBinary(undefined, { spawnSync, platform: "linux" });
+    expect(result).toBe("claude-bridge");
+    expect(spawnSync).toHaveBeenCalledWith(
+      "claude-bridge",
+      ["--version"],
+      expect.objectContaining({ shell: false }),
+    );
+  });
+
+  it("locateCliBinary on win32: probes the .cmd shim first with shell:true", () => {
+    const spawnSync = vi.fn(() => ({ status: 0, error: undefined })) as never;
+    const result = locateCliBinary(undefined, { spawnSync, platform: "win32" });
+    expect(result).toBe("claude-bridge.cmd");
+    expect(spawnSync).toHaveBeenCalledWith(
+      "claude-bridge.cmd",
+      ["--version"],
+      expect.objectContaining({ shell: true }),
+    );
+  });
+
+  it("startDaemon on linux: spawns bare 'claude-bridge start' with shell:false + detached:true", async () => {
+    const secrets = makeSecretsMock();
+    const child = new FakeChild();
+    const spawn = vi.fn(() => child) as never;
+    // Probe resolves the bare binary (no cliPath override).
+    const spawnSync = vi.fn(() => ({ status: 0, error: undefined })) as never;
+    const result = await startDaemon(
+      { secrets: secrets.api },
+      { cliPath: undefined },
+      { spawn, spawnSync, envValue: "sk-ant-env", observationWindowMs: 50, platform: "linux" },
+    );
+    expect(result.ok).toBe(true);
+    const call = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+    if (call === undefined) throw new Error("expected spawn call");
+    expect(call[0]).toBe("claude-bridge");
+    expect(call[1]).toEqual(["start"]);
+    expect(call[2]).toEqual(
+      expect.objectContaining({ shell: false, detached: true }),
+    );
+  });
+
+  it("startDaemon on win32: resolves the .cmd shim and spawns with shell:true + detached:true", async () => {
+    const secrets = makeSecretsMock();
+    const child = new FakeChild();
+    const spawn = vi.fn(() => child) as never;
+    // First candidate (claude-bridge.cmd) probes successfully.
+    const spawnSync = vi.fn(() => ({ status: 0, error: undefined })) as never;
+    const result = await startDaemon(
+      { secrets: secrets.api },
+      { cliPath: undefined },
+      { spawn, spawnSync, envValue: "sk-ant-env", observationWindowMs: 50, platform: "win32" },
+    );
+    expect(result.ok).toBe(true);
+    const call = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+    if (call === undefined) throw new Error("expected spawn call");
+    expect(call[0]).toBe("claude-bridge.cmd");
+    expect(call[2]).toEqual(
+      expect.objectContaining({ shell: true, detached: true }),
+    );
   });
 });
 
