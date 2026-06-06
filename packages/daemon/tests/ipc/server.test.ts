@@ -395,9 +395,20 @@ describe("IpcServer", () => {
     if (hello.kind === "hello_ok") {
       expect(hello.daemon_version).toBe("1.0");
       expect(hello.min_supported).toBe("1.0");
+      // CB-DAEMON-LIFECYCLE-FIX (b): hello_ok carries the daemon's pid so the
+      // extension can show which daemon it's bound to. Here the daemon IS this
+      // test process.
+      expect(hello.daemon_pid).toBe(process.pid);
     }
     const status = JSON.parse(statusRaw) as IpcResponse;
     expect(status.kind).toBe("status_ok");
+  });
+
+  it("countConnectedExtensions is 0 before any extension hello (CB-DAEMON-LIFECYCLE-FIX b/c2)", async () => {
+    const { s } = startConfig();
+    await s.start();
+    expect(s.countConnectedExtensions()).toBe(0);
+    await s.stop();
   });
 });
 

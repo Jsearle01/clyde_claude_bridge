@@ -52,9 +52,11 @@ import { DailyTimer } from "./util/daily-timer.js";
 import { scanTranscriptOrphans } from "./jobs/transcript-orphan.js";
 import { PendingApprovalRegistry } from "./approval/pending.js";
 import { ApprovalGateImpl } from "./approval/gate.js";
+import { connect as netConnect } from "node:net";
 import {
   writePidFile,
   checkStalePid,
+  readPidFromFile,
   removePidFile,
 } from "./pidfile.js";
 
@@ -81,6 +83,30 @@ function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
   return "unknown";
+}
+
+// CB-DAEMON-LIFECYCLE-FIX (a): authoritative single-instance probe. The TCP
+// bind port is the only reliable cross-platform single-bind lock — the win32
+// named pipe permits multiple listeners (so the pipe can't guard), and
+// pid-file liveness is presence-only (pid reuse and win32 EPERM both
+// misreport "alive"). A successful CONNECT to the bind address means a daemon
+// already owns the port → the caller refuses and leaves the incumbent
+// untouched. ECONNREFUSED/timeout ⟹ the port is free ⟹ no live daemon.
+export function isDaemonPortListening(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = netConnect({ host, port });
+    let settled = false;
+    const done = (listening: boolean): void => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.setTimeout(1000, () => done(false));
+  });
 }
 
 export async function shutdown(
@@ -212,16 +238,35 @@ async function main(): Promise<void> {
     config_path: configPath,
   });
 
-  // 3. PID file check.
-  const pidState = await checkStalePid(pidPath);
-  if (pidState === "alive") {
+  // 3. Single-instance guard. CB-DAEMON-LIFECYCLE-FIX (a): the TCP bind port
+  //    is the AUTHORITATIVE lock (isDaemonPortListening) — checked BEFORE we
+  //    write the pid file so a doubled start refuses without clobbering the
+  //    incumbent's pid. LOCKED operator decision: on a doubled start the
+  //    daemon REFUSES and the existing daemon stays in force, uninterrupted
+  //    (it holds the live VS Code sessions + MCP/tunnel). Replacing is the
+  //    explicit two-step `stop` then `start` — never a forceful single command.
+  if (
+    await isDaemonPortListening(config.daemon.bind_host, config.daemon.bind_port)
+  ) {
+    const existingPid = await readPidFromFile(pidPath);
+    const pidPart = existingPid !== null ? ` (pid ${existingPid})` : "";
     process.stderr.write(
-      `daemon already running (PID file at ${pidPath} points to live process)\n`,
+      `Daemon already running${pidPart}; it remains active. ` +
+        `Use \`claude-bridge stop\` first if you intend to replace it.\n`,
     );
     await logger.close();
     process.exit(1);
   }
-  if (pidState === "stale") {
+  // Port is free ⟹ no live daemon. Any existing pid file is therefore stale
+  // (a crashed/zombie daemon, or a reused pid that signal-0 misreports as
+  // alive) — the port is authoritative, so overwrite. Diagnostic log only.
+  const pidState = await checkStalePid(pidPath);
+  if (pidState === "alive") {
+    logger.warn(
+      "pid file reports a live pid but the daemon port is free; treating as stale (pid reuse or unclean exit)",
+      { path: pidPath },
+    );
+  } else if (pidState === "stale") {
     logger.warn("stale PID file detected; overwriting", { path: pidPath });
   }
   await writePidFile(pidPath);
@@ -498,6 +543,10 @@ async function main(): Promise<void> {
       clientsStore,
       consentManager,
       tokenStore,
+      // CB-DAEMON-LIFECYCLE-FIX (c2): let /authorize's offline page tell
+      // "connected but unregistered" from "no extension here".
+      countConnectedExtensions: () =>
+        ipcServerRef.current?.countConnectedExtensions() ?? 0,
     }),
     // T-P3-004a: resolve OAuth access tokens to their binding at the auth
     // layer, so a bound token is enforced to its workspace.
@@ -545,6 +594,19 @@ async function main(): Promise<void> {
       } catch {
         // Audit file may not exist yet if no entries written.
       }
+      // CB-DAEMON-LIFECYCLE-FIX: surface the active registered extension
+      // sessions (the diagnostic lens for the doubled-daemon split). Read
+      // through ipcServerRef (assigned before any handler can fire).
+      const activeRegistry =
+        ipcServerRef.current?.getActiveRegistry() ??
+        new Map<string, { identifier: string; pid: number }>();
+      const connected_extensions = [...activeRegistry.entries()].map(
+        ([abs_path, entry]) => ({
+          identifier: entry.identifier,
+          pid: entry.pid,
+          abs_path,
+        }),
+      );
       const payload: StatusPayload = {
         daemon_pid: process.pid,
         daemon_uptime_s: Math.floor((Date.now() - state.startedAt) / 1000),
@@ -554,7 +616,8 @@ async function main(): Promise<void> {
         token_suffix: currentToken.slice(-4),
         audit_path: config.audit.path,
         audit_size_bytes: auditSizeBytes,
-        attached_workspaces: 0,
+        attached_workspaces: connected_extensions.length,
+        connected_extensions,
       };
       return payload;
     },

@@ -45,6 +45,9 @@ export interface OAuthRouterDeps {
   // wiring passes a real store; /token needs both consentManager (redeem)
   // and tokenStore (mint) to function.
   tokenStore?: TokenStore;
+  // CB-DAEMON-LIFECYCLE-FIX (c2): threaded into /authorize so the offline
+  // page can distinguish "connected but unregistered" from "no extension".
+  countConnectedExtensions?: () => number;
 }
 
 function pathOf(req: IncomingMessage): string {
@@ -79,6 +82,7 @@ export function makeOAuthRouter(
         logger: deps.logger,
         clientsStore: deps.clientsStore,
         consentManager: deps.consentManager,
+        countConnectedExtensions: deps.countConnectedExtensions,
       });
       return true;
     }

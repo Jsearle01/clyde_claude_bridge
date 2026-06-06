@@ -33,6 +33,11 @@ export interface AuthorizeHandlerDeps {
   logger: Logger;
   clientsStore: ClientsStore;
   consentManager: ConsentManager;
+  // CB-DAEMON-LIFECYCLE-FIX (c2): count of extension connections hello'd with
+  // this daemon. Lets the offline page distinguish "connected but no trusted
+  // workspace" from "no extension here at all". Optional — defaults to 0
+  // (the conservative "no extension connected" page) when not wired.
+  countConnectedExtensions?: () => number;
 }
 
 function parseQuery(req: IncomingMessage): URLSearchParams {
@@ -169,7 +174,11 @@ export async function handleAuthorize(
       sendHtml(res, 409, noUnboundWorkspacePage());
       return;
     }
-    sendHtml(res, 503, extensionOfflinePage());
+    // CB-DAEMON-LIFECYCLE-FIX (c2): if an extension is connected to THIS daemon
+    // but unregistered, say so (no-folder / untrusted) rather than the generic
+    // "no extension connected".
+    const extensionConnected = (deps.countConnectedExtensions?.() ?? 0) > 0;
+    sendHtml(res, 503, extensionOfflinePage(extensionConnected));
     return;
   }
 

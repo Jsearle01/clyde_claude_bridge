@@ -100,12 +100,32 @@ export function pendingPage(opts: {
   ].join("\n");
 }
 
-export function extensionOfflinePage(): string {
+// CB-DAEMON-LIFECYCLE-FIX (c2): the offline page now distinguishes the two
+// states the daemon can actually tell apart, and enumerates the four real
+// causes so the operator isn't guessing. `extensionConnected` is true when an
+// extension HAS completed the hello handshake with THIS daemon but has no
+// trusted/registered workspace (no folder open, or Trust not completed) —
+// vs. false when no extension is talking to this daemon at all (not running,
+// or — the doubled-daemon split — bound to a DIFFERENT daemon).
+export function extensionOfflinePage(extensionConnected = false): string {
+  const headline = extensionConnected
+    ? "A VS Code window is connected, but no workspace is registered"
+    : "No VS Code extension is connected to this daemon";
+  const diagnosis = extensionConnected
+    ? "<p>An extension IS connected to this daemon, but it has no trusted, registered workspace — so there's nothing to bind. Open a folder in that VS Code window and complete the <strong>Trust</strong> prompt, then try again.</p>"
+    : "<p>No VS Code extension has registered with this daemon. Check each likely cause below.</p>";
   return [
     chromeOpen({ title: "Extension offline — claude-bridge" }),
-    "<h1 class=\"error\">No VS Code extension is connected</h1>",
-    "<p>This authorization request needs an active VS Code extension to display the consent modal.</p>",
-    "<p>Open a VS Code window with the claude-bridge extension installed and a registered workspace, then try the authorization again.</p>",
+    `<h1 class="error">${headline}</h1>`,
+    "<p>This authorization needs a VS Code window with the claude-bridge extension, a folder open, and that folder trusted/registered with the daemon serving this request.</p>",
+    diagnosis,
+    "<p>Likely causes:</p>",
+    "<ul>",
+    "<li>No VS Code window with the extension is open.</li>",
+    "<li>The window has <strong>no folder</strong> open.</li>",
+    "<li>The folder isn't <strong>trusted</strong> yet — complete the Trust prompt in VS Code.</li>",
+    "<li>The window is connected to a <strong>different daemon</strong> (a doubled daemon). Run <code>claude-bridge status</code> to see which sessions are connected to this daemon, and the daemon pid shown in the VS Code status-bar tooltip.</li>",
+    "</ul>",
     chromeClose(),
   ].join("\n");
 }

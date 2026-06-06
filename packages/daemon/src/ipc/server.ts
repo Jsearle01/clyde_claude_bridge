@@ -157,6 +157,20 @@ export class IpcServer {
     return this.activeRegistry;
   }
 
+  // CB-DAEMON-LIFECYCLE-FIX (c2): count of extension connections that have
+  // completed the hello handshake (whether or not they registered a trusted
+  // workspace). Lets the /authorize offline page distinguish "no extension is
+  // talking to THIS daemon at all" (count 0) from "an extension IS connected
+  // here but has no trusted/registered workspace" (count > 0 while
+  // activeRegistry is empty — i.e. no folder open, or Trust not completed).
+  public countConnectedExtensions(): number {
+    let n = 0;
+    for (const state of this.connectionState.values()) {
+      if (state.role === "extension") n += 1;
+    }
+    return n;
+  }
+
   // T-P2-008: post-construction approval-gate wire-up. Called by main.ts
   // after the gate is constructed (the gate needs the IpcServer in turn
   // to send approval_request messages, so order is: ipcServer → gate →
@@ -485,6 +499,9 @@ export class IpcServer {
         kind: "hello_ok",
         daemon_version: IPC_DAEMON_VERSION,
         min_supported: IPC_MIN_SUPPORTED,
+        // CB-DAEMON-LIFECYCLE-FIX: the daemon's own pid, so the extension can
+        // display which daemon it's bound to (doubled-daemon visibility).
+        daemon_pid: process.pid,
       });
       return;
     }

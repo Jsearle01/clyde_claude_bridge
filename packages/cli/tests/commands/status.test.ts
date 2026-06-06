@@ -103,6 +103,34 @@ describe("formatStatusPayload", () => {
     expect(out).toContain("Tunnel:    degraded");
     expect(out).toContain("URL:       (not assigned)");
   });
+
+  // CB-DAEMON-LIFECYCLE-FIX (b): connected-session visibility — the
+  // diagnostic lens for the doubled-daemon split.
+  it("lists connected extension sessions (identifier, pid, workspace)", () => {
+    const payload = makeStatusPayload({
+      attached_workspaces: 1,
+      connected_extensions: [
+        { identifier: "myproj-aaaaaa", pid: 5544, abs_path: "/home/user/myproj" },
+      ],
+    });
+    const out = formatStatusPayload(payload, 84231, "/home/user");
+    expect(out).toContain("Sessions:  1 connected");
+    expect(out).toContain("- myproj-aaaaaa (pid 5544) ~/myproj");
+  });
+
+  it("renders '0 connected' when the list is empty", () => {
+    const payload = makeStatusPayload({ connected_extensions: [] });
+    expect(formatStatusPayload(payload, 84231, "/home/user")).toContain(
+      "Sessions:  0 connected",
+    );
+  });
+
+  it("renders '(not reported)' when a pre-fix daemon omits the field", () => {
+    const payload = makeStatusPayload(); // no connected_extensions
+    expect(formatStatusPayload(payload, 84231, "/home/user")).toContain(
+      "Sessions:  (not reported by this daemon)",
+    );
+  });
 });
 
 function makeHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {

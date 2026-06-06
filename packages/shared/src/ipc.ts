@@ -4,6 +4,19 @@
 
 import { z } from "zod";
 
+// CB-DAEMON-LIFECYCLE-FIX: one connected (registered) extension session, as
+// surfaced by `claude-bridge status`. Mirrors the daemon's activeRegistry
+// entries so an operator can see WHICH window (pid + workspace) is bound to
+// THIS daemon — the diagnostic lens for the doubled-daemon split.
+export const ConnectedExtensionSchema = z
+  .object({
+    identifier: z.string(),
+    pid: z.number().int().nonnegative(),
+    abs_path: z.string(),
+  })
+  .strict();
+export type ConnectedExtension = z.infer<typeof ConnectedExtensionSchema>;
+
 export const StatusPayloadSchema = z
   .object({
     daemon_pid: z.number().int().nonnegative(),
@@ -14,7 +27,13 @@ export const StatusPayloadSchema = z
     token_suffix: z.string().length(4),         // last 4 chars only
     audit_path: z.string(),
     audit_size_bytes: z.number().int().nonnegative(),
-    attached_workspaces: z.number().int().nonnegative(),  // always 0 in P0
+    // CB-DAEMON-LIFECYCLE-FIX: count of active registered extension sessions
+    // (was hardcoded 0; now activeRegistry.size).
+    attached_workspaces: z.number().int().nonnegative(),
+    // CB-DAEMON-LIFECYCLE-FIX: the active registered sessions themselves.
+    // Optional for wire compat (a pre-fix daemon won't send it; the CLI
+    // degrades to "unknown"), matching the `mode`-optional precedent below.
+    connected_extensions: z.array(ConnectedExtensionSchema).optional(),
   })
   .strict();
 export type StatusPayload = z.infer<typeof StatusPayloadSchema>;
@@ -216,6 +235,11 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
       kind: z.literal("hello_ok"),
       daemon_version: z.string(),
       min_supported: z.string(),
+      // CB-DAEMON-LIFECYCLE-FIX: the daemon's own pid, so the extension can
+      // display "connected to daemon pid N" and a doubled-daemon split is
+      // visible from the VS Code side. Optional for wire compat (a pre-fix
+      // daemon won't send it; the extension shows pid unknown).
+      daemon_pid: z.number().int().nonnegative().optional(),
     })
     .strict(),
   z

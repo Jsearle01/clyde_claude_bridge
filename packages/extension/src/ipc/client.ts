@@ -83,6 +83,9 @@ export class IpcClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private explicitlyClosed = false;
+  // CB-DAEMON-LIFECYCLE-FIX: the connected daemon's pid (from hello_ok), or
+  // null when disconnected / a pre-fix daemon that doesn't send it.
+  private daemonPid: number | null = null;
   private readonly socketFactory: (endpoint: string) => Socket;
   // Single-flight queue for post-hello requests. T-P2-003 needs at most
   // one in-flight request at a time (register_workspace then maybe
@@ -165,6 +168,12 @@ export class IpcClient {
 
   getConnectionState(): ConnectionStateKind {
     return this.state;
+  }
+
+  // CB-DAEMON-LIFECYCLE-FIX: the connected daemon's pid (or null when not
+  // connected / daemon predates this field). Read by the status bar tooltip.
+  getDaemonPid(): number | null {
+    return this.daemonPid;
   }
 
   // T-P2-008: fire-and-forget send. Used for messages that have no
@@ -275,7 +284,12 @@ export class IpcClient {
           const line = buffer.slice(0, idx);
           buffer = buffer.slice(idx + 1);
 
-          let parsed: { kind?: string; reason?: string; message?: string };
+          let parsed: {
+            kind?: string;
+            reason?: string;
+            message?: string;
+            daemon_pid?: number;
+          };
           try {
             parsed = JSON.parse(line) as typeof parsed;
           } catch {
@@ -292,6 +306,11 @@ export class IpcClient {
           // pending-request queue.
           if (this.state !== "connected") {
             if (parsed.kind === "hello_ok") {
+              // CB-DAEMON-LIFECYCLE-FIX: capture the daemon's pid so the
+              // status bar can show which daemon this window is bound to
+              // (doubled-daemon visibility). Optional on the wire.
+              this.daemonPid =
+                typeof parsed.daemon_pid === "number" ? parsed.daemon_pid : null;
               this.setState("connected");
               this.reconnectAttempt = 0;
               settle(() => resolve());
@@ -447,6 +466,7 @@ export class IpcClient {
   // mismatch is fatal-until-restart, not auto-retried).
   private handleDisconnect(): void {
     this.socket = null;
+    this.daemonPid = null; // CB-DAEMON-LIFECYCLE-FIX: stale once disconnected
     if (this.explicitlyClosed) return;
     if (this.state === "version_mismatch") return;
     this.setState("disconnected");

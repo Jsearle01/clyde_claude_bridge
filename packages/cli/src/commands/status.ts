@@ -67,6 +67,23 @@ export function formatStatusPayload(
   lines.push(
     `Audit:     ${collapsePath(payload.audit_path, home)} (current size: ${formatBytes(payload.audit_size_bytes)})`,
   );
+  // CB-DAEMON-LIFECYCLE-FIX: list the connected (registered) extension
+  // sessions so a doubled-daemon split is visible (which window+pid is bound
+  // to THIS daemon). `connected_extensions` is optional on the wire (a pre-fix
+  // daemon won't send it) — distinguish "0 sessions" from "not reported".
+  const sessions = payload.connected_extensions;
+  if (sessions === undefined) {
+    lines.push(`Sessions:  (not reported by this daemon)`);
+  } else if (sessions.length === 0) {
+    lines.push(`Sessions:  0 connected`);
+  } else {
+    lines.push(`Sessions:  ${sessions.length} connected`);
+    for (const s of sessions) {
+      lines.push(
+        `           - ${s.identifier} (pid ${s.pid}) ${collapsePath(s.abs_path, home)}`,
+      );
+    }
+  }
   return lines.join("\n") + "\n";
 }
 

@@ -98,6 +98,9 @@ export function activate(context: vscode.ExtensionContext): void {
     // T-P2-007+ may surface daemon pid/url/uptime once the registry
     // replacement lands; tooltip degrades gracefully when undefined.
     getDaemonInfo: () => undefined,
+    // CB-DAEMON-LIFECYCLE-FIX: the connected daemon's pid (from hello_ok),
+    // so the tooltip shows which daemon this window is bound to.
+    getDaemonPid: () => ipcClient?.getDaemonPid() ?? null,
     // T-P2-008: current approval mode for the registered workspace.
     getCurrentMode: () => registration?.getCurrentMode() ?? "per_call",
     // T-P2-008.8: retry count surfaced during the registering window.

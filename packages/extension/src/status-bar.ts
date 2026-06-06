@@ -36,6 +36,11 @@ export interface StatusBarSources {
   // T-P2-006 stubs return undefined; T-P2-007+ may wire actual daemon
   // info via IPC.
   getDaemonInfo(): DaemonInfo | undefined;
+  // CB-DAEMON-LIFECYCLE-FIX: the connected daemon's pid (from the hello_ok
+  // handshake), or null when not connected / a pre-fix daemon. Optional so
+  // existing implementers (tests) compile unchanged; the tooltip shows the
+  // bound daemon's pid so a doubled-daemon split is visible from VS Code.
+  getDaemonPid?(): number | null;
   // T-P2-008: current approval mode for the registered workspace.
   // Status-bar menu reads this to display "Change approval mode (current:
   // X)". Returns "per_call" default when no workspace registered.
@@ -155,6 +160,7 @@ export function composeStatusBarTooltip(
   const identifier = sources.getRegistrationIdentifier();
   const existingPid = sources.getRegistrationExistingPid();
   const daemonInfo = sources.getDaemonInfo();
+  const daemonPid = sources.getDaemonPid?.() ?? null;
 
   const md = new vscode.MarkdownString();
   if (folder !== undefined) {
@@ -171,7 +177,7 @@ export function composeStatusBarTooltip(
     );
   }
   md.appendMarkdown(`**Trust:** ${trustLabel(reg)}\n\n`);
-  md.appendMarkdown(`**Daemon:** ${daemonLabel(conn, daemonInfo)}\n\n`);
+  md.appendMarkdown(`**Daemon:** ${daemonLabel(conn, daemonInfo, daemonPid)}\n\n`);
   if (daemonInfo !== undefined && conn === "connected") {
     md.appendMarkdown(`**URL:** ${daemonInfo.url}\n\n`);
   }
@@ -209,10 +215,18 @@ function trustLabel(reg: RegistrationState): string {
 function daemonLabel(
   conn: ConnectionStateKind,
   info: DaemonInfo | undefined,
+  // CB-DAEMON-LIFECYCLE-FIX: daemon pid from the hello handshake (preferred
+  // when the fuller DaemonInfo isn't wired). Lets the tooltip name which
+  // daemon this window is bound to.
+  daemonPid: number | null = null,
 ): string {
   switch (conn) {
-    case "connected":
-      return info !== undefined ? `connected (pid ${info.pid})` : "connected";
+    case "connected": {
+      const pid = info?.pid ?? daemonPid;
+      return pid !== null && pid !== undefined
+        ? `connected (pid ${pid})`
+        : "connected";
+    }
     case "connecting":
       return "connecting...";
     case "disconnected":

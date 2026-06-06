@@ -493,3 +493,72 @@ describe("WorkspaceRegistration intent persistence (T-P2-008.8 / C-29)", () => {
     expect(transitions).toEqual(["registering"]);
   });
 });
+
+// CB-DAEMON-LIFECYCLE-FIX (c1): the consent blocker. The daemon's activeRegistry
+// is per-socket and dropped on disconnect; if the extension reconnects (daemon
+// restart, or the doubled-daemon split) without RE-registering, the daemon has
+// no record of it → /authorize fails extension_offline while the status bar
+// still shows "registered". The fix re-arms registration on disconnect so the
+// next "connected" re-sends register_workspace.
+describe("WorkspaceRegistration — re-register on reconnect (CB-DAEMON-LIFECYCLE-FIX c1)", () => {
+  const okResponse = {
+    kind: "register_workspace_ok",
+    identifier: "proj-aaaaaa",
+    name: "P",
+    abs_path: "/p",
+    trusted_at: "2026-06-06T00:00:00.000Z",
+    was_already_trusted: true,
+  };
+
+  // Flush the fire-and-forget re-attempt kicked off by onConnectionStateChanged.
+  const flush = (): Promise<void> =>
+    new Promise((r) => setTimeout(r, 0));
+
+  it("re-sends register_workspace after disconnect+reconnect (the key fix)", async () => {
+    const client = makeConnectedClient([okResponse, okResponse]);
+    const reg = new WorkspaceRegistration(client, makeFolder("/p", "P"));
+
+    await reg.register();
+    expect(reg.getState()).toBe("registered");
+    expect(client.request).toHaveBeenCalledTimes(1);
+
+    // Daemon restarts → our socket drops.
+    reg.onConnectionStateChanged("disconnected");
+    expect(reg.getState()).toBe("registering"); // re-armed
+
+    // IpcClient reconnects (possibly to a fresh daemon with an empty registry).
+    reg.onConnectionStateChanged("connected");
+    await flush();
+
+    // The extension RE-REGISTERED automatically — no manual reload.
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: "register_workspace", abs_path: "/p" }),
+    );
+    expect(reg.getState()).toBe("registered");
+  });
+
+  it("does NOT re-arm a user-decision state (trust_denied stays put across reconnect)", async () => {
+    const client = makeConnectedClient([
+      { kind: "register_workspace_needs_trust", abs_path: "/p" },
+    ]);
+    const reg = new WorkspaceRegistration(
+      client,
+      makeFolder("/p", "P"),
+      () => Promise.resolve("deny"),
+    );
+    await reg.register();
+    expect(reg.getState()).toBe("trust_denied");
+    const callsAfterRegister = (client.request as ReturnType<typeof vi.fn>).mock
+      .calls.length;
+
+    reg.onConnectionStateChanged("disconnected");
+    expect(reg.getState()).toBe("trust_denied"); // NOT re-armed
+    reg.onConnectionStateChanged("connected");
+    await flush();
+    // No new register attempt fired.
+    expect((client.request as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      callsAfterRegister,
+    );
+  });
+});

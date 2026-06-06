@@ -148,7 +148,25 @@ export class WorkspaceRegistration {
   // trying to register (state === "registering"), fire a fresh register
   // attempt. Idempotent if an attempt is already in flight.
   onConnectionStateChanged(s: ConnectionStateKind): void {
-    if (s !== "connected") return;
+    // CB-DAEMON-LIFECYCLE-FIX (c1): the daemon's activeRegistry is per-socket
+    // and is dropped when our connection closes. If the connection drops while
+    // we believe we're "registered", the daemon we reconnect to (a restarted
+    // or — under the doubled-daemon bug — a DIFFERENT daemon) has no
+    // registration for us, so consent fails extension_offline while our status
+    // bar still shows "registered". Re-arm: on disconnect, return
+    // "registered" → "registering" so the next "connected" transition
+    // re-sends register_workspace and re-populates the daemon's registry —
+    // automatically, with no manual window reload. User-decision states
+    // (needs_trust / trust_denied / duplicate) are left untouched.
+    if (s !== "connected") {
+      if (this.state === "registered") {
+        diag("registration: connection dropped while registered — re-arming", {
+          identifier: this.identifier,
+        });
+        this.setState("registering");
+      }
+      return;
+    }
     if (this.state !== "registering") return;
     // Connection just established — reset the retry counter so the UX
     // doesn't show "(retry N)" while the request is in flight.

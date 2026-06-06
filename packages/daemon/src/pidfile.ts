@@ -46,6 +46,19 @@ export async function checkStalePid(path: string): Promise<PidState> {
   }
 }
 
+// CB-DAEMON-LIFECYCLE-FIX: read the recorded pid (for diagnostics / the
+// "already running (pid N)" refuse message). Returns null when absent or
+// unparseable. The pid file remains a single integer (CLI compat).
+export async function readPidFromFile(path: string): Promise<number | null> {
+  try {
+    const content = await readFile(path, "utf8");
+    const pid = Number.parseInt(content.trim(), 10);
+    return Number.isNaN(pid) ? null : pid;
+  } catch {
+    return null;
+  }
+}
+
 export async function removePidFile(path: string): Promise<void> {
   try {
     await unlink(path);
