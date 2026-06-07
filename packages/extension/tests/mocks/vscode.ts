@@ -166,6 +166,20 @@ export function makeStatusBarItemMock(): StatusBarItem {
   },
 );
 
+// T-P3'-0: createOutputChannel for the workspace-path probe. Returns an
+// OutputChannel-shaped mock; tests don't introspect its content here (the
+// probe's formatting is unit-tested via formatProbeOutput directly).
+(window as unknown as {
+  createOutputChannel: ReturnType<typeof vi.fn>;
+}).createOutputChannel = vi.fn((name: string) => ({
+  name,
+  appendLine: vi.fn(),
+  append: vi.fn(),
+  show: vi.fn(),
+  clear: vi.fn(),
+  dispose: vi.fn(),
+}));
+
 // showQuickPick. Tests override return value to simulate selection.
 // Items may be plain strings or QuickPickItem-like objects.
 (window as unknown as {

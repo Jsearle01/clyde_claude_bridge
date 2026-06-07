@@ -24,6 +24,10 @@
       {
         "command": "claudeBridge.openStatusBarMenu",
         "title": "Claude Bridge: Open Status Bar Menu"
+      },
+      {
+        "command": "claudeBridge.probeWorkspacePath",
+        "title": "Claude Bridge: Probe Workspace Path (diagnostic)"
       }
     ],
     "configuration": {

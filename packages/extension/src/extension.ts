@@ -17,6 +17,7 @@ import {
   makeGetOpenEditorsHandler,
   makeGetDiagnosticsHandler,
 } from "./inspection-tools.js";
+import { makeWorkspacePathProbe } from "./workspace-path-probe.js";
 import { diag } from "./diag.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
@@ -234,6 +235,16 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
   context.subscriptions.push(showStatus);
+
+  // T-P3'-0 (SPIKE): ground-truth path probe. Logs workspaceFolders[0].uri
+  // fsPath/path/toString verbatim so the daemon's canonicalizeWorkspacePath
+  // can be calibrated against VS Code's real output. No production wiring.
+  const probeCmd = vscode.commands.registerCommand(
+    "claudeBridge.probeWorkspacePath",
+    makeWorkspacePathProbe(context),
+  );
+  context.subscriptions.push(probeCmd);
+
   context.subscriptions.push({
     dispose: () => {
       // Best-effort deregister; don't block dispose on the response.
