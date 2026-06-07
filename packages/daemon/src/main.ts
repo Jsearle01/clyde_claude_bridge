@@ -51,6 +51,14 @@ import {
   ExplicitPortInUseError,
   type DaemonResources,
 } from "./workspace/resources.js";
+import {
+  advertPath as getAdvertPath,
+  writeAdvert,
+  removeAdvert,
+  sweepAdverts,
+  isAdvertLive,
+} from "./workspace/advert.js";
+import type { DaemonAdvert } from "@claude-bridge/shared";
 import { WorkspaceRegistryImpl } from "./workspace/registry.js";
 import { JobQueue } from "./jobs/index.js";
 import { DailyTimer } from "./util/daily-timer.js";
@@ -82,6 +90,9 @@ export interface DaemonComponents {
   interactionRecorder: InteractionRecorder;
   logger: Logger;
   pidPath: string;
+  // P3′-2a: this daemon's own advert file, removed on graceful exit. null in
+  // legacy/no-`--workspace` mode (no advert written).
+  advertPath: string | null;
 }
 
 function errorMessage(err: unknown): string {
@@ -219,6 +230,16 @@ export async function shutdown(
     await removePidFile(components.pidPath);
   } catch {
     // Best-effort.
+  }
+
+  // P3′-2a: remove our own advert on graceful exit (the advert half of the
+  // ephemeral cleanup; durable per-daemon state is untouched). Best-effort.
+  if (components.advertPath !== null) {
+    try {
+      await removeAdvert(components.advertPath);
+    } catch {
+      // Best-effort.
+    }
   }
 
   clearTimeout(watchdog);
@@ -907,9 +928,50 @@ async function main(): Promise<void> {
     interactionRecorder,
     logger,
     pidPath,
+    // P3′-2a: own advert path (per-daemon mode only), removed on graceful exit.
+    advertPath:
+      resources !== null
+        ? getAdvertPath(getConfigDir(), resources.hash)
+        : null,
   };
 
   await ipcServer.start();
+
+  // 9.5. P3′-2a: advert lifecycle. The IPC pipe is now live, so the advert's
+  // `pipe` is a real rendezvous. WRITE (overwrite = reclaim-own, AC-2a-3) our
+  // advert to the shared `daemons/` dir, then SWEEP every OTHER daemon's advert
+  // confirmed dead by failed retry-gated handshake (AC-2a-4). Both best-effort:
+  // an advert failure must not abort an otherwise-healthy daemon. Per-daemon
+  // mode only (legacy/no-`--workspace` writes no advert).
+  if (resources !== null) {
+    const advert: DaemonAdvert = {
+      canonical_workspace: resources.identity,
+      name: resources.name,
+      pipe: resources.ipcAddress,
+      port: config.daemon.bind_port,
+      pid: process.pid,
+      started_at: new Date().toISOString(),
+    };
+    try {
+      const written = await writeAdvert(getConfigDir(), resources.hash, advert);
+      logger.info("advert written", { path: written });
+    } catch (err) {
+      logger.warn("advert write failed", { error: errorMessage(err) });
+    }
+    try {
+      const swept = await sweepAdverts(
+        getConfigDir(),
+        (pipe) => isAdvertLive(pipe),
+        { selfHash: resources.hash, logger },
+      );
+      logger.info("advert sweep complete", {
+        swept: swept.swept.length,
+        kept: swept.kept.length,
+      });
+    } catch (err) {
+      logger.warn("advert sweep failed", { error: errorMessage(err) });
+    }
+  }
 
   // 10. Ready signal — the CLI start-watcher (T-0015) reads stdout until
   // it sees this literal line.

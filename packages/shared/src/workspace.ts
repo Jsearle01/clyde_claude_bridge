@@ -64,3 +64,27 @@ export const WorkspaceStoreSchema = z
   })
   .strict();
 export type WorkspaceStore = z.infer<typeof WorkspaceStoreSchema>;
+
+// ----------------------------------------------------------------------
+// P3′-2a daemon advert. The per-daemon "I'm here" beacon written to the
+// TOP-LEVEL shared dir `<root>/daemons/<hash>.json`, where <hash> is the
+// identity-hash (1b). 2b's extension discovery scans that dir to find the
+// daemon serving its workspace and connect to `pipe`.
+//
+// Schema is LOCAL-PAIRING fields only (ADR-002): NO tunnel URL — a rotating
+// URL is noise; that decision defers to the stable-tunnel work. `.strict()`
+// so a future field addition is a deliberate, validated change.
+export const DaemonAdvertSchema = z
+  .object({
+    // The case-folded canonical identity (1a/1b key) — 2b's match key: the
+    // extension canonicalizes+case-folds its workspaceFolders[0].uri.fsPath and
+    // compares to this.
+    canonical_workspace: z.string().min(1),
+    name: z.string().min(1), // operator --name label
+    pipe: z.string().min(1), // the IPC address 2b connects to
+    port: z.number().int().min(1).max(65535), // TCP bind port (status/diagnostics)
+    pid: z.number().int().nonnegative(),
+    started_at: z.string(), // ISO-8601
+  })
+  .strict();
+export type DaemonAdvert = z.infer<typeof DaemonAdvertSchema>;
