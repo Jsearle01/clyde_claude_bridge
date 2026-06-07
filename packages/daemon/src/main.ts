@@ -47,7 +47,8 @@ import {
 import { makeInitialState } from "./state.js";
 import {
   computeDaemonResources,
-  allocatePort,
+  isIpcAddressLive,
+  ExplicitPortInUseError,
   type DaemonResources,
 } from "./workspace/resources.js";
 import { WorkspaceRegistryImpl } from "./workspace/registry.js";
@@ -284,69 +285,72 @@ async function main(): Promise<void> {
     config_path: configPath,
   });
 
-  // 2.5. P3′-1b: port allocation. Explicit --port: use it, or error if taken
-  // (never silently increment past the operator's explicit choice). Per-daemon
-  // mode (no --port): next-free from the configured port so a second
-  // workspace's daemon doesn't collide. Legacy mode: the configured port as-is
-  // (acceptance-harness behavior preserved).
-  let bindPort: number;
-  if (portArg !== undefined) {
-    bindPort = await allocatePort(
-      { explicit: portArg, start: portArg, host: config.daemon.bind_host },
-      isDaemonPortListening,
-    );
-  } else if (resources !== null) {
-    bindPort = await allocatePort(
-      { explicit: undefined, start: config.daemon.bind_port, host: config.daemon.bind_host },
-      isDaemonPortListening,
-    );
-  } else {
-    bindPort = config.daemon.bind_port;
-  }
-  config.daemon.bind_port = bindPort;
-
-  // 2.6. Identity → hash → physical-resources mapping (P3′-1a identity +
-  // 1b config-dir/port/pipe), logged before the single-instance/tunnel gates
-  // so it's emitted even on a refused start. This is the debug key for the
-  // opaque <hash> dir and the currency-positive line (007 lesson).
-  if (resources !== null) {
-    logger.info("daemon identity", {
-      identity: resources.identity,
-      name: resources.name,
-      workspace_path: resources.display_path,
-      hash: resources.hash,
-      config_dir: resources.configDir,
-      bind_port: bindPort,
-      ipc: resources.ipcAddress,
-    });
-  }
-
-  // 3. Single-instance guard. CB-DAEMON-LIFECYCLE-FIX (a): the TCP bind port
-  //    is the AUTHORITATIVE lock (isDaemonPortListening) — checked BEFORE we
-  //    write the pid file so a doubled start refuses without clobbering the
-  //    incumbent's pid. LOCKED operator decision: on a doubled start the
-  //    daemon REFUSES and the existing daemon stays in force, uninterrupted
-  //    (it holds the live VS Code sessions + MCP/tunnel). Replacing is the
-  //    explicit two-step `stop` then `start` — never a forceful single command.
-  if (
-    await isDaemonPortListening(config.daemon.bind_host, config.daemon.bind_port)
-  ) {
+  // 2.3. P3′-1c (ITEM 1): identity-keyed single-instance lock, acquired EARLY —
+  // before any port / MCP work — so a refused same-workspace start has ZERO
+  // side effects (incumbent's files + process untouched). A LIVE same-identity
+  // incumbent is, by definition, listening on this daemon's per-daemon IPC
+  // pipe/socket; connect-probe it. LIVENESS (not bare pid-file presence)
+  // decides refuse-vs-reclaim: a crashed incumbent's pipe is OS-released, so
+  // the probe fails and the new start reclaims (AC-1c-2). On a LIVE incumbent,
+  // refuse and leave it untouched (AC-1c-1, the refuse-incumbent decision).
+  // Legacy/no-`--workspace` mode keeps the port-based guard (step 3 below).
+  if (resources !== null && (await isIpcAddressLive(resources.ipcAddress))) {
     const existingPid = await readPidFromFile(pidPath);
     const pidPart = existingPid !== null ? ` (pid ${existingPid})` : "";
     process.stderr.write(
-      `Daemon already running${pidPart}; it remains active. ` +
+      `Daemon for this workspace is already running${pidPart} ` +
+        `(identity ${resources.identity}); it remains active. ` +
         `Use \`claude-bridge stop\` first if you intend to replace it.\n`,
     );
+    logger.warn("refusing start: live same-identity incumbent", {
+      identity: resources.identity,
+      ipc: resources.ipcAddress,
+      existing_pid: existingPid,
+    });
     await logger.close();
     process.exit(1);
   }
-  // Port is free ⟹ no live daemon. Any existing pid file is therefore stale
-  // (a crashed/zombie daemon, or a reused pid that signal-0 misreports as
-  // alive) — the port is authoritative, so overwrite. Diagnostic log only.
+
+  // 2.5. P3′-1c (ITEM 2): port. Explicit --port → pre-check; if taken,
+  // ExplicitPortInUseError (no retry past the operator's choice; AC-1c-5).
+  // Auto (per-daemon, no --port) → the BIND retries (McpServer autoAllocate)
+  // so this is just the scan origin and the concurrent-start TOCTOU is closed
+  // at bind time (AC-1c-4). Legacy → the configured port, single bind.
+  let autoAllocate = false;
+  if (portArg !== undefined) {
+    if (await isDaemonPortListening(config.daemon.bind_host, portArg)) {
+      throw new ExplicitPortInUseError(portArg);
+    }
+    config.daemon.bind_port = portArg;
+  } else if (resources !== null) {
+    autoAllocate = true; // start port stays config.daemon.bind_port (scan origin)
+  }
+  // The actually-bound port is written back after mcpServer.start() (it may
+  // differ from the scan origin when autoAllocate retried).
+
+  // 3. Legacy single-instance guard (per-daemon mode uses the identity lock at
+  //    2.3 instead). Unchanged behavior for the acceptance harness / direct
+  //    invocation without --workspace.
+  if (resources === null) {
+    if (
+      await isDaemonPortListening(config.daemon.bind_host, config.daemon.bind_port)
+    ) {
+      const existingPid = await readPidFromFile(pidPath);
+      const pidPart = existingPid !== null ? ` (pid ${existingPid})` : "";
+      process.stderr.write(
+        `Daemon already running${pidPart}; it remains active. ` +
+          `Use \`claude-bridge stop\` first if you intend to replace it.\n`,
+      );
+      await logger.close();
+      process.exit(1);
+    }
+  }
+  // Stale pid diagnostics + (over)write — both modes. A pid file present here
+  // is from a crashed/reclaimed incumbent (the live one was refused above).
   const pidState = await checkStalePid(pidPath);
   if (pidState === "alive") {
     logger.warn(
-      "pid file reports a live pid but the daemon port is free; treating as stale (pid reuse or unclean exit)",
+      "pid file reports a live pid but no live daemon owns this identity/port; treating as stale (pid reuse or unclean exit)",
       { path: pidPath },
     );
   } else if (pidState === "stale") {
@@ -633,10 +637,14 @@ async function main(): Promise<void> {
     ],
   });
 
-  // 7. MCP server.
+  // 7. MCP server. P3′-1c: autoAllocate makes the BIND the port allocation
+  // (retry-on-EADDRINUSE from bind_port) in per-daemon mode without an explicit
+  // --port — closing the concurrent-start race. The bound port is read back
+  // below.
   const mcpServer = new McpServer({
     bindHost: config.daemon.bind_host,
     bindPort: config.daemon.bind_port,
+    autoAllocate,
     logger,
     getExpectedToken,
     auditLog,
@@ -668,6 +676,27 @@ async function main(): Promise<void> {
     },
   });
   await mcpServer.start();
+
+  // 7.1. P3′-1c: write back the actually-bound port (autoAllocate may have
+  // retried past taken ports) so the tunnel URL, status payload, and the
+  // identity log all reflect reality.
+  const boundPort = mcpServer.getBoundPort();
+  if (boundPort !== null) config.daemon.bind_port = boundPort;
+
+  // 7.2. Identity → hash → physical-resources mapping (P3′-1a identity + 1b
+  // config-dir/pipe + the 1c actually-bound port). Currency-positive line
+  // (007 lesson) and the debug key for the opaque <hash> dir.
+  if (resources !== null) {
+    logger.info("daemon identity", {
+      identity: resources.identity,
+      name: resources.name,
+      workspace_path: resources.display_path,
+      hash: resources.hash,
+      config_dir: resources.configDir,
+      bind_port: config.daemon.bind_port,
+      ipc: resources.ipcAddress,
+    });
+  }
 
   // 8. Tunnel.
   const localUrl = `http://${config.daemon.bind_host}:${config.daemon.bind_port}`;

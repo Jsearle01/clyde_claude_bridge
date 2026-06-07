@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
+import { createServer, type Server } from "node:net";
 import {
   deriveResourceHash,
   daemonPipeName,
   daemonIpcAddress,
   computeDaemonResources,
-  allocatePort,
-  ExplicitPortInUseError,
+  bindWithRetry,
+  isIpcAddressLive,
   NoFreePortError,
 } from "../../src/workspace/resources.js";
 
@@ -90,42 +91,77 @@ describe("computeDaemonResources (P3'-1b)", () => {
   });
 });
 
-describe("allocatePort (P3'-1b)", () => {
-  const HOST = "127.0.0.1";
-  const never = (): Promise<boolean> => Promise.resolve(false); // nothing listening
-  const always = (): Promise<boolean> => Promise.resolve(true); // all taken
+// P3'-1c ITEM 2 — the DETERMINISTIC proof of the bind-with-retry mechanism
+// (the §5 requirement: the race is timing-dependent, so a mocked tryBind is the
+// reliable proof; the live concurrent test only corroborates).
+function eaddrinuse(): Error {
+  return Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" });
+}
 
-  it("AC-1b-3: explicit --port free → uses it", async () => {
-    expect(
-      await allocatePort({ explicit: 9000, start: 9000, host: HOST }, never),
-    ).toBe(9000);
+describe("bindWithRetry (P3'-1c, ITEM 2)", () => {
+  it("AC-1c-4: advances past EADDRINUSE and binds the next free port", async () => {
+    const attempted: number[] = [];
+    // 7423, 7424 taken; 7425 binds.
+    const tryBind = (port: number): Promise<void> => {
+      attempted.push(port);
+      if (port < 7425) return Promise.reject(eaddrinuse());
+      return Promise.resolve();
+    };
+    expect(await bindWithRetry(tryBind, { startPort: 7423 })).toBe(7425);
+    expect(attempted).toEqual([7423, 7424, 7425]); // it actually retried
   });
 
-  it("AC-1b-3: explicit --port taken → ExplicitPortInUseError (no increment)", async () => {
+  it("binds the start port immediately when free", async () => {
+    expect(await bindWithRetry(() => Promise.resolve(), { startPort: 7423 })).toBe(
+      7423,
+    );
+  });
+
+  it("AC-1c-6: bounded — all ports in range EADDRINUSE → NoFreePortError", async () => {
     await expect(
-      allocatePort({ explicit: 7423, start: 7423, host: HOST }, always),
-    ).rejects.toBeInstanceOf(ExplicitPortInUseError);
-  });
-
-  it("auto: returns the configured start port when free", async () => {
-    expect(
-      await allocatePort({ explicit: undefined, start: 7423, host: HOST }, never),
-    ).toBe(7423);
-  });
-
-  it("auto: increments to the next free port when lower ones are taken", async () => {
-    // 7423, 7424 taken; 7425 free.
-    const taken = new Set([7423, 7424]);
-    const isListening = (_h: string, p: number): Promise<boolean> =>
-      Promise.resolve(taken.has(p));
-    expect(
-      await allocatePort({ explicit: undefined, start: 7423, host: HOST }, isListening),
-    ).toBe(7425);
-  });
-
-  it("auto: all scanned ports taken → NoFreePortError", async () => {
-    await expect(
-      allocatePort({ explicit: undefined, start: 7423, host: HOST }, always),
+      bindWithRetry(() => Promise.reject(eaddrinuse()), {
+        startPort: 7423,
+        maxScan: 5,
+      }),
     ).rejects.toBeInstanceOf(NoFreePortError);
+  });
+
+  it("non-EADDRINUSE errors propagate (no retry)", async () => {
+    const attempted: number[] = [];
+    const tryBind = (port: number): Promise<void> => {
+      attempted.push(port);
+      return Promise.reject(new Error("EACCES: permission denied"));
+    };
+    await expect(
+      bindWithRetry(tryBind, { startPort: 7423 }),
+    ).rejects.toThrow(/EACCES/);
+    expect(attempted).toEqual([7423]); // did NOT retry a non-EADDRINUSE failure
+  });
+});
+
+describe("isIpcAddressLive (P3'-1c, ITEM 1 lock probe)", () => {
+  // Liveness probe: connect succeeds → live; ECONNREFUSED/ENOENT → not live.
+  // Uses a real ephemeral pipe/socket server (deterministic, no mocking).
+  const PIPE =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\cb-test-${process.pid}`
+      : join(process.env.TMPDIR ?? "/tmp", `cb-test-${process.pid}.sock`);
+
+  it("returns true when a server is listening (live incumbent)", async () => {
+    const server: Server = createServer();
+    await new Promise<void>((r) => server.listen(PIPE, r));
+    try {
+      expect(await isIpcAddressLive(PIPE)).toBe(true);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("returns false when nothing is listening (stale/absent → reclaim)", async () => {
+    const absent =
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\cb-test-absent-${process.pid}`
+        : join(process.env.TMPDIR ?? "/tmp", `cb-test-absent-${process.pid}.sock`);
+    expect(await isIpcAddressLive(absent, 500)).toBe(false);
   });
 });

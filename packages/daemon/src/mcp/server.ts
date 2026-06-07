@@ -35,7 +35,8 @@ import {
   type WorkspaceBinding,
   type OAuthTokenLookup,
 } from "./auth.js";
-import { onceOrError, promisifyCallback } from "../util/promises.js";
+import { promisifyCallback } from "../util/promises.js";
+import { bindWithRetry } from "../workspace/resources.js";
 import {
   ToolRegistry,
   ToolNotFoundError,
@@ -101,6 +102,11 @@ export interface McpServerOpts {
   // TokenStore.lookup). Optional — when absent, only the static Bearer
   // authenticates (legacy behavior; all OAuth tokens fail as invalid_token).
   lookupOAuthToken?: OAuthTokenLookup;
+  // P3′-1c (ITEM 2): when true, the bind IS the allocation — listen retries on
+  // EADDRINUSE, incrementing from bindPort to the next free port (closes the
+  // concurrent-start TOCTOU race). When false (explicit --port / legacy),
+  // a taken port is a hard McpBindError (no retry past the chosen port).
+  autoAllocate?: boolean;
 }
 
 export class McpBindError extends Error {
@@ -119,9 +125,18 @@ export class McpServer {
   private mcpServer: McpSdkServer | null = null;
   private transport: StreamableHTTPServerTransport | null = null;
   private closed = false;
+  // P3′-1c: the actually-bound port (may differ from opts.bindPort when
+  // autoAllocate retried past taken ports). Read by main.ts after start() to
+  // update config + the tunnel URL + the identity log.
+  private boundPort: number | null = null;
 
   constructor(opts: McpServerOpts) {
     this.opts = opts;
+  }
+
+  // The port this server actually bound (null before start()).
+  public getBoundPort(): number | null {
+    return this.boundPort;
   }
 
   async start(): Promise<void> {
@@ -157,30 +172,67 @@ export class McpServer {
         this.handleHttpRequest(req, res, transport);
       },
     );
-    httpServer.on("error", (err: unknown) => {
-      this.opts.logger.warn("mcp http server error", { error: errorMessage(err) });
-    });
 
-    const listenSettled = onceOrError<void>(httpServer, "listening", "error");
-    httpServer.listen(this.opts.bindPort, this.opts.bindHost);
+    // P3′-1c (ITEM 2): bind = allocation. In autoAllocate mode, retry on
+    // EADDRINUSE incrementing the port (the concurrent-start race closer). In
+    // explicit/legacy mode, a single attempt; EADDRINUSE → McpBindError.
+    let boundPort: number;
     try {
-      await listenSettled;
+      if (this.opts.autoAllocate === true) {
+        boundPort = await bindWithRetry(
+          (port) => this.tryListen(httpServer, port),
+          { startPort: this.opts.bindPort },
+        );
+      } else {
+        await this.tryListen(httpServer, this.opts.bindPort);
+        boundPort = this.opts.bindPort;
+      }
     } catch (err) {
       await mcp.close().catch(() => undefined);
       if (isErrnoCode(err, "EADDRINUSE")) {
+        // Only reachable in non-auto mode (auto retries past EADDRINUSE).
         throw new McpBindError(this.opts.bindHost, this.opts.bindPort);
       }
       throw err;
     }
 
+    // Now that bind succeeded, attach the long-lived runtime error handler.
+    httpServer.on("error", (err: unknown) => {
+      this.opts.logger.warn("mcp http server error", { error: errorMessage(err) });
+    });
+
     this.mcpServer = mcp;
     this.transport = transport;
     this.httpServer = httpServer;
+    this.boundPort = boundPort;
 
     const bound = this.address();
     this.opts.logger.info("mcp server listening", {
       host: bound?.host ?? this.opts.bindHost,
-      port: bound?.port ?? this.opts.bindPort,
+      port: bound?.port ?? boundPort,
+    });
+  }
+
+  // Attempt a single listen on `port`; resolve on "listening", reject on the
+  // first "error" (EADDRINUSE etc.). The httpServer is reusable for another
+  // listen() after an EADDRINUSE rejection (how bindWithRetry advances ports).
+  private tryListen(httpServer: HttpServer, port: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const onListening = (): void => {
+        cleanup();
+        resolve();
+      };
+      const onError = (err: unknown): void => {
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+      const cleanup = (): void => {
+        httpServer.off("listening", onListening);
+        httpServer.off("error", onError);
+      };
+      httpServer.once("listening", onListening);
+      httpServer.once("error", onError);
+      httpServer.listen(port, this.opts.bindHost);
     });
   }
 
