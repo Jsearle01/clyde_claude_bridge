@@ -57,6 +57,70 @@ export class DaemonStartFailedError extends Error {
   }
 }
 
+// P3′-1a: `start` now requires --workspace (single folder) + --name (label).
+// These typed errors map to clear messages + non-zero exit in index.ts.
+export class WorkspaceRequiredError extends Error {
+  constructor() {
+    super("--workspace <path> is required (the folder this daemon serves)");
+    this.name = "WorkspaceRequiredError";
+  }
+}
+
+export class NameRequiredError extends Error {
+  constructor() {
+    super("--name <label> is required (a human-readable name for this daemon)");
+    this.name = "NameRequiredError";
+  }
+}
+
+export class MultipleWorkspaceError extends Error {
+  constructor(public readonly count: number) {
+    super(
+      `--workspace must be a single folder, but ${count} were given; ` +
+        `multi-root is not supported`,
+    );
+    this.name = "MultipleWorkspaceError";
+  }
+}
+
+export class WorkspaceNotADirectoryError extends Error {
+  constructor(public readonly path: string) {
+    super(`--workspace path is not an existing directory: ${path}`);
+    this.name = "WorkspaceNotADirectoryError";
+  }
+}
+
+export type StatFn = (p: string) => Promise<{ isDirectory: () => boolean }>;
+
+// Raw start args as collected by Commander: --workspace accumulates into an
+// array (so duplicates are detectable), --name is a single optional value.
+export interface StartArgs {
+  workspace: string[];
+  name: string | undefined;
+}
+
+// Validate + resolve the start args, throwing typed errors. Separated from
+// startCommand (which spawns a real process) so the validation is unit-
+// testable. `statFn` is injectable for the directory check.
+export async function resolveStartArgs(
+  args: StartArgs,
+  statFn: StatFn = stat,
+): Promise<{ workspacePath: string; name: string }> {
+  const { workspace, name } = args;
+  if (workspace.length > 1) throw new MultipleWorkspaceError(workspace.length);
+  const workspacePath = workspace[0];
+  if (workspacePath === undefined) throw new WorkspaceRequiredError();
+  if (name === undefined || name.trim() === "") throw new NameRequiredError();
+  let st: { isDirectory: () => boolean };
+  try {
+    st = await statFn(workspacePath);
+  } catch {
+    throw new WorkspaceNotADirectoryError(workspacePath);
+  }
+  if (!st.isDirectory()) throw new WorkspaceNotADirectoryError(workspacePath);
+  return { workspacePath, name };
+}
+
 export type SpawnSyncFn = (
   command: string,
   args: readonly string[],
@@ -171,7 +235,11 @@ export function waitForReady(
   });
 }
 
-export async function startCommand(): Promise<void> {
+export async function startCommand(args: StartArgs): Promise<void> {
+  // 0. P3′-1a: validate the required --workspace (single folder) + --name
+  //    BEFORE any side effect, so a bad invocation errors without spawning.
+  const { workspacePath, name } = await resolveStartArgs(args);
+
   // 1. cloudflared on PATH
   checkCloudflared();
 
@@ -199,13 +267,18 @@ export async function startCommand(): Promise<void> {
     process.stderr.write("Stale PID file detected; daemon main will overwrite.\n");
   }
 
-  // 4. spawn the daemon detached
+  // 4. spawn the daemon detached. P3′-1a: forward the validated workspace +
+  //    name so the daemon computes + logs its canonical identity at startup.
   const daemonMainPath = localRequire.resolve("@claude-bridge/daemon");
-  const child = spawn(process.execPath, [daemonMainPath], {
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
+  const child = spawn(
+    process.execPath,
+    [daemonMainPath, "--workspace", workspacePath, "--name", name],
+    {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
 
   // 5. wait for the ready signal
   await waitForReady(child);

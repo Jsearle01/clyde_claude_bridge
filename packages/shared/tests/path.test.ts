@@ -60,6 +60,28 @@ describe("normalizeAbsPath (T-P2-007.5)", () => {
       "\\\\Server\\Share\\Path",
     );
   });
+
+  // P3'-1a: platform is now injectable (default = process.platform). The
+  // injected arg overrides the host so the identity composition is testable
+  // on any CI host. Behavior-preserving for the existing single-arg callers.
+  describe("injected platform arg (P3'-1a)", () => {
+    it("win32 arg lowercases regardless of host", () => {
+      setPlatform("linux"); // host says linux...
+      expect(normalizeAbsPath("C:\\Projects\\X", "win32")).toBe(
+        "c:\\projects\\x", // ...but the injected win32 arg wins
+      );
+    });
+    it("posix arg returns identity regardless of host", () => {
+      setPlatform("win32"); // host says win32...
+      expect(normalizeAbsPath("/Projects/X", "linux")).toBe("/Projects/X");
+    });
+    it("default arg still follows process.platform (behavior-preserving)", () => {
+      setPlatform("win32");
+      expect(normalizeAbsPath("C:\\X")).toBe("c:\\x");
+      setPlatform("linux");
+      expect(normalizeAbsPath("/X/Y")).toBe("/X/Y");
+    });
+  });
 });
 
 describe("canonicalizeWorkspacePath (T-P3'-0)", () => {

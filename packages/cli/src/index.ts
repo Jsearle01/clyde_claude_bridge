@@ -11,6 +11,10 @@ import {
   DaemonAlreadyRunningError,
   DaemonStartTimeoutError,
   DaemonStartFailedError,
+  WorkspaceRequiredError,
+  NameRequiredError,
+  MultipleWorkspaceError,
+  WorkspaceNotADirectoryError,
 } from "./commands/start.js";
 import { stopCommand, DaemonStopTimeoutError } from "./commands/stop.js";
 import { statusCommand } from "./commands/status.js";
@@ -72,6 +76,15 @@ function reportErrorBody(err: unknown): void {
     process.stderr.write(`Daemon failed to start: ${err.stderrText}\n`);
     return;
   }
+  if (
+    err instanceof WorkspaceRequiredError ||
+    err instanceof NameRequiredError ||
+    err instanceof MultipleWorkspaceError ||
+    err instanceof WorkspaceNotADirectoryError
+  ) {
+    process.stderr.write(`${err.message}\n`);
+    return;
+  }
   if (err instanceof DaemonStopTimeoutError) {
     process.stderr.write(`${err.message}\n`);
     return;
@@ -109,12 +122,29 @@ program
   .description("Bridge a Claude.ai project to a local workspace via MCP.")
   .version(pkg.version);
 
+// --workspace accumulates into an array so duplicates are detectable (a
+// repeated --workspace is rejected as multi-root, which is not supported).
+function collectWorkspace(value: string, previous: string[]): string[] {
+  return previous.concat([value]);
+}
+
 program
   .command("start")
   .description("Launch the daemon + cloudflared tunnel; print the URL and token.")
-  .action(async () => {
+  // .option (not .requiredOption) for both: the required + single-folder +
+  // existing-directory checks live in resolveStartArgs, which emits clear,
+  // unit-tested messages (a .requiredOption with the [] default would defeat
+  // commander's own presence check anyway).
+  .option(
+    "--workspace <path>",
+    "absolute path to the single workspace folder this daemon serves",
+    collectWorkspace,
+    [],
+  )
+  .option("--name <label>", "human-readable name for this daemon instance")
+  .action(async (opts: { workspace: string[]; name?: string }) => {
     try {
-      await startCommand();
+      await startCommand({ workspace: opts.workspace, name: opts.name });
     } catch (err) {
       process.exit(reportError(err));
     }

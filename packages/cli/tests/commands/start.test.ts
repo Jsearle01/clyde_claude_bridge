@@ -8,11 +8,17 @@ import {
   checkCloudflared,
   checkExistingDaemon,
   waitForReady,
+  resolveStartArgs,
   CloudflaredMissingError,
   DaemonAlreadyRunningError,
   DaemonStartTimeoutError,
   DaemonStartFailedError,
+  WorkspaceRequiredError,
+  NameRequiredError,
+  MultipleWorkspaceError,
+  WorkspaceNotADirectoryError,
   type SpawnSyncFn,
+  type StatFn,
 } from "../../src/commands/start.js";
 
 describe("checkCloudflared", () => {
@@ -97,6 +103,62 @@ describe("checkExistingDaemon", () => {
         expect(err.pid).toBe(process.pid);
       }
     }
+  });
+});
+
+describe("resolveStartArgs (P3'-1a)", () => {
+  // Injected stat: a directory, a non-directory file, or ENOENT.
+  const statDir: StatFn = () => Promise.resolve({ isDirectory: () => true });
+  const statFile: StatFn = () => Promise.resolve({ isDirectory: () => false });
+  const statMissing: StatFn = () => Promise.reject(new Error("ENOENT"));
+
+  it("AC-1a-1: --workspace absent -> WorkspaceRequiredError", async () => {
+    await expect(
+      resolveStartArgs({ workspace: [], name: "demo" }, statDir),
+    ).rejects.toBeInstanceOf(WorkspaceRequiredError);
+  });
+
+  it("AC-1a-2: --name absent -> NameRequiredError", async () => {
+    await expect(
+      resolveStartArgs({ workspace: ["C:\\Projects\\x"], name: undefined }, statDir),
+    ).rejects.toBeInstanceOf(NameRequiredError);
+  });
+
+  it("AC-1a-2: --name blank/whitespace -> NameRequiredError", async () => {
+    await expect(
+      resolveStartArgs({ workspace: ["C:\\Projects\\x"], name: "   " }, statDir),
+    ).rejects.toBeInstanceOf(NameRequiredError);
+  });
+
+  it("AC-1a-6: multiple --workspace -> MultipleWorkspaceError (count carried)", async () => {
+    try {
+      await resolveStartArgs(
+        { workspace: ["C:\\a", "C:\\b"], name: "demo" },
+        statDir,
+      );
+      throw new Error("expected to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MultipleWorkspaceError);
+      if (err instanceof MultipleWorkspaceError) expect(err.count).toBe(2);
+    }
+  });
+
+  it("AC-1a-5: non-existent --workspace -> WorkspaceNotADirectoryError", async () => {
+    await expect(
+      resolveStartArgs({ workspace: ["C:\\nope"], name: "demo" }, statMissing),
+    ).rejects.toBeInstanceOf(WorkspaceNotADirectoryError);
+  });
+
+  it("AC-1a-5: --workspace points at a file -> WorkspaceNotADirectoryError", async () => {
+    await expect(
+      resolveStartArgs({ workspace: ["C:\\a\\file.txt"], name: "demo" }, statFile),
+    ).rejects.toBeInstanceOf(WorkspaceNotADirectoryError);
+  });
+
+  it("valid single folder + name resolves to the path + name verbatim", async () => {
+    await expect(
+      resolveStartArgs({ workspace: ["C:\\Projects\\x"], name: "demo" }, statDir),
+    ).resolves.toEqual({ workspacePath: "C:\\Projects\\x", name: "demo" });
   });
 });
 

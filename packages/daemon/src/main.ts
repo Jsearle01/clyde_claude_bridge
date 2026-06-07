@@ -45,6 +45,7 @@ import {
   getTokensStorePath,
 } from "./config/paths.js";
 import { makeInitialState } from "./state.js";
+import { computeDaemonIdentity } from "./workspace/identity.js";
 import { WorkspaceRegistryImpl } from "./workspace/registry.js";
 import { validateWorkspaceConfig } from "./workspace/config.js";
 import { JobQueue } from "./jobs/index.js";
@@ -83,6 +84,17 @@ function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
   return "unknown";
+}
+
+// P3′-1a: read a `--flag <value>` pair from argv. The CLI `start` command
+// forwards the operator's (already-validated) --workspace/--name through to
+// the spawned daemon; returns undefined when the flag is absent (e.g. a
+// direct/acceptance-harness invocation), in which case the daemon skips the
+// identity line and keeps its prior behavior untouched.
+function getDaemonArgValue(flag: string): string | undefined {
+  const i = process.argv.indexOf(flag);
+  if (i === -1 || i + 1 >= process.argv.length) return undefined;
+  return process.argv[i + 1];
 }
 
 // CB-DAEMON-LIFECYCLE-FIX (a): authoritative single-instance probe. The TCP
@@ -237,6 +249,23 @@ async function main(): Promise<void> {
     version: pkg.version,
     config_path: configPath,
   });
+
+  // 2.5. P3′-1a: canonical daemon identity. When `claude-bridge start`
+  // forwards --workspace/--name (it now requires them), compute and log the
+  // identity the rest of P3′ keys on. Logged HERE — right after the logger,
+  // before the single-instance/tunnel gates — so the line is emitted even on
+  // a refused (port-taken) or tunnel-less start. Identity computation only;
+  // NO resource scoping / port / lock change this phase (1b/1c own those).
+  const workspaceArg = getDaemonArgValue("--workspace");
+  const nameArg = getDaemonArgValue("--name");
+  if (workspaceArg !== undefined && nameArg !== undefined) {
+    const id = computeDaemonIdentity(workspaceArg, nameArg);
+    logger.info("daemon identity", {
+      identity: id.identity,
+      name: id.name,
+      workspace_path: id.display_path,
+    });
+  }
 
   // 3. Single-instance guard. CB-DAEMON-LIFECYCLE-FIX (a): the TCP bind port
   //    is the AUTHORITATIVE lock (isDaemonPortListening) — checked BEFORE we

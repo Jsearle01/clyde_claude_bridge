@@ -9,9 +9,17 @@
 // This is for lookup-key normalization only. Original case should be
 // preserved in stored abs_path fields for display, audit, and OS-faithful
 // cwd resolution at delegation time.
-
-export function normalizeAbsPath(p: string): string {
-  if (process.platform === "win32") {
+//
+// `platform` is injectable (defaulting to the host) so the win32-vs-unix
+// branch is directly assertable without mutating the global process.platform
+// — mirrors candidatesFor()/canonicalizeWorkspacePath()'s injected platform.
+// The default preserves the prior single-arg behavior for existing callers
+// (WorkspacesStore lookup keys).
+export function normalizeAbsPath(
+  p: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
     return p.toLowerCase();
   }
   return p;
