@@ -68,6 +68,11 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
       version: z.string(),
       role: z.enum(["cli", "extension"]),
       pid: z.number().int(),
+      // P3′-2b: the extension's build-id, surfaced so the daemon can log
+      // "extension build <id> connected" — machine-verified currency
+      // (running-extension == built-VSIX). Optional: CLI hellos omit it, and
+      // older extensions predating this field still hello-gate fine.
+      build_id: z.string().optional(),
     })
     .strict(),
   z

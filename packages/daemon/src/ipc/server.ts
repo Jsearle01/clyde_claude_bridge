@@ -509,6 +509,15 @@ export class IpcServer {
         pid: request.pid,
         hello_at: Date.now(),
       });
+      // P3′-2b: machine-verified extension currency. The build-id rides the
+      // hello; logging it here is the structural "running == built" check that
+      // retires the manual reload-eyeball (redeploy-currency item).
+      if (request.role === "extension") {
+        this.logger.info("extension build connected", {
+          build_id: request.build_id ?? "(none — pre-2b extension)",
+          pid: request.pid,
+        });
+      }
       await this.writeResponse(socket, {
         kind: "hello_ok",
         daemon_version: IPC_DAEMON_VERSION,

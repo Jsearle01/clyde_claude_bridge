@@ -12,11 +12,20 @@
 // tsc is retained for type-checking only (noEmit: true in tsconfig.json).
 
 import * as esbuild from "esbuild";
-import { rmSync } from "node:fs";
+import { rmSync, readFileSync } from "node:fs";
 
 // Clean dist/ first so stale tsc artifacts (.d.ts, .d.ts.map, per-module
 // .js) don't ship with the new bundled output.
 rmSync(new URL("./dist", import.meta.url), { recursive: true, force: true });
+
+// P3′-2b: inject a unique build-id baked into the bundle. The extension sends
+// it in the IPC hello and the daemon logs it — machine-verified currency
+// (the running-extension == built-VSIX check). `<version>+<base36 build time>`
+// is unique per build and human-legible in the daemon log.
+const pkg = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+);
+const buildId = `${pkg.version}+${Date.now().toString(36)}`;
 
 await esbuild.build({
   entryPoints: ["src/extension.ts"],
@@ -29,4 +38,7 @@ await esbuild.build({
   target: "node18",
   minify: false,
   logLevel: "info",
+  define: { __CB_BUILD_ID__: JSON.stringify(buildId) },
 });
+
+console.log(`  build-id: ${buildId}`);

@@ -84,6 +84,22 @@ describe("IpcClient (T-P2-002)", () => {
     expect(typeof sent.pid).toBe("number");
   });
 
+  it("P3'-2b: hello carries build_id (machine-verified currency)", async () => {
+    const connectPromise = client.connect();
+    fakeSocket.simulateConnect();
+    fakeSocket.simulateData(
+      JSON.stringify({ kind: "hello_ok", daemon_version: "1.0", min_supported: "1.0" }),
+    );
+    await connectPromise;
+    const firstWrite = fakeSocket.written[0];
+    if (firstWrite === undefined) throw new Error("expected written line");
+    const sent = JSON.parse(firstWrite.trimEnd()) as { build_id?: string };
+    // esbuild's define isn't applied under vitest → the "dev" fallback. The
+    // point: the field rides the hello (the daemon logs whatever value it gets).
+    expect(typeof sent.build_id).toBe("string");
+    expect(sent.build_id).toBe("dev");
+  });
+
   it("resolves connect and reaches connected state on hello_ok", async () => {
     const connectPromise = client.connect();
     fakeSocket.simulateConnect();

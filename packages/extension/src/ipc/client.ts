@@ -30,6 +30,13 @@ const IPC_CLIENT_VERSION = "1.0";
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 
+// P3′-2b: build-id injected by esbuild (define) at bundle time; "dev" under
+// vitest where the define isn't applied. `typeof` is ReferenceError-safe for an
+// undeclared global, so the fallback works without esbuild.
+declare const __CB_BUILD_ID__: string;
+const BUILD_ID: string =
+  typeof __CB_BUILD_ID__ === "string" ? __CB_BUILD_ID__ : "dev";
+
 export type ConnectionStateKind =
   | "disconnected"
   | "connecting"
@@ -160,7 +167,7 @@ export class IpcClient {
   public onBindingCleared?: (msg: BindingCleared) => void;
 
   constructor(
-    private readonly endpoint: string,
+    private endpoint: string,
     opts: IpcClientOptions = {},
   ) {
     this.socketFactory = opts.socketFactory ?? ((ep) => netConnect(ep));
@@ -168,6 +175,23 @@ export class IpcClient {
 
   getConnectionState(): ConnectionStateKind {
     return this.state;
+  }
+
+  // P3′-2b: re-target the endpoint after discovery resolves the per-daemon
+  // pipe. The per-daemon pipe is STABLE for a given workspace (hash-derived),
+  // so this is set once at pairing time and the reconnect loop reuses it across
+  // daemon restarts. Only valid while disconnected (a no-op guard otherwise).
+  setEndpoint(endpoint: string): void {
+    if (this.state === "connected" || this.state === "connecting") {
+      diag("ipc: setEndpoint ignored — not idle", { state: this.state });
+      return;
+    }
+    this.endpoint = endpoint;
+  }
+
+  // The current IPC endpoint (the discovered per-daemon pipe, post-pairing).
+  getEndpoint(): string {
+    return this.endpoint;
   }
 
   // CB-DAEMON-LIFECYCLE-FIX: the connected daemon's pid (or null when not
@@ -273,6 +297,8 @@ export class IpcClient {
             version: IPC_CLIENT_VERSION,
             role: "extension",
             pid: process.pid,
+            // P3′-2b: build-id for machine-verified currency (daemon logs it).
+            build_id: BUILD_ID,
           }) + "\n",
         );
       });

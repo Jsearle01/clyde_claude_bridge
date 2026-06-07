@@ -18,6 +18,11 @@ import {
   makeGetDiagnosticsHandler,
 } from "./inspection-tools.js";
 import { makeWorkspacePathProbe } from "./workspace-path-probe.js";
+import {
+  getDaemonsDir,
+  computeWorkspaceIdentity,
+  startPairing,
+} from "./discovery.js";
 import { diag } from "./diag.js";
 
 const STATE_LABELS: Record<ReturnType<IpcClient["getConnectionState"]>, string> = {
@@ -35,22 +40,12 @@ export function activate(context: vscode.ExtensionContext): void {
     extensionPath: context.extensionPath,
     env_debug: process.env.CLAUDE_BRIDGE_DEBUG,
   });
+  // P3′-2b: the endpoint is no longer a fixed pipe — discovery (below) resolves
+  // the per-daemon pipe by matching this workspace against the adverts and
+  // re-targets the client via setEndpoint() before connecting. discoverDaemon-
+  // Endpoint() is kept only as a harmless initial placeholder (superseded on
+  // the first match). No eager connect — connect fires on a discovery match.
   ipcClient = new IpcClient(discoverDaemonEndpoint());
-  // Don't block activation on connect — if the daemon isn't running,
-  // IpcClient surfaces via its reconnect loop and the status command's
-  // state read. Daemon-not-running UX with an actionable notification is
-  // T-P2-005's territory.
-  ipcClient.connect().catch(() => {
-    // autoStartDaemon: when enabled and initial connect fails, fire
-    // startDaemon once. The CLI handles "already running" gracefully so
-    // races with manually-started daemons surface as a warning, not error.
-    const autoStart = vscode.workspace
-      .getConfiguration("claudeBridge")
-      .get<boolean>("autoStartDaemon", false);
-    if (autoStart) {
-      void runStartDaemonCommand(context);
-    }
-  });
 
   // T-P2-005: after NOTIFICATION_THRESHOLD (3) reconnect attempts,
   // surface an actionable [Start Daemon] notification. Factory builds a
@@ -74,6 +69,48 @@ export function activate(context: vscode.ExtensionContext): void {
   // covers the typical activation-vs-connection race; failure modes
   // surface via the status command's getState() / getIdentifier().
   void registration.register();
+
+  // P3′-2b: discover this workspace's daemon and auto-pair. Compute the
+  // case-folded identity from workspaceFolders[0].uri.fsPath (the same key the
+  // daemon wrote into the advert's canonical_workspace), scan/poll the shared
+  // daemons/ dir, and on a match re-target + connect (handshake = liveness;
+  // works daemon-first OR window-first). Multi-root → pair on [0] with a clear
+  // notice (scope b). Full status/no-pairing/spawn UI is Phase 3 (scope a).
+  const folders = vscode.workspace.workspaceFolders;
+  const pairFolder = folders?.[0];
+  if (pairFolder !== undefined) {
+    if (folders !== undefined && folders.length > 1) {
+      void vscode.window.showInformationMessage(
+        `Claude Bridge: multi-root workspace detected; pairing on the first folder: ${pairFolder.name}`,
+      );
+    }
+    const identity = computeWorkspaceIdentity(pairFolder.uri.fsPath);
+    diag("discovery: starting pairing", {
+      identity,
+      daemonsDir: getDaemonsDir(),
+    });
+    const pairing = startPairing({
+      daemonsDir: getDaemonsDir(),
+      identity,
+      onMatch: (advert) => {
+        // Re-target to the discovered per-daemon pipe and connect. The hello/
+        // register handshake proves liveness; a stale advert fails it and the
+        // reconnect loop retries the (stable) pipe until the daemon returns.
+        ipcClient?.setEndpoint(advert.pipe);
+        ipcClient?.connect().catch((err: unknown) => {
+          diag("discovery: connect failed (stale advert / daemon down)", {
+            error: String(err),
+          });
+          // autoStartDaemon (opt-in): fire once on a failed handshake.
+          const autoStart = vscode.workspace
+            .getConfiguration("claudeBridge")
+            .get<boolean>("autoStartDaemon", false);
+          if (autoStart) void runStartDaemonCommand(context);
+        });
+      },
+    });
+    context.subscriptions.push({ dispose: () => pairing.dispose() });
+  }
 
   const startDaemonCmd = vscode.commands.registerCommand(
     "claudeBridge.startDaemon",
