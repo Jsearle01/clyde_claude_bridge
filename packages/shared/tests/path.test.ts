@@ -1,5 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { normalizeAbsPath, canonicalizeWorkspacePath } from "../src/path.js";
+import {
+  normalizeAbsPath,
+  canonicalizeWorkspacePath,
+  workspaceIdentityKey,
+} from "../src/path.js";
 
 const ORIGINAL_PLATFORM = process.platform;
 
@@ -81,6 +85,27 @@ describe("normalizeAbsPath (T-P2-007.5)", () => {
       setPlatform("linux");
       expect(normalizeAbsPath("/X/Y")).toBe("/X/Y");
     });
+  });
+});
+
+describe("workspaceIdentityKey (P3'-1b)", () => {
+  // The single identity-composition both daemon + CLI key on:
+  // normalizeAbsPath(canonicalizeWorkspacePath(input)). Platform-injected, so
+  // independent of the host (these run on any CI host).
+  it("win32: equivalent forms → the same case-folded key", () => {
+    const expected = "c:\\projects\\clyde_claude_bridge";
+    for (const form of [
+      "C:\\Projects\\clyde_claude_bridge",
+      "c:/projects/clyde_claude_bridge/",
+      "C:\\PROJECTS\\CLYDE_CLAUDE_BRIDGE",
+    ]) {
+      expect(workspaceIdentityKey(form, "win32")).toBe(expected);
+    }
+  });
+  it("posix: case-preserving (case-sensitive FS)", () => {
+    expect(workspaceIdentityKey("/home/jay/Projects/x", "linux")).toBe(
+      "/home/jay/Projects/x",
+    );
   });
 });
 

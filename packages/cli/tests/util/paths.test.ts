@@ -5,6 +5,8 @@ import {
   getCliConfigPath,
   getCliPidPath,
   addressFor,
+  deriveResourceHash,
+  perDaemonResources,
 } from "../../src/util/paths.js";
 
 describe("util/paths", () => {
@@ -71,4 +73,38 @@ describe("util/paths", () => {
       expect(addressFor("anything")).toBe("\\\\.\\pipe\\claude-bridge");
     },
   );
+});
+
+describe("perDaemonResources / deriveResourceHash (P3'-1b)", () => {
+  // CROSS-PACKAGE INVARIANT: these hashes MUST equal the daemon's
+  // (packages/daemon/tests/workspace/resources.test.ts uses the same
+  // constants). If they diverge, the CLI connects to the wrong daemon.
+  const ID_A = "c:\\projects\\clyde_claude_bridge";
+  const HASH_A = "135cfaa3d11a768c";
+  const HASH_B = "31e623eb2c4d4c9b";
+
+  it("deriveResourceHash matches the daemon's fixtures", () => {
+    expect(deriveResourceHash(ID_A)).toBe(HASH_A);
+    expect(deriveResourceHash("c:\\projects\\other_workspace")).toBe(HASH_B);
+  });
+
+  it("win32: per-daemon dir + pipe under <root>/<hash>/ (platform injected)", () => {
+    const r = perDaemonResources("C:\\Projects\\clyde_claude_bridge", "win32");
+    expect(r.hash).toBe(HASH_A);
+    expect(r.configDir).toBe(join(getCliConfigDir(), HASH_A));
+    expect(r.configPath).toBe(join(getCliConfigDir(), HASH_A, "config.json"));
+    expect(r.pidPath).toBe(join(getCliConfigDir(), HASH_A, "daemon.pid"));
+    expect(r.ipcAddress).toBe(`\\\\.\\pipe\\claude-bridge-${HASH_A}`);
+  });
+
+  it("equivalent --workspace forms → identical resources (same daemon)", () => {
+    const a = perDaemonResources("C:\\Projects\\clyde_claude_bridge", "win32");
+    const b = perDaemonResources("c:/projects/clyde_claude_bridge/", "win32");
+    expect(a).toEqual(b);
+  });
+
+  it("posix: ipc address is the per-daemon sock path", () => {
+    const r = perDaemonResources("/home/jay/Projects/x", "linux");
+    expect(r.ipcAddress).toBe(join(r.configDir, "daemon.sock"));
+  });
 });

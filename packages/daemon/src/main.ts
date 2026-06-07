@@ -12,11 +12,11 @@
 import { writeFile, chmod, stat, mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { Config, StatusPayload } from "@claude-bridge/shared";
 import { loadConfig, ConfigNotFoundError } from "./config/load.js";
 import { initConfig } from "./config/init.js";
-import { getConfigPath, getPidPath } from "./config/paths.js";
+import { getConfigDir, getConfigPath, getPidPath } from "./config/paths.js";
 import { generateToken } from "./config/token.js";
 import { createLogger, type Logger } from "./log/logger.js";
 import { AuditLog } from "./audit/log.js";
@@ -45,9 +45,12 @@ import {
   getTokensStorePath,
 } from "./config/paths.js";
 import { makeInitialState } from "./state.js";
-import { computeDaemonIdentity } from "./workspace/identity.js";
+import {
+  computeDaemonResources,
+  allocatePort,
+  type DaemonResources,
+} from "./workspace/resources.js";
 import { WorkspaceRegistryImpl } from "./workspace/registry.js";
-import { validateWorkspaceConfig } from "./workspace/config.js";
 import { JobQueue } from "./jobs/index.js";
 import { DailyTimer } from "./util/daily-timer.js";
 import { scanTranscriptOrphans } from "./jobs/transcript-orphan.js";
@@ -95,6 +98,18 @@ function getDaemonArgValue(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
   if (i === -1 || i + 1 >= process.argv.length) return undefined;
   return process.argv[i + 1];
+}
+
+// P3′-1b: parse the optional `--port <n>` override. Absent → undefined
+// (auto-allocate). Present-but-not-a-valid-port → throw a clear startup error
+// (main()'s catch maps it to a non-zero exit).
+function parsePortArg(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`--port must be an integer 1-65535, got '${raw}'`);
+  }
+  return n;
 }
 
 // CB-DAEMON-LIFECYCLE-FIX (a): authoritative single-instance probe. The TCP
@@ -217,10 +232,31 @@ async function main(): Promise<void> {
   process.stdout.on("error", () => undefined);
   process.stderr.on("error", () => undefined);
 
-  const configPath = getConfigPath();
-  const pidPath = getPidPath();
+  // 0.5. P3′-1b: per-daemon resource resolution. When `claude-bridge start`
+  // forwards --workspace/--name, derive a per-daemon config-dir + IPC pipe +
+  // (below) port from the canonical identity, so two daemons for two workspaces
+  // never collide on disk, IPC channel, or port. Without --workspace (the
+  // acceptance harness / a direct `node main.js`), fall back to the flat legacy
+  // layout — unchanged. No auto-migration of old flat state (clean cutover).
+  const workspaceArg = getDaemonArgValue("--workspace");
+  const nameArg = getDaemonArgValue("--name");
+  const portArg = parsePortArg(getDaemonArgValue("--port"));
 
-  // 1. Load or init config.
+  let resources: DaemonResources | null = null;
+  let configDir: string;
+  let ipcAddressOverride: string | undefined;
+  if (workspaceArg !== undefined && nameArg !== undefined) {
+    resources = computeDaemonResources(workspaceArg, nameArg, getConfigDir());
+    configDir = resources.configDir;
+    ipcAddressOverride = resources.ipcAddress;
+  } else {
+    configDir = getConfigDir();
+    ipcAddressOverride = undefined; // legacy: server's addressFor() chooses
+  }
+  const configPath = getConfigPath(configDir);
+  const pidPath = getPidPath(configDir);
+
+  // 1. Load or init config (under the resolved per-daemon / legacy config-dir).
   let config: Config;
   try {
     config = await loadConfig(configPath);
@@ -235,13 +271,11 @@ async function main(): Promise<void> {
     }
   }
 
-  // 1.5. Workspace config validation (P1). If present, must point at an
-  // existing directory; otherwise refuse to start in the same shape as
-  // P0's loose-permissions refusal. Absent workspace block is fine —
-  // P0 behavior preserved (`ping` works, no delegation capability).
-  if (config.workspace !== undefined) {
-    validateWorkspaceConfig(config.workspace);
-  }
+  // 1.5. P3′-1b (scope c): `config.workspace` reading RETIRED. `--workspace`
+  // is the single source of truth for the daemon's workspace; the old
+  // config.workspace validation no longer runs at startup (no dual source).
+  // The schema field remains accepted-but-ignored for back-compat;
+  // validateWorkspaceConfig is now unreferenced by the startup path.
 
   // 2. Logger.
   const logger = createLogger(config.log.path, config.log.level);
@@ -250,20 +284,40 @@ async function main(): Promise<void> {
     config_path: configPath,
   });
 
-  // 2.5. P3′-1a: canonical daemon identity. When `claude-bridge start`
-  // forwards --workspace/--name (it now requires them), compute and log the
-  // identity the rest of P3′ keys on. Logged HERE — right after the logger,
-  // before the single-instance/tunnel gates — so the line is emitted even on
-  // a refused (port-taken) or tunnel-less start. Identity computation only;
-  // NO resource scoping / port / lock change this phase (1b/1c own those).
-  const workspaceArg = getDaemonArgValue("--workspace");
-  const nameArg = getDaemonArgValue("--name");
-  if (workspaceArg !== undefined && nameArg !== undefined) {
-    const id = computeDaemonIdentity(workspaceArg, nameArg);
+  // 2.5. P3′-1b: port allocation. Explicit --port: use it, or error if taken
+  // (never silently increment past the operator's explicit choice). Per-daemon
+  // mode (no --port): next-free from the configured port so a second
+  // workspace's daemon doesn't collide. Legacy mode: the configured port as-is
+  // (acceptance-harness behavior preserved).
+  let bindPort: number;
+  if (portArg !== undefined) {
+    bindPort = await allocatePort(
+      { explicit: portArg, start: portArg, host: config.daemon.bind_host },
+      isDaemonPortListening,
+    );
+  } else if (resources !== null) {
+    bindPort = await allocatePort(
+      { explicit: undefined, start: config.daemon.bind_port, host: config.daemon.bind_host },
+      isDaemonPortListening,
+    );
+  } else {
+    bindPort = config.daemon.bind_port;
+  }
+  config.daemon.bind_port = bindPort;
+
+  // 2.6. Identity → hash → physical-resources mapping (P3′-1a identity +
+  // 1b config-dir/port/pipe), logged before the single-instance/tunnel gates
+  // so it's emitted even on a refused start. This is the debug key for the
+  // opaque <hash> dir and the currency-positive line (007 lesson).
+  if (resources !== null) {
     logger.info("daemon identity", {
-      identity: id.identity,
-      name: id.name,
-      workspace_path: id.display_path,
+      identity: resources.identity,
+      name: resources.name,
+      workspace_path: resources.display_path,
+      hash: resources.hash,
+      config_dir: resources.configDir,
+      bind_port: bindPort,
+      ipc: resources.ipcAddress,
     });
   }
 
@@ -305,7 +359,7 @@ async function main(): Promise<void> {
 
   // 4.5. Transcripts directory + one-shot orphan scan (P1). The scan is
   // best-effort: failures are logged but do not abort daemon startup.
-  const configDir = dirname(configPath);
+  // `configDir` is the per-daemon (or legacy flat) dir resolved at step 0.5.
   const transcriptsDir = join(configDir, "transcripts");
   try {
     await mkdir(transcriptsDir, { recursive: true, mode: 0o700 });
@@ -342,18 +396,25 @@ async function main(): Promise<void> {
   // Load the store first so the registry's first resolve() can find
   // pre-existing entries (closes T-P2-006 manual-verification finding
   // C-23: daemon-restart against pre-populated workspaces.json).
-  const workspacesStore = new WorkspacesStore(getWorkspacesStorePath(), logger);
+  const workspacesStore = new WorkspacesStore(
+    getWorkspacesStorePath(configDir),
+    logger,
+  );
   await workspacesStore.load();
   // T-P3-001: OAuth DCR clients store. Mirrors WorkspacesStore shape;
   // loaded once at startup so the DCR endpoint sees pre-existing entries.
-  const clientsStore = new ClientsStore(getClientsStorePath(), logger);
+  const clientsStore = new ClientsStore(getClientsStorePath(configDir), logger);
   await clientsStore.load();
   logger.info("oauth clients store initialized", {
     client_count: clientsStore.list().length,
   });
   // T-P3-004a: durable access-token store (the binding's persistent home).
   // Loaded once at startup; sweeps expired tokens on load.
-  const tokenStore = new TokenStore(getTokensStorePath(), Date.now, logger);
+  const tokenStore = new TokenStore(
+    getTokensStorePath(configDir),
+    Date.now,
+    logger,
+  );
   await tokenStore.load();
   logger.info("oauth token store initialized", {
     token_count: tokenStore.size(),
@@ -767,11 +828,15 @@ async function main(): Promise<void> {
   // populated store at startup. IpcServer's existing workspacesStore
   // reference is unchanged.
 
+  // P3′-1b: in per-daemon mode pass the hash-derived IPC address as the
+  // addressOverride so the server listens on the per-daemon pipe/socket (the
+  // win32 server's addressFor() would otherwise force the shared legacy pipe).
+  // In legacy mode ipcAddressOverride is undefined → unchanged behavior.
   const ipcServer = new IpcServer(
     config.daemon.ipc_socket,
     handlers,
     logger,
-    undefined,
+    ipcAddressOverride,
     workspacesStore,
   );
   // T-P2-007: wire the registry's getActiveRegistry getter to the

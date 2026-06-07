@@ -16,7 +16,7 @@ import {
 import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { sendIpc } from "../ipc-client.js";
-import { getCliConfigPath, getCliPidPath } from "../util/paths.js";
+import { getCliPidPath, perDaemonResources } from "../util/paths.js";
 import { loadCliConfig } from "../util/config.js";
 import { checkStalePid, readPidFromFile } from "../util/pidfile.js";
 
@@ -147,8 +147,9 @@ export function checkCloudflared(
 // Pre-flight: refuse to start if another daemon is already running. Stale
 // PID files are tolerated (daemon main.ts will overwrite). Returns the
 // pre-flight outcome so the caller can decide whether to print a notice.
-export async function checkExistingDaemon(): Promise<"absent" | "stale"> {
-  const pidPath = getCliPidPath();
+export async function checkExistingDaemon(
+  pidPath: string = getCliPidPath(),
+): Promise<"absent" | "stale"> {
   const state = await checkStalePid(pidPath);
   if (state === "alive") {
     const pid = await readPidFromFile(pidPath);
@@ -240,12 +241,18 @@ export async function startCommand(args: StartArgs): Promise<void> {
   //    BEFORE any side effect, so a bad invocation errors without spawning.
   const { workspacePath, name } = await resolveStartArgs(args);
 
+  // P3′-1b: resolve THIS daemon's per-daemon resources from --workspace so the
+  // courtesy config-notice, the pid pre-check, and the post-spawn status/token
+  // read all target the right per-daemon dir + IPC pipe (the daemon derives the
+  // identical paths from the forwarded --workspace).
+  const res = perDaemonResources(workspacePath);
+
   // 1. cloudflared on PATH
   checkCloudflared();
 
   // 2. config notice (the daemon itself runs first-run init; we only print
   //    a courtesy note if the file isn't there yet)
-  const configPath = getCliConfigPath();
+  const configPath = res.configPath;
   try {
     await stat(configPath);
   } catch (err) {
@@ -261,8 +268,8 @@ export async function startCommand(args: StartArgs): Promise<void> {
     }
   }
 
-  // 3. refuse if a daemon is already running
-  const pidPreflight = await checkExistingDaemon();
+  // 3. refuse if a daemon is already running (this workspace's per-daemon pid)
+  const pidPreflight = await checkExistingDaemon(res.pidPath);
   if (pidPreflight === "stale") {
     process.stderr.write("Stale PID file detected; daemon main will overwrite.\n");
   }
@@ -288,8 +295,11 @@ export async function startCommand(args: StartArgs): Promise<void> {
   child.stdout?.destroy();
   child.stderr?.destroy();
 
-  // 7. fetch status via IPC for the tunnel URL
-  const response = await sendIpc({ kind: "status" });
+  // 7. fetch status via IPC for the tunnel URL (this daemon's per-daemon pipe)
+  const response = await sendIpc(
+    { kind: "status" },
+    { addressOverride: res.ipcAddress },
+  );
   if (response.kind !== "status_ok") {
     throw new Error(`Unexpected IPC response kind: ${response.kind}`);
   }

@@ -17,7 +17,10 @@
 // take `platform` injected (defaulting to the host) so the identity-stability
 // table runs deterministically on any CI host.
 
-import { canonicalizeWorkspacePath, normalizeAbsPath } from "@claude-bridge/shared";
+import {
+  canonicalizeWorkspacePath,
+  workspaceIdentityKey,
+} from "@claude-bridge/shared";
 
 export interface DaemonIdentity {
   /** Case-folded canonical key — the value 1b/2a/2b key on. */
@@ -37,6 +40,8 @@ export function computeDaemonIdentity(
   // everything non-win32 takes the posix branch.
   const canonPlatform = platform === "win32" ? "win32" : "posix";
   const display_path = canonicalizeWorkspacePath(workspaceInput, canonPlatform);
-  const identity = normalizeAbsPath(display_path, platform);
+  // identity = normalizeAbsPath(display_path) — delegated to the shared key
+  // so the daemon and the CLI (P3′-1b resource derivation) agree byte-for-byte.
+  const identity = workspaceIdentityKey(workspaceInput, platform);
   return { identity, display_path, name };
 }

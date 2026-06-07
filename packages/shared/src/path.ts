@@ -88,3 +88,19 @@ function canonicalizePosix(input: string): string {
   if (p.length > 1) p = p.replace(/\/+$/, "");
   return p;
 }
+
+// The canonical IDENTITY KEY for a workspace input — the single composition
+// the daemon (P3′-1a) and the CLI (P3′-1b, to derive the same per-daemon
+// resources) must agree on:
+//   identity = normalizeAbsPath(canonicalizeWorkspacePath(input))
+// i.e. case-folded on top of the case-preserving canonical form. Pure (no node
+// deps), platform-injected so daemon + CLI compute byte-identical keys on any
+// host. The resource HASH (node:crypto) is derived from this and lives package-
+// side (daemon resources.ts / cli util/paths.ts) to keep shared dependency-free.
+export function workspaceIdentityKey(
+  input: string,
+  platform: NodeJS.Platform,
+): string {
+  const canonPlatform = platform === "win32" ? "win32" : "posix";
+  return normalizeAbsPath(canonicalizeWorkspacePath(input, canonPlatform), platform);
+}

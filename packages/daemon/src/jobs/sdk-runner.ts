@@ -39,7 +39,6 @@ import type {
 import type { Logger } from "../log/logger.js";
 import type { JobQueue } from "./queue.js";
 import { checkToolFloor } from "./floor.js";
-import { getConfigDir } from "../config/paths.js";
 import { hashInput } from "../audit/hash.js";
 import type { InteractionRecorder, ReportSummary } from "../audit/interaction.js";
 import { assembleReport } from "./report.js";
@@ -301,7 +300,10 @@ export class SdkJobRunner implements JobRunner {
       // T-P3-007: also emits floor_denied + push_observed to the interaction log.
       canUseTool: makeCanUseTool(
         workspace.abs_path,
-        getConfigDir(),
+        // P3′-1b: the floor's self-protected auth dir is THIS daemon's state
+        // dir (where tokens.json now lives), i.e. the per-daemon config-dir
+        // threaded in at construction — not the flat root.
+        this.configDir,
         this.interactionRecorder,
         job.id,
         workspace.id,

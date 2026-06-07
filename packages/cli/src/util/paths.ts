@@ -13,6 +13,8 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { workspaceIdentityKey } from "@claude-bridge/shared";
 
 const WINDOWS_PIPE_PATH = "\\\\.\\pipe\\claude-bridge";
 
@@ -41,4 +43,47 @@ export function addressFor(socketPath: string): string {
     return WINDOWS_PIPE_PATH;
   }
   return socketPath;
+}
+
+// ── P3′-1b: per-daemon resource derivation ──────────────────────────────────
+// DUPLICATED from packages/daemon/src/workspace/resources.ts (the same
+// rationale as the path/address helpers above: the IPC channel — not a shared
+// TS graph — is the cli↔daemon boundary). MUST stay byte-identical to the
+// daemon's derivation: same identity key (shared workspaceIdentityKey), same
+// sha256[:16] hash, same pipe-name format — else the CLI connects to the wrong
+// address. The shared identity key keeps the most error-prone half in one
+// place; only the small hash + pipe-name format are duplicated.
+
+export function deriveResourceHash(identity: string): string {
+  return createHash("sha256").update(identity).digest("hex").slice(0, 16);
+}
+
+function daemonPipeName(hash: string): string {
+  return `\\\\.\\pipe\\claude-bridge-${hash}`;
+}
+
+// Resolve the per-daemon config-dir + IPC address for a given --workspace
+// input, matching the daemon's computeDaemonResources exactly so `start` can
+// read the spawned daemon's config + connect to its pipe.
+export function perDaemonResources(
+  workspaceInput: string,
+  platform: NodeJS.Platform = process.platform,
+): {
+  hash: string;
+  configDir: string;
+  configPath: string;
+  pidPath: string;
+  ipcAddress: string;
+} {
+  const identity = workspaceIdentityKey(workspaceInput, platform);
+  const hash = deriveResourceHash(identity);
+  const configDir = join(getCliConfigDir(), hash);
+  const sockPath = join(configDir, "daemon.sock");
+  return {
+    hash,
+    configDir,
+    configPath: join(configDir, "config.json"),
+    pidPath: join(configDir, "daemon.pid"),
+    ipcAddress: platform === "win32" ? daemonPipeName(hash) : sockPath,
+  };
 }
