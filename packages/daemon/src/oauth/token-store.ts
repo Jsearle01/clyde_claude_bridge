@@ -217,6 +217,66 @@ export class TokenStore {
     );
   }
 
+  /**
+   * P3′-4 (takeover, capture half): the active token hashes bound to
+   * `workspace` — the explicit "old set" captured BEFORE minting a new token,
+   * so the new token is never a member by construction (it doesn't exist yet).
+   * Empty for an unbound workspace → the paired revokeByTokenHashes becomes a
+   * no-op, so a FRESH bind is behavior-unchanged; only a takeover (re-bind of
+   * an already-bound workspace) yields a non-empty set.
+   */
+  tokenHashesForWorkspace(workspace: string): string[] {
+    this.assertLoaded();
+    const nowMs = this.now();
+    return this.store.tokens
+      .filter((t) => t.bound_workspace === workspace && nowMs < t.expires_at)
+      .map((t) => t.token_hash);
+  }
+
+  /**
+   * P3′-4 (takeover, revoke half): revoke EXACTLY the tokens whose hash is in
+   * `hashes` (the captured old set). Distinct from revokeByWorkspace — that
+   * revokes ALL tokens for a workspace and so, if called after the new mint,
+   * would revoke the just-minted token too (the unbound state takeover must
+   * never produce). Captured-set membership avoids any timestamp/issued-before
+   * comparison. Returns the count removed.
+   */
+  async revokeByTokenHashes(hashes: readonly string[]): Promise<number> {
+    this.assertLoaded();
+    if (hashes.length === 0) return 0;
+    const set = new Set(hashes);
+    const before = this.store.tokens.length;
+    this.store.tokens = this.store.tokens.filter(
+      (t) => !set.has(t.token_hash),
+    );
+    const removed = before - this.store.tokens.length;
+    if (removed > 0) await this.writeFile();
+    return removed;
+  }
+
+  /**
+   * P3′-4 (takeover disclosure): the OLD binding's record for the takeover
+   * modal — client_id + the dates (the requesting client's identity is already
+   * in the consent request; client_name is resolved by the caller via the
+   * clients store). Null when the workspace has no active binding.
+   */
+  takeoverDisclosureFor(
+    workspace: string,
+  ): { client_id: string; issued_at: string; expires_at: number } | null {
+    this.assertLoaded();
+    const nowMs = this.now();
+    const t = this.store.tokens.find(
+      (rec) => rec.bound_workspace === workspace && nowMs < rec.expires_at,
+    );
+    return t === undefined
+      ? null
+      : {
+          client_id: t.client_id,
+          issued_at: t.issued_at,
+          expires_at: t.expires_at,
+        };
+  }
+
   /** Diagnostic — token count (used in tests/verdict evidence). */
   size(): number {
     this.assertLoaded();

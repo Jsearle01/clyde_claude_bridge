@@ -295,3 +295,46 @@ describe("TokenStore file permissions (Unix)", () => {
     expect(s.mode & 0o777).toBe(0o600);
   });
 });
+
+// P3′-4: the captured-set mechanism that makes a takeover install-then-revoke
+// safe (revoke EXACTLY the old set, never the freshly-minted token).
+describe("TokenStore.tokenHashesForWorkspace / revokeByTokenHashes (P3′-4 captured set)", () => {
+  it("captures the active hashes for a workspace and revokes exactly that set", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    const a = await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    const b = await store.mint({ client_id: "c2", bound_workspace: "ws-B" });
+
+    const captured = store.tokenHashesForWorkspace("ws-A");
+    expect(captured).toHaveLength(1);
+
+    // Simulate the takeover: a NEW token for ws-A is minted AFTER capture …
+    const a2 = await store.mint({ client_id: "c1", bound_workspace: "ws-A" });
+    // … then revoke exactly the captured (old) set.
+    const removed = await store.revokeByTokenHashes(captured);
+    expect(removed).toBe(1);
+
+    expect(store.lookup(a.access_token)).toBeNull(); // old A revoked
+    expect(store.lookup(a2.access_token)?.bound_workspace).toBe("ws-A"); // new A survives (never in captured set)
+    expect(store.lookup(b.access_token)?.bound_workspace).toBe("ws-B"); // B untouched
+  });
+
+  it("revokeByTokenHashes([]) is a no-op (the fresh-bind case)", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    const a = await store.mint({ client_id: "c", bound_workspace: "ws" });
+    expect(await store.revokeByTokenHashes([])).toBe(0);
+    expect(store.lookup(a.access_token)?.bound_workspace).toBe("ws");
+  });
+
+  it("takeoverDisclosureFor returns the old binding's record, or null when unbound", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    await store.mint({ client_id: "cb_client_old", bound_workspace: "ws-A" });
+    const d = store.takeoverDisclosureFor("ws-A");
+    expect(d?.client_id).toBe("cb_client_old");
+    expect(typeof d?.issued_at).toBe("string");
+    expect(typeof d?.expires_at).toBe("number");
+    expect(store.takeoverDisclosureFor("ws-unbound")).toBeNull();
+  });
+});

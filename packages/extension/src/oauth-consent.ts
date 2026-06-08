@@ -50,20 +50,55 @@ export function formatClientLabel(
   return meaningful ? `${client_name} (${idPrefix}…)` : `${idPrefix}…`;
 }
 
+// P3′-4: compact, locale-independent calendar date (YYYY-MM-DD) for the
+// takeover disclosure — stable for tests and unambiguous for the user.
+function formatDate(value: string | number): string {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime())
+    ? String(value)
+    : d.toISOString().slice(0, 10);
+}
+
 /**
  * The named-modal copy. Names BOTH parties so approving in the WRONG window
  * shows the WRONG codebase name — a visible, catchable misclick.
+ *
+ * P3′-4 (takeover): when `request.takeover` is present the workspace is already
+ * bound, so the copy is INTERROGATIVE ("Replace … ?") and discloses BOTH
+ * bindings — the existing connection (full record: client, bound-date, expiry)
+ * and the requesting one (identity only; the new token isn't minted until
+ * approval, so there is NO new-token date to show — that asymmetry is correct,
+ * never fabricated). Showing both client identities is what lets the user
+ * distinguish a same-client re-bind from a different-client takeover.
  * Exported for unit testing.
  */
 export function composeConsentModalText(
   request: AuthConsentRequest,
   codebaseName: string,
 ): string {
-  const clientLabel = formatClientLabel(request.client_id, request.client_name);
+  const newLabel = formatClientLabel(request.client_id, request.client_name);
+  if (request.takeover !== undefined) {
+    const oldLabel = formatClientLabel(
+      request.takeover.client_id,
+      request.takeover.client_name,
+    );
+    return [
+      `Replace the existing Claude.ai connection bound to "${codebaseName}"?`,
+      "",
+      `Existing connection: ${oldLabel}`,
+      `  bound ${formatDate(request.takeover.issued_at)}, ` +
+        `expires ${formatDate(request.takeover.expires_at)}`,
+      `New connection: ${newLabel}`,
+      "",
+      `Approving REVOKES the existing connection and binds "${codebaseName}" ` +
+        `to the new one. If you don't recognise the new connection — ` +
+        `especially if it differs from the existing one — click Deny.`,
+    ].join("\n");
+  }
   return [
     "Authorize a Claude.ai connector to bind to this workspace?",
     "",
-    `Client: ${clientLabel}`,
+    `Client: ${newLabel}`,
     `Workspace (this window): ${codebaseName}`,
     "",
     `Approving binds this client to "${codebaseName}" only. ` +

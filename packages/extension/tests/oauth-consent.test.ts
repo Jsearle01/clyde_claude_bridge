@@ -91,6 +91,50 @@ describe("composeConsentModalText (T-P3-003) — names both parties", () => {
   });
 });
 
+describe("composeConsentModalText (P3′-4 takeover) — both bindings, interrogative", () => {
+  const withTakeover = makeRequest({
+    client_id: "cb_client_NEWNEWNEWNEW0000",
+    client_name: "Claude.ai New Instance",
+    takeover: {
+      client_id: "cb_client_OLDOLDOLDOLD0000",
+      client_name: "Claude.ai Old Instance",
+      issued_at: "2026-06-01T12:00:00.000Z",
+      expires_at: Date.parse("2026-06-08T12:00:00.000Z"),
+    },
+  });
+
+  it("AC-4-2: asks (interrogative) and discloses it is a REPLACEMENT that revokes the old", () => {
+    const t = composeConsentModalText(withTakeover, "my-app");
+    expect(t).toContain("Replace the existing");
+    expect(t).toContain("?"); // interrogative, not an announcement
+    expect(t.toLowerCase()).toContain("revokes the existing");
+    expect(t).toContain("my-app");
+  });
+
+  it("AC-4-2: surfaces BOTH client identities so same-client re-bind vs different-client takeover is visible", () => {
+    const t = composeConsentModalText(withTakeover, "my-app");
+    expect(t).toContain("cb_client_OLDOLD"); // old client id prefix
+    expect(t).toContain("Claude.ai Old Instance"); // old client name
+    expect(t).toContain("cb_client_NEWNEW"); // new client id prefix
+    expect(t).toContain("Claude.ai New Instance"); // new client name
+  });
+
+  it("AC-4-2: shows the old binding's bound-date + expiry; no fabricated NEW-token date", () => {
+    const t = composeConsentModalText(withTakeover, "my-app");
+    expect(t).toContain("2026-06-01"); // old bound date
+    expect(t).toContain("2026-06-08"); // old expiry
+    // The new side is identity-only — there is exactly one "bound …, expires …"
+    // line (the old binding's), never a second fabricated one for the new token.
+    expect(t.match(/bound .*expires/g) ?? []).toHaveLength(1);
+  });
+
+  it("without takeover, the fresh-bind copy is unchanged (no 'Replace')", () => {
+    const t = composeConsentModalText(makeRequest(), "my-app");
+    expect(t).not.toContain("Replace the existing");
+    expect(t).toContain("Authorize a Claude.ai connector");
+  });
+});
+
 describe("makeConsentHandlers.onAuthConsentRequest (T-P3-003)", () => {
   it("ACKs immediately, before the modal resolves (ack-before-resolve)", async () => {
     const warn = deferredWarning();

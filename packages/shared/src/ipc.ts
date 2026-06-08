@@ -427,6 +427,19 @@ export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
       client_id: z.string(),
       client_name: z.string(),
       redirect_uri: z.string(),
+      // P3′-4 (takeover): present ONLY when the workspace is already bound —
+      // the consent is a REPLACEMENT, not a fresh bind. Carries the OLD
+      // binding's record so the modal can ask the user to compare the existing
+      // vs the requesting client (same-client re-bind vs different-client
+      // takeover). Absent on a fresh bind.
+      takeover: z
+        .object({
+          client_id: z.string(),
+          client_name: z.string(),
+          issued_at: z.string(),
+          expires_at: z.number(),
+        })
+        .optional(),
     })
     .strict(),
   // T-P3-002: daemon notifies the extension that the 30s decision timer

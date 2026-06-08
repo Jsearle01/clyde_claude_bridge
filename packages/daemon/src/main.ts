@@ -506,12 +506,39 @@ async function main(): Promise<void> {
       const server = ipcServerRef.current;
       if (server === null) return { delivered: 0, totalActive: 0 };
       // T-P3-004b: broadcast the consent request only to UNBOUND windows
-      // (a window already bound to a client can't accept another binding).
-      // The returned counts let beginConsent tell "no windows" (offline)
-      // from "all windows bound" (legible refusal).
-      return server.broadcastServerMessageToUnbound(msg, (id) =>
+      // (a window already bound to a client can't accept a fresh binding).
+      const result = server.broadcastServerMessageToUnbound(msg, (id) =>
         tokenStore.hasActiveBindingFor(id),
       );
+      // P3′-4 (always-takeover): if it reached an unbound window, or there are
+      // no windows at all, we're done (fresh bind, or offline). Otherwise every
+      // active window is already bound — instead of refusing
+      // (no_unbound_workspace, the pre-P3′-4 behavior), deliver a TAKEOVER
+      // consent to the bound window(s): the same consent plus that window's own
+      // OLD-binding disclosure so the modal can ask the user to replace it.
+      if (result.delivered > 0 || result.totalActive === 0) return result;
+      const takeoverDelivered = server.broadcastTakeoverToBound(
+        (id) => tokenStore.hasActiveBindingFor(id),
+        (identifier) => {
+          const old = tokenStore.takeoverDisclosureFor(identifier);
+          if (old === null) return null;
+          // The token record holds only client_id; resolve the old client's
+          // display name from the clients store ("" is fine — the modal's
+          // formatClientLabel falls back to the client_id prefix).
+          const client_name =
+            clientsStore.findByClientId(old.client_id)?.client_name ?? "";
+          return {
+            ...msg,
+            takeover: {
+              client_id: old.client_id,
+              client_name,
+              issued_at: old.issued_at,
+              expires_at: old.expires_at,
+            },
+          };
+        },
+      );
+      return { delivered: takeoverDelivered, totalActive: result.totalActive };
     },
     (msg) => {
       const server = ipcServerRef.current;

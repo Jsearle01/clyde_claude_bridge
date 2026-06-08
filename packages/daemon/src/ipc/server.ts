@@ -302,6 +302,35 @@ export class IpcServer {
     return { delivered, totalActive };
   }
 
+  // P3′-4 (takeover delivery): the inversion of the unbound filter. Deliver to
+  // BOUND windows — for each active window whose workspace is already bound,
+  // build a PER-WINDOW message via makeMessage(identifier) (the consent plus
+  // that window's own old-binding disclosure) and write it. A null from
+  // makeMessage skips that window. Under daemon-per-workspace this is the one
+  // paired window; the per-window build is what lets each carry its own
+  // takeover record. Returns the count written to.
+  public broadcastTakeoverToBound(
+    isBound: (identifier: string) => boolean,
+    makeMessage: (identifier: string) => IpcServerMessage | null,
+  ): number {
+    let delivered = 0;
+    for (const entry of this.activeRegistry.values()) {
+      if (!isBound(entry.identifier)) continue;
+      const message = makeMessage(entry.identifier);
+      if (message === null) continue;
+      try {
+        entry.socket.write(encodeMessage(message));
+        delivered += 1;
+      } catch (err) {
+        this.logger.warn("ipc takeover: socket write failed", {
+          identifier: entry.identifier,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return delivered;
+  }
+
   constructor(
     socketPath: string,
     handlers: IpcHandlers,

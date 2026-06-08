@@ -252,8 +252,13 @@ export class ConsentManager {
     }
     if (result.delivered === 0) {
       this.consents.delete(request_id);
-      // Distinguish "no windows at all" (offline) from "all windows already
-      // bound" (T-P3-004b filter) — the latter gets a distinct legible page.
+      // delivered === 0 means nothing was reachable. totalActive === 0 is truly
+      // offline. P3′-4 changed the totalActive > 0 case: the old "all windows
+      // bound → no_unbound_workspace REFUSAL" is gone — the send adapter
+      // (main.ts) now delivers a TAKEOVER consent to bound windows, so a bound
+      // window yields delivered > 0 and we never reach here. Reaching here with
+      // totalActive > 0 now means the takeover delivery ALSO failed to write
+      // (socket error on every bound window) — the residual undeliverable case.
       return {
         ok: false,
         reason:

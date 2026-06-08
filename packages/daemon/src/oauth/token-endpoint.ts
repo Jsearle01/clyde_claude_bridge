@@ -183,13 +183,42 @@ export async function handleToken(
     return;
   }
 
-  // 6. Mint the access token carrying the binding. granularity is null
-  //    (T-P3-005 owns its behavior).
+  // 6. Install-then-revoke (P3′-4 takeover): capture the workspace's existing
+  //    bound token(s) BEFORE minting, mint the new bound token, then revoke
+  //    exactly the captured old set. For a FRESH bind the captured set is empty
+  //    → the revoke is a no-op (behavior unchanged). For a TAKEOVER (re-bind of
+  //    an already-bound workspace, now permitted) the old binding is replaced.
+  //    Ordering is the safety: a mint failure throws here and leaves the old
+  //    binding intact (nothing revoked — never the unbound state); the new
+  //    token is never in the captured set by construction, so it is never
+  //    revoked. granularity is null (T-P3-005 owns its behavior).
+  const supersededHashes =
+    authCode.bound_workspace === null
+      ? []
+      : deps.tokenStore.tokenHashesForWorkspace(authCode.bound_workspace);
   const minted = await deps.tokenStore.mint({
     client_id,
     bound_workspace: authCode.bound_workspace,
     granularity: null,
   });
+  // Revoke the OLD binding AFTER the new token is installed. A failure here
+  // leaves the new binding live and the old token(s) a revocable leftover —
+  // surfaced (logged), never the silent unbound state.
+  if (supersededHashes.length > 0) {
+    try {
+      const tokens_revoked =
+        await deps.tokenStore.revokeByTokenHashes(supersededHashes);
+      deps.logger.info("oauth takeover: old binding revoked after install", {
+        bound_workspace: authCode.bound_workspace,
+        tokens_revoked,
+      });
+    } catch (err) {
+      deps.logger.warn("oauth takeover: revoke-after-install failed", {
+        bound_workspace: authCode.bound_workspace,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   deps.logger.info("oauth access token issued", {
     client_id,

@@ -2,7 +2,7 @@
 // auth-code → access-token redemption (PKCE verify, client auth, single-use
 // code, binding carriage onto the minted token).
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -248,5 +248,93 @@ describe("handleToken — rejections", () => {
     );
     expect(res.status).toBe(400);
     expect(res.json.error).toBe("invalid_grant");
+  });
+});
+
+// P3′-4: orphaned-binding reclaim. The takeover happens at REDEMPTION via
+// install-then-revoke (capture old token hashes → mint new → revoke captured
+// old). A fresh bind has an empty captured set (no-op revoke), so this block
+// also pins fresh-bind behavior as unchanged.
+describe("handleToken — P3′-4 takeover (install-then-revoke, captured set)", () => {
+  async function redeem(g: {
+    code: string;
+    client_id: string;
+    client_secret: string;
+  }): Promise<{ status?: number; json: Record<string, unknown> }> {
+    return callToken(
+      form({
+        grant_type: "authorization_code",
+        code: g.code,
+        redirect_uri: REDIRECT,
+        client_id: g.client_id,
+        client_secret: g.client_secret,
+        code_verifier: VERIFIER,
+      }),
+    );
+  }
+
+  it("AC-4-3: a takeover installs the new bound token and revokes the OLD; the new survives", async () => {
+    const oldToken = ((await redeem(await setupGrant("workspace-A"))).json
+      .access_token ?? "") as string;
+    expect(tokenStore.lookup(oldToken)?.bound_workspace).toBe("workspace-A");
+
+    // A fresh consent for the SAME (already-bound) workspace = the takeover.
+    const newToken = ((await redeem(await setupGrant("workspace-A"))).json
+      .access_token ?? "") as string;
+
+    expect(tokenStore.lookup(oldToken)).toBeNull(); // old revoked
+    expect(tokenStore.lookup(newToken)?.bound_workspace).toBe("workspace-A"); // new live
+    expect(
+      tokenStore
+        .listBindings()
+        .filter((b) => b.bound_workspace === "workspace-A"),
+    ).toHaveLength(1); // exactly one binding remains
+  });
+
+  it("AC-4-3: a FRESH bind (unbound workspace) is unchanged — empty captured set, no revoke", async () => {
+    const res = await redeem(await setupGrant("workspace-Fresh"));
+    expect(res.status).toBe(200);
+    expect(
+      tokenStore.lookup(res.json.access_token as string)?.bound_workspace,
+    ).toBe("workspace-Fresh");
+  });
+
+  it("AC-4-7-flavor: a takeover of A does NOT touch B's binding (captured set is per-workspace)", async () => {
+    const tA = ((await redeem(await setupGrant("workspace-A"))).json
+      .access_token ?? "") as string;
+    const tB = ((await redeem(await setupGrant("workspace-B"))).json
+      .access_token ?? "") as string;
+    await redeem(await setupGrant("workspace-A")); // takeover of A only
+    expect(tokenStore.lookup(tA)).toBeNull(); // old A revoked
+    expect(tokenStore.lookup(tB)?.bound_workspace).toBe("workspace-B"); // B intact
+  });
+
+  it("AC-4-4: install (mint) failure leaves the OLD binding intact — never unbound", async () => {
+    const oldToken = ((await redeem(await setupGrant("workspace-A"))).json
+      .access_token ?? "") as string;
+    const spy = vi
+      .spyOn(tokenStore, "mint")
+      .mockRejectedValueOnce(new Error("disk full"));
+    await redeem(await setupGrant("workspace-A")).catch(() => undefined);
+    spy.mockRestore();
+    // The failed takeover never revoked the old — the user is still bound.
+    expect(tokenStore.lookup(oldToken)?.bound_workspace).toBe("workspace-A");
+  });
+
+  it("AC-4-4: revoke-after-install failure leaves the NEW binding live (old a surfaced leftover, not unbound)", async () => {
+    const oldToken = ((await redeem(await setupGrant("workspace-A"))).json
+      .access_token ?? "") as string;
+    const spy = vi
+      .spyOn(tokenStore, "revokeByTokenHashes")
+      .mockRejectedValueOnce(new Error("write failed"));
+    const res = await redeem(await setupGrant("workspace-A"));
+    spy.mockRestore();
+    // Install succeeded (new live); the revoke failure was surfaced, not rolled
+    // back — never the unbound state.
+    expect(res.status).toBe(200);
+    expect(
+      tokenStore.lookup(res.json.access_token as string)?.bound_workspace,
+    ).toBe("workspace-A");
+    expect(tokenStore.lookup(oldToken)?.bound_workspace).toBe("workspace-A"); // old leftover
   });
 });
