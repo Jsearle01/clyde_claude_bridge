@@ -21,6 +21,13 @@ export async function writePidFile(path: string): Promise<void> {
   await writeFile(path, String(process.pid), { mode: 0o600 });
 }
 
+// T-TUNNEL-1: write an ARBITRARY pid (not the daemon's own) — used for the
+// owned cloudflared child's pid (tunnel.pid), which a future daemon reads to
+// reclaim an orphan. Same 0600 mode.
+export async function writePidValue(path: string, pid: number): Promise<void> {
+  await writeFile(path, String(pid), { mode: 0o600 });
+}
+
 export async function checkStalePid(path: string): Promise<PidState> {
   let content: string;
   try {

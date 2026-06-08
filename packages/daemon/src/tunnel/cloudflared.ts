@@ -53,6 +53,13 @@ export class CloudflaredProcess extends EventEmitter {
     ];
     const child = spawn(this.opts.binary, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      // T-TUNNEL-1: launch HIDDEN (no interactive console window the operator
+      // has to fight — the observed-repro window). `windowsHide` is a no-op on
+      // POSIX. NOT detached: the daemon OWNS this child and must be able to kill
+      // it (kill-before-respawn + graceful teardown); orphan survival on a hard
+      // daemon-kill is handled by reclaim-on-startup, not by detachment.
+      windowsHide: true,
+      detached: false,
     });
 
     child.on("error", (err: Error) => {

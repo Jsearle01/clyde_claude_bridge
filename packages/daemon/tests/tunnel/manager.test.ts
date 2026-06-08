@@ -25,6 +25,19 @@ const silentLogger: Logger = {
 class FakeProcess extends CloudflaredProcess {
   fakeStarted = false;
   fakeStopped = false;
+  fakePid: number | undefined = undefined;
+
+  constructor(opts: CloudflaredOpts) {
+    super(opts);
+    // A process that exits/errors is no longer running (mirror the real
+    // CloudflaredProcess.exited flag that isRunning() consults).
+    this.on("exit", () => {
+      this.fakeStopped = true;
+    });
+    this.on("error", () => {
+      this.fakeStopped = true;
+    });
+  }
 
   override start(): void {
     this.fakeStarted = true;
@@ -40,7 +53,7 @@ class FakeProcess extends CloudflaredProcess {
   }
 
   override pid(): number | undefined {
-    return undefined;
+    return this.fakePid;
   }
 }
 
@@ -54,6 +67,7 @@ describe("TunnelManager", () => {
   function makeFactory(): (opts: CloudflaredOpts) => CloudflaredProcess {
     return (opts) => {
       const f = new FakeProcess(opts);
+      f.fakePid = 1000 + fakes.length; // distinct pid per spawn
       fakes.push(f);
       return f;
     };
@@ -314,5 +328,48 @@ describe("TunnelManager", () => {
     expect(manager.getStatus()).toBe("down");
 
     await manager.stop();
+  });
+
+  // T-TUNNEL-1: ownership invariant.
+  describe("T-TUNNEL-1 ownership (pid tracking + kill-before-respawn)", () => {
+    it("emits pid_change with the child pid on spawn, and null on stop", async () => {
+      const pids: (number | null)[] = [];
+      const manager = new TunnelManager({
+        binary: "cf",
+        localUrl: "http://localhost:1",
+        argsExtra: [],
+        logger: silentLogger,
+        processFactory: makeFactory(),
+      });
+      manager.on("pid_change", (pid) => pids.push(pid));
+      const p = manager.start();
+      lastFake().emit("url", "https://x.trycloudflare.com");
+      await p;
+      expect(pids).toContain(1000); // first child's pid persisted on spawn
+      await manager.stop();
+      expect(pids[pids.length - 1]).toBeNull(); // cleared on graceful stop
+    });
+
+    it("AC-T-1: an unexpected-exit respawn never leaves two cloudflared running", async () => {
+      const manager = new TunnelManager({
+        binary: "cf",
+        localUrl: "http://localhost:1",
+        argsExtra: [],
+        logger: silentLogger,
+        processFactory: makeFactory(),
+      });
+      const p = manager.start();
+      lastFake().emit("url", "https://first.trycloudflare.com");
+      await p;
+      // The live child dies unexpectedly → manager respawns.
+      fakes[0].emit("exit", 1, null);
+      lastFake().emit("url", "https://second.trycloudflare.com");
+      // At most ONE process is running at any time (the old one exited; the new
+      // one is live). Never two concurrent for one daemon.
+      expect(fakes.filter((f) => f.isRunning())).toHaveLength(1);
+      expect(fakes[0].isRunning()).toBe(false); // old gone
+      expect(lastFake().isRunning()).toBe(true); // new live
+      await manager.stop();
+    });
   });
 });

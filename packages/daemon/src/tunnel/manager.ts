@@ -30,6 +30,10 @@ export interface TunnelManagerOpts {
 export interface TunnelManagerEvents {
   url_change: (url: string) => void;
   status_change: (status: TunnelStatus) => void;
+  // T-TUNNEL-1: the owned cloudflared child's pid changed — a new pid on each
+  // (re)spawn, null when intentionally stopped. main.ts persists it to
+  // tunnel.pid so a future daemon can reclaim an orphan.
+  pid_change: (pid: number | null) => void;
 }
 
 export class TunnelStartTimeoutError extends Error {
@@ -101,6 +105,15 @@ export class TunnelManager extends EventEmitter {
     initialResolve?: (url: string) => void,
     initialReject?: (err: Error) => void,
   ): CloudflaredProcess {
+    // T-TUNNEL-1 (AC-T-1, kill-before-respawn): NEVER two concurrent cloudflared
+    // for one daemon. The normal respawn paths already null currentProcess (exit
+    // handler) or stop it (restart/timeout) before reaching here; this guard
+    // makes the invariant explicit + terminates any child that somehow lingers.
+    if (this.currentProcess !== null && this.currentProcess.isRunning()) {
+      const stale = this.currentProcess;
+      this.currentProcess = null;
+      void stale.stop().catch(() => undefined);
+    }
     const proc = this.processFactory({
       binary: this.binary,
       localUrl: this.localUrl,
@@ -173,6 +186,9 @@ export class TunnelManager extends EventEmitter {
     }, this.startTimeoutMs);
 
     proc.start();
+    // T-TUNNEL-1: persist the new child's pid (for orphan reclaim). Emitted
+    // after start() so proc.pid() is populated.
+    this.emit("pid_change", proc.pid() ?? null);
     return proc;
   }
 
@@ -215,6 +231,9 @@ export class TunnelManager extends EventEmitter {
       this.currentProcess = null;
       await proc.stop().catch(() => undefined);
     }
+    // T-TUNNEL-1: the child is gone (graceful) — clear the persisted pid so a
+    // future daemon doesn't try to reclaim a dead/recycled pid.
+    this.emit("pid_change", null);
     if (this.status !== "down") {
       this.status = "down";
       this.emit("status_change", "down");

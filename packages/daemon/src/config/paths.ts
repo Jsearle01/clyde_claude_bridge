@@ -41,6 +41,14 @@ export function getPidPath(configDir: string = getConfigDir()): string {
   return join(configDir, "daemon.pid");
 }
 
+// T-TUNNEL-1: the daemon's owned cloudflared child pid, persisted so a daemon
+// starting after a NON-graceful prior exit (which bypasses shutdown() on win32)
+// can reclaim — detect + kill — the orphaned cloudflared it used to own. Written
+// on each (re)spawn, cleared on graceful tunnel stop. Sibling of daemon.pid.
+export function getTunnelPidPath(configDir: string = getConfigDir()): string {
+  return join(configDir, "tunnel.pid");
+}
+
 export function getWorkspacesStorePath(configDir: string = getConfigDir()): string {
   return join(configDir, "workspaces.json");
 }

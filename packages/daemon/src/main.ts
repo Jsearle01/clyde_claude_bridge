@@ -16,7 +16,13 @@ import { join } from "node:path";
 import type { Config, StatusPayload } from "@claude-bridge/shared";
 import { loadConfig, ConfigNotFoundError } from "./config/load.js";
 import { initConfig } from "./config/init.js";
-import { getConfigDir, getConfigPath, getPidPath } from "./config/paths.js";
+import {
+  getConfigDir,
+  getConfigPath,
+  getPidPath,
+  getTunnelPidPath,
+} from "./config/paths.js";
+import { reclaimOrphanTunnel } from "./tunnel/reclaim.js";
 import { generateToken } from "./config/token.js";
 import { createLogger, type Logger } from "./log/logger.js";
 import { AuditLog } from "./audit/log.js";
@@ -68,6 +74,7 @@ import { ApprovalGateImpl } from "./approval/gate.js";
 import { connect as netConnect } from "node:net";
 import {
   writePidFile,
+  writePidValue,
   checkStalePid,
   readPidFromFile,
   removePidFile,
@@ -752,6 +759,12 @@ async function main(): Promise<void> {
   }
 
   // 8. Tunnel.
+  // T-TUNNEL-1 (AC-T-3, PRIMARY): before launching our own cloudflared, reclaim
+  // any orphan a prior NON-graceful exit left behind (hard-kill bypasses
+  // shutdown() on win32, so clean-on-exit never ran). Read tunnel.pid; if that
+  // process is still alive, kill it. Best-effort; never blocks startup.
+  const tunnelPidPath = getTunnelPidPath(configDir);
+  await reclaimOrphanTunnel(tunnelPidPath, logger);
   const localUrl = `http://${config.daemon.bind_host}:${config.daemon.bind_port}`;
   const tunnelManager = new TunnelManager({
     binary: config.tunnel.binary,
@@ -766,6 +779,18 @@ async function main(): Promise<void> {
   tunnelManager.on("status_change", (newStatus) => {
     state.tunnelStatus = newStatus;
     logger.info("tunnel status changed", { status: newStatus });
+  });
+  // T-TUNNEL-1: persist the owned cloudflared pid on every (re)spawn, clear on
+  // graceful stop — so a future daemon can reclaim it (above) if we die hard.
+  tunnelManager.on("pid_change", (pid) => {
+    void (pid === null
+      ? removePidFile(tunnelPidPath)
+      : writePidValue(tunnelPidPath, pid)
+    ).catch((err: unknown) => {
+      logger.warn("failed to persist tunnel pid", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   });
   const tunnelUrl = await tunnelManager.start();
   // Listeners already mutated state.tunnelUrl/tunnelStatus on the first URL.
