@@ -6,12 +6,14 @@
 import { homedir } from "node:os";
 import type { StatusPayload } from "@claude-bridge/shared";
 import { sendIpc } from "../ipc-client.js";
-import { getCliPidPath } from "../util/paths.js";
+import { resolveCliTarget } from "../util/paths.js";
 import { checkStalePid, readPidFromFile } from "../util/pidfile.js";
 
 const STATUS_TIMEOUT_MS = 10000;
 
 export interface StatusOpts {
+  /** P3′-3-fix: target a specific per-daemon (P3′) daemon by its workspace. */
+  workspace?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -125,7 +127,11 @@ export function formatBindingClient(client_id: string): string {
 }
 
 export async function statusCommand(opts: StatusOpts = {}): Promise<void> {
-  const pidPath = opts.pidPath ?? getCliPidPath();
+  // P3′-3-fix (finding B): `--workspace` targets that per-daemon daemon's pid +
+  // pipe; without it, the legacy flat layout. Explicit test overrides win.
+  const target = resolveCliTarget(opts.workspace);
+  const pidPath = opts.pidPath ?? target.pidPath;
+  const addressOverride = opts.addressOverride ?? target.addressOverride;
   const state = await checkStalePid(pidPath);
   if (state === "absent" || state === "stale") {
     process.stdout.write("Daemon:    down\n");
@@ -136,7 +142,7 @@ export async function statusCommand(opts: StatusOpts = {}): Promise<void> {
   const response = await sendIpc(
     { kind: "status" },
     {
-      addressOverride: opts.addressOverride,
+      addressOverride,
       timeoutMs: STATUS_TIMEOUT_MS,
     },
   );

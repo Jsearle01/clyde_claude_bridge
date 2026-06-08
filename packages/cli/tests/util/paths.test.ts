@@ -7,6 +7,7 @@ import {
   addressFor,
   deriveResourceHash,
   perDaemonResources,
+  resolveCliTarget,
 } from "../../src/util/paths.js";
 
 describe("util/paths", () => {
@@ -106,5 +107,25 @@ describe("perDaemonResources / deriveResourceHash (P3'-1b)", () => {
   it("posix: ipc address is the per-daemon sock path", () => {
     const r = perDaemonResources("/home/jay/Projects/x", "linux");
     expect(r.ipcAddress).toBe(join(r.configDir, "daemon.sock"));
+  });
+});
+
+describe("resolveCliTarget (P3'-3-fix, finding B) — stop/status per-daemon targeting", () => {
+  it("WITH --workspace → the per-daemon pid + ipc address (host platform)", () => {
+    const ws = "C:\\Projects\\clyde_claude_bridge";
+    const res = perDaemonResources(ws); // host platform
+    const target = resolveCliTarget(ws);
+    expect(target.pidPath).toBe(res.pidPath); // per-daemon <hash>/daemon.pid
+    expect(target.addressOverride).toBe(res.ipcAddress); // per-daemon pipe/sock
+    // crucially NOT the flat legacy pid path
+    expect(target.pidPath).not.toBe(getCliPidPath());
+  });
+
+  it("WITHOUT --workspace → legacy flat pid + undefined address (back-compat)", () => {
+    for (const ws of [undefined, ""]) {
+      const target = resolveCliTarget(ws);
+      expect(target.pidPath).toBe(getCliPidPath());
+      expect(target.addressOverride).toBeUndefined();
+    }
   });
 });

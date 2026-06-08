@@ -9,7 +9,7 @@ import {
   IpcClientConnectionError,
   IpcClientTimeoutError,
 } from "../ipc-client.js";
-import { getCliPidPath } from "../util/paths.js";
+import { resolveCliTarget } from "../util/paths.js";
 import {
   checkStalePid,
   readPidFromFile,
@@ -78,6 +78,8 @@ export class DaemonStopTimeoutError extends Error {
 }
 
 export interface StopOpts {
+  /** P3′-3-fix: target a specific per-daemon (P3′) daemon by its workspace. */
+  workspace?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -91,7 +93,11 @@ export interface StopOpts {
 }
 
 export async function stopCommand(opts: StopOpts = {}): Promise<void> {
-  const pidPath = opts.pidPath ?? getCliPidPath();
+  // P3′-3-fix (finding B): `--workspace` targets that per-daemon daemon's pid +
+  // pipe; without it, the legacy flat layout. Explicit test overrides win.
+  const target = resolveCliTarget(opts.workspace);
+  const pidPath = opts.pidPath ?? target.pidPath;
+  const addressOverride = opts.addressOverride ?? target.addressOverride;
   const state = await checkStalePid(pidPath);
 
   if (state === "absent") {
@@ -108,7 +114,7 @@ export async function stopCommand(opts: StopOpts = {}): Promise<void> {
   try {
     await sendIpc(
       { kind: "stop" },
-      { addressOverride: opts.addressOverride, timeoutMs: STOP_TIMEOUT_MS },
+      { addressOverride, timeoutMs: STOP_TIMEOUT_MS },
     );
     // CB-DAEMON-LIFECYCLE-FIX: the stop ack only means shutdown BEGAN. Verify
     // the process actually terminated, escalate (SIGTERM→SIGKILL) if it hangs,

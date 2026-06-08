@@ -156,6 +156,20 @@ export async function shutdown(
   const log = components.logger;
   log.info("shutdown starting", { reason });
 
+  // P3′-2a/3-fix: remove our own advert FIRST — before any slow layer teardown
+  // (tunnel/cloudflared can run long) and before the watchdog can hard-exit.
+  // The advert is the "I'm here" beacon; clearing it is the earliest, cheapest
+  // shutdown action so discovery stops seeing a corpse the instant we begin to
+  // exit. (Was last, after every layer + the pid file — routinely skipped when
+  // the drain raced the budget, leaving a stale advert.)
+  if (components.advertPath !== null) {
+    try {
+      await removeAdvert(components.advertPath);
+    } catch {
+      // Best-effort — a stale advert is swept by the next daemon boot anyway.
+    }
+  }
+
   // Watchdog: hard-exit if any layer hangs past the total budget.
   const watchdog = setTimeout(() => {
     log.warn("shutdown budget exceeded; forcing exit");
@@ -231,16 +245,7 @@ export async function shutdown(
   } catch {
     // Best-effort.
   }
-
-  // P3′-2a: remove our own advert on graceful exit (the advert half of the
-  // ephemeral cleanup; durable per-daemon state is untouched). Best-effort.
-  if (components.advertPath !== null) {
-    try {
-      await removeAdvert(components.advertPath);
-    } catch {
-      // Best-effort.
-    }
-  }
+  // (advert removal moved to the FIRST shutdown action — see top of shutdown())
 
   clearTimeout(watchdog);
   log.info("shutdown complete", { reason, total_ms: Date.now() - startMs });

@@ -87,3 +87,20 @@ export function perDaemonResources(
     ipcAddress: platform === "win32" ? daemonPipeName(hash) : sockPath,
   };
 }
+
+// P3′-3-fix (finding B): resolve the pid-file + IPC address that `stop`/`status`
+// should target. With `--workspace`, target that per-daemon (P3′) daemon (the
+// hash-derived pid + pipe). Without it, fall back to the legacy flat layout
+// (back-compat for a pre-P3′ single daemon; addressOverride undefined → the
+// legacy pipe). Closes the gap where stop/status could neither see nor reach a
+// per-daemon daemon (they only knew the flat pid + the legacy hardcoded pipe).
+export function resolveCliTarget(workspace: string | undefined): {
+  pidPath: string;
+  addressOverride: string | undefined;
+} {
+  if (workspace !== undefined && workspace !== "") {
+    const res = perDaemonResources(workspace);
+    return { pidPath: res.pidPath, addressOverride: res.ipcAddress };
+  }
+  return { pidPath: getCliPidPath(), addressOverride: undefined };
+}

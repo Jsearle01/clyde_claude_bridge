@@ -153,9 +153,13 @@ program
 program
   .command("stop")
   .description("Stop the running daemon (graceful shutdown via IPC).")
-  .action(async () => {
+  .option(
+    "--workspace <path>",
+    "target the per-daemon daemon serving this workspace (P3′); omit for the legacy single daemon",
+  )
+  .action(async (opts: { workspace?: string }) => {
     try {
-      await stopCommand();
+      await stopCommand({ workspace: opts.workspace });
     } catch (err) {
       process.exit(reportError(err));
     }
@@ -164,9 +168,13 @@ program
 program
   .command("status")
   .description("Print daemon + tunnel status.")
-  .action(async () => {
+  .option(
+    "--workspace <path>",
+    "target the per-daemon daemon serving this workspace (P3′); omit for the legacy single daemon",
+  )
+  .action(async (opts: { workspace?: string }) => {
     try {
-      await statusCommand();
+      await statusCommand({ workspace: opts.workspace });
     } catch (err) {
       process.exit(reportError(err));
     }
