@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -236,5 +236,57 @@ describe("statusCommand", () => {
     expect(out).toContain("Daemon:    up");
     expect(out).toContain("Endpoint:  127.0.0.1:7423");
     expect(out).toContain("Bearer:    cb_live_…d219");
+  });
+
+  // P3′-3-fix: bare `status` (no --workspace) enumerates per-daemon daemons via
+  // the adverts dir, instead of checking the always-empty legacy flat layout.
+  function joinedOut(): string {
+    return stdoutSpy.mock.calls.map((c) => c[0] as string).join("");
+  }
+
+  it("bare status, no adverts → 'No daemons running.'", async () => {
+    await statusCommand({ daemonsDir: join(tempDir, "daemons") }); // dir absent
+    expect(stdoutSpy).toHaveBeenCalledWith("No daemons running.\n");
+  });
+
+  it("bare status enumerates a live daemon via its advert", async () => {
+    await startServer(makeHandlers());
+    const daemonsDir = join(tempDir, "daemons");
+    await mkdir(daemonsDir, { recursive: true });
+    await writeFile(
+      join(daemonsDir, "abc.json"),
+      JSON.stringify({
+        canonical_workspace: "c:\\projects\\demo",
+        name: "demo",
+        pipe: address, // the live test server
+        port: 7423,
+        pid: 4242,
+        started_at: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+    await statusCommand({ daemonsDir, homeDir: "/home/user" });
+    const out = joinedOut();
+    expect(out).toContain("Daemon 'demo' — c:\\projects\\demo");
+    expect(out).toContain("Daemon:    up");
+  });
+
+  it("bare status flags an unreachable (stale) advert, doesn't hide it", async () => {
+    const daemonsDir = join(tempDir, "daemons");
+    await mkdir(daemonsDir, { recursive: true });
+    await writeFile(
+      join(daemonsDir, "dead.json"),
+      JSON.stringify({
+        canonical_workspace: "c:\\projects\\ghost",
+        name: "ghost",
+        pipe: uniquePipeName(), // nothing listens here → handshake fails fast
+        port: 7999,
+        pid: 999999,
+        started_at: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await statusCommand({ daemonsDir });
+    const out = joinedOut();
+    expect(out).toContain("Daemon 'ghost'");
+    expect(out).toContain("unreachable");
   });
 });

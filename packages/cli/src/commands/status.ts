@@ -4,9 +4,15 @@
 // of waiting for a connection refused).
 
 import { homedir } from "node:os";
-import type { StatusPayload } from "@claude-bridge/shared";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  DaemonAdvertSchema,
+  type DaemonAdvert,
+  type StatusPayload,
+} from "@claude-bridge/shared";
 import { sendIpc } from "../ipc-client.js";
-import { resolveCliTarget } from "../util/paths.js";
+import { resolveCliTarget, getCliConfigDir } from "../util/paths.js";
 import { checkStalePid, readPidFromFile } from "../util/pidfile.js";
 
 const STATUS_TIMEOUT_MS = 10000;
@@ -18,6 +24,8 @@ export interface StatusOpts {
   addressOverride?: string;
   pidPath?: string;
   homeDir?: string;
+  /** Test-only: the adverts dir bare `status` enumerates. */
+  daemonsDir?: string;
 }
 
 export function formatUptime(seconds: number): string {
@@ -127,8 +135,23 @@ export function formatBindingClient(client_id: string): string {
 }
 
 export async function statusCommand(opts: StatusOpts = {}): Promise<void> {
-  // P3′-3-fix (finding B): `--workspace` targets that per-daemon daemon's pid +
-  // pipe; without it, the legacy flat layout. Explicit test overrides win.
+  // Targeted: an explicit `--workspace`, or test overrides → the single-daemon
+  // path. Bare `status` (no target) ENUMERATES every per-daemon daemon via the
+  // adverts dir — because the legacy flat layout is empty in the P3′ world
+  // (every daemon is per-daemon since 1b), so a flat-pid check would always
+  // misreport "down" while daemons are actually running.
+  if (
+    (opts.workspace !== undefined && opts.workspace !== "") ||
+    opts.addressOverride !== undefined ||
+    opts.pidPath !== undefined
+  ) {
+    return statusTargeted(opts);
+  }
+  return statusEnumerate(opts);
+}
+
+// Single-daemon status: --workspace target, or legacy flat (test overrides).
+async function statusTargeted(opts: StatusOpts): Promise<void> {
   const target = resolveCliTarget(opts.workspace);
   const pidPath = opts.pidPath ?? target.pidPath;
   const addressOverride = opts.addressOverride ?? target.addressOverride;
@@ -137,18 +160,71 @@ export async function statusCommand(opts: StatusOpts = {}): Promise<void> {
     process.stdout.write("Daemon:    down\n");
     return;
   }
-
   const pid = await readPidFromFile(pidPath);
   const response = await sendIpc(
     { kind: "status" },
-    {
-      addressOverride,
-      timeoutMs: STATUS_TIMEOUT_MS,
-    },
+    { addressOverride, timeoutMs: STATUS_TIMEOUT_MS },
   );
   if (response.kind !== "status_ok") {
     throw new Error(`Unexpected IPC response kind: ${response.kind}`);
   }
   const home = opts.homeDir ?? (process.env.HOME ?? homedir());
   process.stdout.write(formatStatusPayload(response.payload, pid, home));
+}
+
+// P3′-3-fix: enumerate every per-daemon daemon from the shared adverts dir and
+// print a status block for each. A reachable advert handshakes + reports full
+// status; an unreachable one (stale advert, daemon gone) is flagged, not hidden.
+async function statusEnumerate(opts: StatusOpts): Promise<void> {
+  const daemonsDir = opts.daemonsDir ?? join(getCliConfigDir(), "daemons");
+  const home = opts.homeDir ?? (process.env.HOME ?? homedir());
+
+  let files: string[] = [];
+  try {
+    files = await readdir(daemonsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const adverts: DaemonAdvert[] = [];
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      adverts.push(
+        DaemonAdvertSchema.parse(
+          JSON.parse(await readFile(join(daemonsDir, file), "utf8")),
+        ),
+      );
+    } catch {
+      // Unparseable / partial advert — skip.
+    }
+  }
+
+  if (adverts.length === 0) {
+    process.stdout.write("No daemons running.\n");
+    return;
+  }
+
+  adverts.sort((a, b) => a.name.localeCompare(b.name));
+  for (let i = 0; i < adverts.length; i++) {
+    const a = adverts[i];
+    if (a === undefined) continue;
+    if (i > 0) process.stdout.write("\n");
+    process.stdout.write(`Daemon '${a.name}' — ${a.canonical_workspace}\n`);
+    try {
+      const response = await sendIpc(
+        { kind: "status" },
+        { addressOverride: a.pipe, timeoutMs: STATUS_TIMEOUT_MS },
+      );
+      if (response.kind === "status_ok") {
+        process.stdout.write(formatStatusPayload(response.payload, a.pid, home));
+      } else {
+        process.stdout.write(`  unexpected response: ${response.kind}\n`);
+      }
+    } catch {
+      process.stdout.write(
+        `  advertised (pid ${a.pid}) but unreachable — stale advert; ` +
+          `the daemon is gone and it'll be swept on the next daemon start.\n`,
+      );
+    }
+  }
 }
