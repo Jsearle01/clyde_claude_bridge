@@ -327,6 +327,7 @@ describe("startDaemon (T-P2-004)", () => {
     setImmediate(() => {
       child.stderr.emit("data", "Daemon already running (pid 99999)\n");
       child.emit("exit", 1);
+      child.emit("close");
     });
     const result = await promise;
     expect(result.ok).toBe(false);
@@ -353,6 +354,7 @@ describe("startDaemon (T-P2-004)", () => {
     setImmediate(() => {
       child.stderr.emit("data", "cloudflared not found on PATH\n");
       child.emit("exit", 1);
+      child.emit("close");
     });
     const result = await promise;
     expect(result.ok).toBe(false);
@@ -360,6 +362,28 @@ describe("startDaemon (T-P2-004)", () => {
       expect(result.kind).toBe("spawn_failed");
       expect(result.error).toContain("cloudflared");
     }
+  });
+
+  it("P3'-3 fix: a CLEAN exit (code 0) inside the window is SUCCESS, not 'subprocess exited'", async () => {
+    // `claude-bridge start` exits 0 after the daemon is ready + detached; if
+    // that lands inside the observation window (fast tunnel), it must read as
+    // success — the prior logic misreported any in-window exit as a failure.
+    const secrets = makeSecretsMock();
+    const child = new FakeChild();
+    const spawn = vi.fn(() => child) as never;
+    const promise = startDaemon(
+      { secrets: secrets.api },
+      { cliPath: "/fake/claude-bridge" },
+      TARGET,
+      { spawn, envValue: "sk-ant-env", observationWindowMs: 100 },
+    );
+    setImmediate(() => {
+      child.emit("exit", 0); // CLI succeeded + exited
+      child.emit("close");
+    });
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.pid).toBe(4242);
   });
 
   it("returns spawn_failed when spawn throws synchronously", async () => {
@@ -585,6 +609,7 @@ describe("runStartDaemonCommand (T-P2-005 / P3'-3)", () => {
     setImmediate(() => {
       child.stderr.emit("data", "Daemon already running (pid 99999)\n");
       child.emit("exit", 1);
+      child.emit("close");
     });
     await promise;
     // P3′-3 (AC-3-9): the 1c lock refused the duplicate; surfaced as a benign

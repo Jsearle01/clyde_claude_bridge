@@ -268,12 +268,18 @@ export async function startDaemon(
   const pid = child.pid;
   const windowMs = deps.observationWindowMs ?? SPAWN_OBSERVATION_WINDOW_MS;
 
-  // Race the observation window against an early exit. The window is
-  // shorter than the CLI's own 15s ready-wait because we're catching
-  // "fails immediately" (binary error, already-running) — not "started
-  // but timed out."
+  // Race the observation window against an early exit. The window is shorter
+  // than the CLI's own 15s ready-wait because we're catching "fails
+  // immediately" (binary error, already-running) — not "started but timed out."
   const result = await observeEarlyFailure(child, windowMs);
   if (result.exited) {
+    // P3′-3 fix: the spawned `claude-bridge start` EXITS 0 on SUCCESS too (after
+    // the daemon is ready + detached). If that lands inside the window, a code-0
+    // exit is success — not failure (the prior logic misreported it as
+    // "subprocess exited"). Only a NON-ZERO exit is a real failure.
+    if (result.exitCode === 0) {
+      return { ok: true, pid };
+    }
     const stderr = result.stderr.trim();
     const isAlreadyRunning =
       stderr.includes("already running") || stderr.includes("Daemon already running");
@@ -287,6 +293,7 @@ export async function startDaemon(
 
 interface ObservationResult {
   exited: boolean;
+  exitCode: number | null;
   stderr: string;
 }
 
@@ -296,6 +303,7 @@ function observeEarlyFailure(
 ): Promise<ObservationResult> {
   return new Promise((resolve) => {
     let stderr = "";
+    let exitCode: number | null = null;
     let settled = false;
     const settle = (result: ObservationResult): void => {
       if (settled) return;
@@ -308,14 +316,22 @@ function observeEarlyFailure(
         stderr += chunk;
       });
     }
-    child.once("exit", () => {
-      settle({ exited: true, stderr });
+    // Capture the exit CODE on "exit", but settle on "close" — close fires
+    // after the stdio streams have fully flushed, so `stderr` is COMPLETE by
+    // then (fixes the exit-vs-stderr-data race that dropped the "already
+    // running" text → a generic "subprocess exited"). Fall back to "exit" if
+    // there are no stdio streams to close.
+    child.once("exit", (code: number | null) => {
+      exitCode = code;
+    });
+    child.once("close", () => {
+      settle({ exited: true, exitCode, stderr });
     });
     child.once("error", (err: Error) => {
-      settle({ exited: true, stderr: err.message });
+      settle({ exited: true, exitCode: null, stderr: err.message });
     });
     setTimeout(() => {
-      settle({ exited: false, stderr });
+      settle({ exited: false, exitCode: null, stderr });
     }, windowMs);
   });
 }
