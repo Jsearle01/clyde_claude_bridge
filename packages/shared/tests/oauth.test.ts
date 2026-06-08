@@ -8,6 +8,7 @@ import {
   OAuthMetadataSchema,
   OAuthClientRecordSchema,
   OAuthClientsStoreSchema,
+  moreCautiousGranularity,
 } from "../src/oauth.js";
 
 describe("OAuthDcrRequestSchema (T-P3-001 Decision c: liberal-accept)", () => {
@@ -146,5 +147,20 @@ describe("OAuthClientsStoreSchema", () => {
   it("rejects version != '1' (forces explicit migration)", () => {
     const r = OAuthClientsStoreSchema.safeParse({ version: "2", clients: [] });
     expect(r.success).toBe(false);
+  });
+});
+
+// P3′-5: the clamp primitive — per_call (most cautious) > task > auto.
+describe("moreCautiousGranularity (P3′-5 clamp)", () => {
+  it("returns the MORE cautious of two granularities", () => {
+    expect(moreCautiousGranularity("auto", "per_call")).toBe("per_call");
+    expect(moreCautiousGranularity("per_call", "auto")).toBe("per_call");
+    expect(moreCautiousGranularity("task", "auto")).toBe("task");
+    expect(moreCautiousGranularity("auto", "task")).toBe("task");
+    expect(moreCautiousGranularity("task", "per_call")).toBe("per_call");
+  });
+  it("is idempotent on equal inputs", () => {
+    expect(moreCautiousGranularity("task", "task")).toBe("task");
+    expect(moreCautiousGranularity("auto", "auto")).toBe("auto");
   });
 });

@@ -338,3 +338,30 @@ describe("TokenStore.tokenHashesForWorkspace / revokeByTokenHashes (P3′-4 capt
     expect(store.takeoverDisclosureFor("ws-unbound")).toBeNull();
   });
 });
+
+// P3′-5: the "Set approval mode" switch persists the binding-default granularity.
+describe("TokenStore.setGranularityForWorkspace / granularityForWorkspace (P3′-5)", () => {
+  it("sets the granularity for a workspace's active tokens and survives reload", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    await store.mint({ client_id: "c", bound_workspace: "ws-A", granularity: "per_call" });
+    await store.mint({ client_id: "c", bound_workspace: "ws-B", granularity: "per_call" });
+
+    const updated = await store.setGranularityForWorkspace("ws-A", "task");
+    expect(updated).toBe(1);
+    expect(store.granularityForWorkspace("ws-A")).toBe("task"); // changed
+    expect(store.granularityForWorkspace("ws-B")).toBe("per_call"); // other ws untouched
+
+    // Persisted to disk: a fresh store sees the change.
+    const reload = new TokenStore(storePath);
+    await reload.load();
+    expect(reload.granularityForWorkspace("ws-A")).toBe("task");
+  });
+
+  it("granularityForWorkspace is null for an unbound workspace; set is a 0 no-op", async () => {
+    const store = new TokenStore(storePath);
+    await store.load();
+    expect(store.granularityForWorkspace("ws-none")).toBeNull();
+    expect(await store.setGranularityForWorkspace("ws-none", "auto")).toBe(0);
+  });
+});

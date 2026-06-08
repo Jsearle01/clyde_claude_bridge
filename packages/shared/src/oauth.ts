@@ -130,6 +130,29 @@ export const OperationGranularitySchema = z.enum([
 ]);
 export type OperationGranularity = z.infer<typeof OperationGranularitySchema>;
 
+// P3′-5: caution rank for the approval-mode clamp. `per_call` is the MOST
+// cautious (gate every tool call), `auto` the LEAST (no per-operation gate),
+// `task` between. Higher rank = more restrictive.
+const GRANULARITY_CAUTION_RANK: Record<OperationGranularity, number> = {
+  per_call: 2,
+  task: 1,
+  auto: 0,
+};
+
+/**
+ * P3′-5: the MORE CAUTIOUS (more restrictive) of two granularities. The
+ * approval-mode resolution clamps to this: the operator's per-workspace switch
+ * is a CEILING that claude.ai's per-operation request may tighten under (ask
+ * for more caution) but never loosen past. Replaces the prior override-first
+ * resolution, which let the gated party choose its own gate level.
+ */
+export function moreCautiousGranularity(
+  a: OperationGranularity,
+  b: OperationGranularity,
+): OperationGranularity {
+  return GRANULARITY_CAUTION_RANK[a] >= GRANULARITY_CAUTION_RANK[b] ? a : b;
+}
+
 // T-P3-004a: persisted access-token record (tokens.json entry). The
 // durable home for the workspace binding. The plaintext token is NEVER
 // stored — `token_hash` is its SHA-256 (fast per-request lookup; a 32-byte

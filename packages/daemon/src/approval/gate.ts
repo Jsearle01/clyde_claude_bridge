@@ -9,6 +9,7 @@ import type {
   WorkspaceMode,
   OperationGranularity,
 } from "@claude-bridge/shared";
+import { moreCautiousGranularity } from "@claude-bridge/shared";
 import {
   PendingApprovalRegistry,
   type ApprovalDecision,
@@ -145,15 +146,19 @@ export class ApprovalGateImpl implements ApprovalGate {
 // The gate's calling convention: caller pre-computes the workspace's mode
 // (cheap: store lookup) and only calls this when the mode is not "auto".
 /**
- * T-P3-005: resolve the granularity that governs THIS delegation.
- * Resolution order — operation overrides binding-default overrides fail-safe:
- *   1. the delegate call's explicit `granularity` (the per-operation choice);
- *   2. else, for an OAuth-bound token, its default granularity (or per_call
- *      if the token carries none — the fail-safe, NEVER the per-workspace mode);
- *   3. else (legacy global Bearer, or no binding info — e.g. internal/test
- *      callers) the per-workspace mode (auto|per_call; the deprecated
- *      `session_bypass` value normalizes to per_call). This is the only
- *      surviving use of `getModeForWorkspace` — the Bearer fallback.
+ * T-P3-005 / P3′-5: resolve the granularity that governs THIS delegation.
+ * For an OAuth-bound token, resolution CLAMPS to the most restrictive of two
+ * inputs (P3′-5 — the security correction; was override-first):
+ *   - the binding-default granularity is the operator's per-workspace CEILING
+ *     (the "Set approval mode" switch; mints `per_call` now, never null);
+ *   - claude.ai's per-operation `callGranularity` request may TIGHTEN under the
+ *     ceiling (ask for more caution) but NEVER loosen past it.
+ *   effective = moreCautiousGranularity(ceiling, request). So switch=`per_call`
+ *   + request=`auto` resolves `per_call` — the gated party cannot widen its own
+ *   gate. The override-first path (operation value wins) is GONE.
+ * Legacy global Bearer / no-binding callers (internal/test) keep the pre-005
+ * Bearer path: there is no operator ceiling to clamp to, so the per-workspace
+ * mode stands (deprecated `session_bypass` normalizes to per_call).
  * Unspecified never means "unsupervised": the floor is always per_call.
  */
 export function resolveOperationGranularity(
@@ -162,11 +167,16 @@ export function resolveOperationGranularity(
   gate: ApprovalGate,
   identifier: string,
 ): OperationGranularity {
-  if (callGranularity !== undefined) return callGranularity;
   if (binding !== undefined && binding.kind === "bound") {
-    return binding.granularity ?? "per_call";
+    const ceiling = binding.granularity ?? "per_call";
+    // CLAMP: claude.ai may tighten under the operator ceiling, never loosen past.
+    return callGranularity === undefined
+      ? ceiling
+      : moreCautiousGranularity(ceiling, callGranularity);
   }
-  // Legacy Bearer (unconstrained) or no binding info: the per-workspace mode.
+  // Legacy Bearer (unconstrained) or no binding info: no operator ceiling
+  // exists to clamp against, so the pre-005 Bearer path stands.
+  if (callGranularity !== undefined) return callGranularity;
   const mode = gate.getModeForWorkspace(identifier);
   return mode === "session_bypass" ? "per_call" : mode;
 }

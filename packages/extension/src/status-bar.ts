@@ -19,6 +19,9 @@ import { formatClientLabel } from "./oauth-consent.js";
 export interface BindingInfo {
   client_id: string;
   client_name: string;
+  // P3′-5: the binding-default granularity (the "Set approval mode" ceiling).
+  // Sourced from binding_established at bind; updated locally on set_granularity.
+  granularity: "per_call" | "task" | "auto";
 }
 
 export interface StatusBarSources {

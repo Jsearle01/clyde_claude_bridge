@@ -191,7 +191,10 @@ export async function handleToken(
   //    Ordering is the safety: a mint failure throws here and leaves the old
   //    binding intact (nothing revoked — never the unbound state); the new
   //    token is never in the captured set by construction, so it is never
-  //    revoked. granularity is null (T-P3-005 owns its behavior).
+  //    revoked. P3′-5: the binding-default granularity mints `per_call` (the
+  //    most cautious ceiling), never null — the operator loosens it via the
+  //    "Set approval mode" switch. (A non-binding approve carries no
+  //    granularity floor to govern, so it stays null.)
   const supersededHashes =
     authCode.bound_workspace === null
       ? []
@@ -199,7 +202,7 @@ export async function handleToken(
   const minted = await deps.tokenStore.mint({
     client_id,
     bound_workspace: authCode.bound_workspace,
-    granularity: null,
+    granularity: authCode.bound_workspace === null ? null : "per_call",
   });
   // Revoke the OLD binding AFTER the new token is installed. A failure here
   // leaves the new binding live and the old token(s) a revocable leftover —

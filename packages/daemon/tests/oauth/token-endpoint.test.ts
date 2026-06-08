@@ -338,3 +338,37 @@ describe("handleToken — P3′-4 takeover (install-then-revoke, captured set)",
     expect(tokenStore.lookup(oldToken)?.bound_workspace).toBe("workspace-A"); // old leftover
   });
 });
+
+// P3′-5: the binding-default granularity mints `per_call` (the cautious
+// ceiling), never null — the operator loosens it via the "Set approval mode"
+// switch. A non-binding approve carries no granularity floor to govern.
+describe("handleToken — P3′-5 binding-default granularity", () => {
+  async function redeem(g: {
+    code: string;
+    client_id: string;
+    client_secret: string;
+  }): Promise<{ status?: number; json: Record<string, unknown> }> {
+    return callToken(
+      form({
+        grant_type: "authorization_code",
+        code: g.code,
+        redirect_uri: REDIRECT,
+        client_id: g.client_id,
+        client_secret: g.client_secret,
+        code_verifier: VERIFIER,
+      }),
+    );
+  }
+
+  it("AC-5-4: a fresh bind mints granularity per_call (not null)", async () => {
+    const token = ((await redeem(await setupGrant("workspace-A"))).json
+      .access_token ?? "") as string;
+    expect(tokenStore.lookup(token)?.granularity).toBe("per_call");
+  });
+
+  it("a non-binding approve (null workspace) keeps granularity null", async () => {
+    const token = ((await redeem(await setupGrant(null))).json.access_token ??
+      "") as string;
+    expect(tokenStore.lookup(token)?.granularity).toBeNull();
+  });
+});

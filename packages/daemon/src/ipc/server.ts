@@ -17,6 +17,7 @@ import {
   type IpcResponse,
   type IpcServerMessage,
   type StatusPayload,
+  type OperationGranularity,
 } from "@claude-bridge/shared";
 import {
   encodeMessage,
@@ -148,6 +149,12 @@ export class IpcServer {
   private bindingRevoker:
     | { revoke: (identifier: string) => Promise<number> }
     | null = null;
+  // P3′-5: optional binding-default granularity setter (the "Set approval mode"
+  // switch). Wired in main.ts to TokenStore.setGranularityForWorkspace. When
+  // absent, set_granularity responds with updated 0.
+  private granularitySetter:
+    | { set: (identifier: string, value: OperationGranularity) => Promise<number> }
+    | null = null;
   // T-P2-009 / T-P2-010: optional extension-tool router. Wired in
   // main.ts. When absent, inbound inspection-tool response/error
   // envelopes are silently dropped (the daemon has nothing pending to
@@ -215,6 +222,14 @@ export class IpcServer {
     revoke: (identifier: string) => Promise<number>;
   }): void {
     this.bindingRevoker = revoker;
+  }
+
+  // P3′-5: wire the binding-default granularity setter. Called by the
+  // set_granularity handler.
+  public setGranularitySetter(setter: {
+    set: (identifier: string, value: OperationGranularity) => Promise<number>;
+  }): void {
+    this.granularitySetter = setter;
   }
 
   // T-P2-009 / T-P2-010: post-construction extension-router wire-up.
@@ -650,7 +665,8 @@ export class IpcServer {
       case "extension_tool_error":
       case "auth_consent_ack":
       case "auth_consent_response":
-      case "unbind_workspace": {
+      case "unbind_workspace":
+      case "set_granularity": {
         // These are handled inline in dispatchLine (workspace cases need
         // per-socket access; hello is handled in the gate above). They
         // never reach this switch.
@@ -737,7 +753,8 @@ export class IpcServer {
       request.kind !== "extension_tool_error" &&
       request.kind !== "auth_consent_ack" &&
       request.kind !== "auth_consent_response" &&
-      request.kind !== "unbind_workspace"
+      request.kind !== "unbind_workspace" &&
+      request.kind !== "set_granularity"
     ) {
       return false;
     }
@@ -863,6 +880,29 @@ export class IpcServer {
       await this.writeResponse(socket, {
         kind: "unbind_workspace_ok",
         revoked_count: revoked,
+      });
+      return true;
+    }
+
+    // P3′-5: set the binding-default granularity (the "Set approval mode"
+    // switch). Same per-socket authorization as unbind — only the connection
+    // holding this workspace's registration may set its ceiling.
+    if (request.kind === "set_granularity") {
+      const found = this.findActiveByIdentifier(request.identifier);
+      if (found === null || found.entry.socket !== socket) {
+        await this.writeResponse(socket, {
+          kind: "error",
+          message: `set_granularity: identifier ${request.identifier} not held by this connection`,
+          reason: "protocol_error",
+        });
+        return true;
+      }
+      if (this.granularitySetter !== null) {
+        await this.granularitySetter.set(request.identifier, request.value);
+      }
+      await this.writeResponse(socket, {
+        kind: "set_granularity_ok",
+        granularity: request.value,
       });
       return true;
     }

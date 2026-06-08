@@ -947,6 +947,11 @@ async function main(): Promise<void> {
   // T-P3-004b: wire the binding revoker so unbind_workspace tears down the
   // durable token AND any un-redeemed auth code bound to that workspace.
   ipcServer.setBindingRevoker({ revoke: revokeBindingForWorkspace });
+  // P3′-5: wire the binding-default granularity setter ("Set approval mode").
+  ipcServer.setGranularitySetter({
+    set: (identifier, value) =>
+      tokenStore.setGranularityForWorkspace(identifier, value),
+  });
 
   components = {
     ipcServer,

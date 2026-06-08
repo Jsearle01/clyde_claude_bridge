@@ -297,8 +297,23 @@ describe("resolveOperationGranularity (T-P3-005 — resolution order)", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("1. the operation's explicit granularity wins over everything", () => {
-    expect(resolveOperationGranularity("auto", BOUND("per_call"), gate, "ws-aaaaaa")).toBe("auto");
+  // P3′-5: resolution CLAMPS to the more cautious of {operator switch (the
+  // binding-default ceiling), claude.ai's per-operation request}. Override-first
+  // is GONE — the gated party can no longer widen its own gate.
+  it("CLAMP a: switch task + request auto → task (the operator ceiling caps)", () => {
+    expect(resolveOperationGranularity("auto", BOUND("task"), gate, "ws-aaaaaa")).toBe("task");
+  });
+  it("CLAMP b: switch auto + request per_call → per_call (claude.ai may tighten under the ceiling)", () => {
+    expect(resolveOperationGranularity("per_call", BOUND("auto"), gate, "ws-aaaaaa")).toBe("per_call");
+  });
+  it("CLAMP c (SECURITY — can't-loosen): switch per_call + request auto → per_call (claude.ai cannot widen the operator ceiling)", () => {
+    expect(resolveOperationGranularity("auto", BOUND("per_call"), gate, "ws-aaaaaa")).toBe("per_call");
+  });
+  it("CLAMP d: switch task + request per_call → per_call (tighten wins)", () => {
+    expect(resolveOperationGranularity("per_call", BOUND("task"), gate, "ws-aaaaaa")).toBe("per_call");
+  });
+  it("CLAMP e: request absent + switch task → task (the switch stands)", () => {
+    expect(resolveOperationGranularity(undefined, BOUND("task"), gate, "ws-aaaaaa")).toBe("task");
   });
 
   it("2. else an OAuth binding's default granularity is used", () => {

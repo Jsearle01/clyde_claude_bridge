@@ -277,6 +277,42 @@ export class TokenStore {
         };
   }
 
+  /**
+   * P3′-5: set the binding-default granularity (the operator's "Set approval
+   * mode" switch) for every active token bound to `workspace`. The CEILING the
+   * gate clamps claude.ai's per-operation request against. Returns the count
+   * updated (0 if the workspace has no active binding). Persisted to disk.
+   */
+  async setGranularityForWorkspace(
+    workspace: string,
+    granularity: OperationGranularity,
+  ): Promise<number> {
+    this.assertLoaded();
+    const nowMs = this.now();
+    let updated = 0;
+    for (const t of this.store.tokens) {
+      if (t.bound_workspace === workspace && nowMs < t.expires_at) {
+        t.granularity = granularity;
+        updated += 1;
+      }
+    }
+    if (updated > 0) await this.writeFile();
+    return updated;
+  }
+
+  /**
+   * P3′-5: read the current binding-default granularity for `workspace` (the
+   * value the "Set approval mode" switch reflects), or null when unbound.
+   */
+  granularityForWorkspace(workspace: string): OperationGranularity | null {
+    this.assertLoaded();
+    const nowMs = this.now();
+    const t = this.store.tokens.find(
+      (rec) => rec.bound_workspace === workspace && nowMs < rec.expires_at,
+    );
+    return t === undefined ? null : (t.granularity ?? "per_call");
+  }
+
   /** Diagnostic — token count (used in tests/verdict evidence). */
   size(): number {
     this.assertLoaded();

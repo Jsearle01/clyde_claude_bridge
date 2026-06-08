@@ -112,6 +112,17 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
       identifier: z.string(),
     })
     .strict(),
+  // P3′-5: extension sets the binding-default granularity (the operator's "Set
+  // approval mode" switch — the per-workspace ceiling the gate clamps against).
+  // Socket-scoped (the daemon uses this connection's bound workspace); replies
+  // set_granularity_ok with the persisted value.
+  z
+    .object({
+      kind: z.literal("set_granularity"),
+      identifier: z.string(),
+      value: z.enum(["per_call", "task", "auto"]),
+    })
+    .strict(),
   // CB-SMOKE-READINESS-BATCH: CLI-initiated unbind. Unlike unbind_workspace
   // (extension-only, socket-scoped to the window that HOLDS the registration),
   // this is the operator's `claude-bridge unbind` path — it resolves a target
@@ -303,6 +314,13 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("deregister_workspace_ok") }).strict(),
   // T-P2-008: ack for the set_workspace_mode IPC request
   z.object({ kind: z.literal("set_workspace_mode_ok") }).strict(),
+  // P3′-5: ack for set_granularity — echoes the persisted binding-default.
+  z
+    .object({
+      kind: z.literal("set_granularity_ok"),
+      granularity: z.enum(["per_call", "task", "auto"]),
+    })
+    .strict(),
   // T-P3-004b: ack for unbind_workspace. `revoked_count` = tokens torn down.
   z
     .object({
@@ -482,6 +500,10 @@ export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
       client_id: z.string(),
       client_name: z.string(),
       bound_workspace: z.string(),
+      // P3′-5: the binding-default granularity at bind (mints per_call), so the
+      // "Set approval mode" switch can show the current value. The extension
+      // tracks subsequent set_granularity changes locally.
+      granularity: z.enum(["per_call", "task", "auto"]),
     })
     .strict(),
   // T-P3-004b: inverse of binding_established — the daemon tells the

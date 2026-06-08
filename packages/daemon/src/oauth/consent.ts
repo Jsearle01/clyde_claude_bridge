@@ -147,6 +147,10 @@ export type SendBindingEstablished = (
     client_id: string;
     client_name: string;
     bound_workspace: string;
+    // P3′-5: the binding-default granularity at bind. A fresh bind (and a
+    // takeover re-bind) mints `per_call` — the most cautious ceiling — which
+    // the operator then loosens via the "Set approval mode" switch.
+    granularity: "per_call" | "task" | "auto";
   },
 ) => void;
 
@@ -543,6 +547,9 @@ export class ConsentManager {
           client_id: record.client_id,
           client_name: record.client_name,
           bound_workspace,
+          // P3′-5: bind-time default is always per_call (the mint default);
+          // the operator loosens it afterward via the switch.
+          granularity: "per_call",
         });
       } catch (err) {
         this.deps.logger.warn(

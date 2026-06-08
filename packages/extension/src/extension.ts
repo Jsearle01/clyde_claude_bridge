@@ -141,6 +141,8 @@ export function activate(context: vscode.ExtensionContext): void {
     currentBinding = {
       client_id: msg.client_id,
       client_name: msg.client_name,
+      // P3′-5: the bind-time default (per_call); updated locally on set.
+      granularity: msg.granularity,
     };
     statusBar.refresh();
   };
@@ -177,6 +179,43 @@ export function activate(context: vscode.ExtensionContext): void {
         throw new Error(response.message ?? "unbind failed");
       }
       return response.revoked_count ?? 0;
+    },
+    // P3′-5: Stop daemon — fire-and-forget {kind:"stop"} over the existing
+    // socket → the daemon runs graceful shutdown() (it tears the connection
+    // down as it stops, so no reply is awaited). The discovery/reconnect loop
+    // reflects the daemon's absence in the status bar.
+    stop: async () => {
+      const client = ipcClient;
+      if (client === null) {
+        throw new Error("ipc client not initialized");
+      }
+      client.send({ kind: "stop" });
+      return Promise.resolve();
+    },
+    // P3′-5: Set approval mode — sends set_granularity; on ok, tracks the new
+    // ceiling locally so the menu reflects it next open.
+    setGranularity: async (identifier, value) => {
+      const client = ipcClient;
+      if (client === null) {
+        throw new Error("ipc client not initialized");
+      }
+      const response = await client.request<{
+        kind?: string;
+        granularity?: string;
+        message?: string;
+      }>({
+        kind: "set_granularity",
+        identifier,
+        value,
+      });
+      if (response.kind !== "set_granularity_ok") {
+        throw new Error(response.message ?? "set approval mode failed");
+      }
+      if (currentBinding !== null) {
+        currentBinding = { ...currentBinding, granularity: value };
+        statusBar.refresh();
+      }
+      return 1;
     },
   });
   const statusBarMenuCmd = vscode.commands.registerCommand(
