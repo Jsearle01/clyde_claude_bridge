@@ -4,6 +4,7 @@ import {
   expect,
   vi,
   beforeEach,
+  afterEach,
 } from "vitest";
 import { EventEmitter } from "node:events";
 import * as vscode from "vscode";
@@ -17,7 +18,11 @@ import {
   CliBinaryNotFoundError,
 } from "../src/daemon-lifecycle.js";
 import type { SecretsApi } from "../src/daemon-lifecycle.js";
+import { deriveSpawnArgs } from "../src/daemon-lifecycle.js";
 import { makeWorkspaceConfig } from "./mocks/vscode.js";
+
+// P3′-3: startDaemon now takes a derived per-workspace target (--workspace/--name).
+const TARGET = { workspace: "c:\\projects\\demo", name: "demo" };
 
 function makeSecretsMock(initial: Record<string, string> = {}): {
   api: SecretsApi;
@@ -255,6 +260,7 @@ describe("startDaemon (T-P2-004)", () => {
     const result = await startDaemon(
       { secrets: secrets.api },
       { cliPath: undefined },
+      TARGET,
       {
         spawnSync: vi.fn(() => ({
           status: null,
@@ -276,6 +282,7 @@ describe("startDaemon (T-P2-004)", () => {
     const promise = startDaemon(
       { secrets: secrets.api },
       { cliPath: "/fake/claude-bridge" },
+      TARGET,
       {
         spawn,
         showInputBox,
@@ -295,7 +302,11 @@ describe("startDaemon (T-P2-004)", () => {
     const spawnCall = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
     if (spawnCall === undefined) throw new Error("expected spawn call");
     expect(spawnCall[0]).toBe("/fake/claude-bridge");
-    expect(spawnCall[1]).toEqual(["start"]);
+    // P3′-3: derived args forwarded (platform-agnostic — quoting differs by OS).
+    const args = spawnCall[1] as string[];
+    expect(args[0]).toBe("start");
+    expect(args).toContain("--workspace");
+    expect(args).toContain("--name");
   });
 
   it("classifies daemon-already-running based on stderr text", async () => {
@@ -305,6 +316,7 @@ describe("startDaemon (T-P2-004)", () => {
     const promise = startDaemon(
       { secrets: secrets.api },
       { cliPath: "/fake/claude-bridge" },
+      TARGET,
       {
         spawn,
         envValue: "sk-ant-env",
@@ -331,6 +343,7 @@ describe("startDaemon (T-P2-004)", () => {
     const promise = startDaemon(
       { secrets: secrets.api },
       { cliPath: "/fake/claude-bridge" },
+      TARGET,
       {
         spawn,
         envValue: "sk-ant-env",
@@ -357,6 +370,7 @@ describe("startDaemon (T-P2-004)", () => {
     const result = await startDaemon(
       { secrets: secrets.api },
       { cliPath: "/fake/claude-bridge" },
+      TARGET,
       {
         spawn,
         envValue: "sk-ant-env",
@@ -377,6 +391,7 @@ describe("startDaemon (T-P2-004)", () => {
     const promise = startDaemon(
       { secrets: secrets.api },
       { cliPath: "/fake/claude-bridge" },
+      TARGET,
       {
         spawn,
         showInputBox,
@@ -451,13 +466,21 @@ describe("platform launch contract — Linux-native + win32 (CB-LINUX-LAUNCH-TES
     const result = await startDaemon(
       { secrets: secrets.api },
       { cliPath: undefined },
+      TARGET,
       { spawn, spawnSync, envValue: "sk-ant-env", observationWindowMs: 50, platform: "linux" },
     );
     expect(result.ok).toBe(true);
     const call = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
     if (call === undefined) throw new Error("expected spawn call");
     expect(call[0]).toBe("claude-bridge");
-    expect(call[1]).toEqual(["start"]);
+    // P3′-3: linux (shell:false) passes args verbatim — no quoting.
+    expect(call[1]).toEqual([
+      "start",
+      "--workspace",
+      "c:\\projects\\demo",
+      "--name",
+      "demo",
+    ]);
     expect(call[2]).toEqual(
       expect.objectContaining({ shell: false, detached: true }),
     );
@@ -472,6 +495,7 @@ describe("platform launch contract — Linux-native + win32 (CB-LINUX-LAUNCH-TES
     const result = await startDaemon(
       { secrets: secrets.api },
       { cliPath: undefined },
+      TARGET,
       { spawn, spawnSync, envValue: "sk-ant-env", observationWindowMs: 50, platform: "win32" },
     );
     expect(result.ok).toBe(true);
@@ -488,13 +512,44 @@ describe("platform launch contract — Linux-native + win32 (CB-LINUX-LAUNCH-TES
 // extension.ts at T-P2-005's second-use moment (palette command +
 // autoStart hook + new daemon-not-running notification button).
 
-describe("runStartDaemonCommand (T-P2-005)", () => {
+describe("deriveSpawnArgs (P3'-3, AC-3-5)", () => {
+  it("win32: --workspace = canonicalized fsPath, --name = basename", () => {
+    // The captured fsPath (T-P3'-0) canonicalizes to a case-preserving form;
+    // the daemon then case-folds it to the identity the advert carries, which
+    // is what discovery byte-matches. basename is the folder name.
+    expect(deriveSpawnArgs("C:\\Projects\\clyde_claude_bridge", "win32")).toEqual({
+      workspace: "c:\\Projects\\clyde_claude_bridge",
+      name: "clyde_claude_bridge",
+    });
+  });
+  it("win32: forward-slash + trailing-slash input still derives the basename", () => {
+    expect(deriveSpawnArgs("C:/Projects/demo/", "win32")).toEqual({
+      workspace: "c:\\Projects\\demo",
+      name: "demo",
+    });
+  });
+  it("posix: case-preserving canonical + basename", () => {
+    expect(deriveSpawnArgs("/home/jay/Projects/clyde", "posix")).toEqual({
+      workspace: "/home/jay/Projects/clyde",
+      name: "clyde",
+    });
+  });
+});
+
+describe("runStartDaemonCommand (T-P2-005 / P3'-3)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default config: empty cliPath, autoStartDaemon false.
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
       makeWorkspaceConfig({ cliPath: "/fake/claude-bridge" }),
     );
+    // P3′-3: runStartDaemonCommand derives --workspace/--name from folder [0].
+    (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = [
+      { uri: { fsPath: "C:\\Projects\\demo" }, name: "demo" },
+    ];
+  });
+  afterEach(() => {
+    (vscode.workspace as { workspaceFolders: unknown }).workspaceFolders = undefined;
   });
 
   it("happy path: maps {ok, pid} to showInformationMessage with 'daemon starting' text", async () => {
@@ -515,7 +570,7 @@ describe("runStartDaemonCommand (T-P2-005)", () => {
     expect(info.mock.calls[0]?.[0]).toMatch(/pid 4242/);
   });
 
-  it("already_running path: maps to showWarningMessage", async () => {
+  it("AC-3-9 already_running path: benign info 'already running — connected'", async () => {
     const secrets = makeSecretsMock();
     const child = new FakeChild();
     const spawn = vi.fn(() => child) as never;
@@ -532,9 +587,11 @@ describe("runStartDaemonCommand (T-P2-005)", () => {
       child.emit("exit", 1);
     });
     await promise;
-    const warn = vi.mocked(vscode.window.showWarningMessage);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toMatch(/already running/);
+    // P3′-3 (AC-3-9): the 1c lock refused the duplicate; surfaced as a benign
+    // info ("already running — connected"), not a warning/error.
+    const info = vi.mocked(vscode.window.showInformationMessage);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]?.[0]).toMatch(/already running/i);
   });
 
   it("error path: maps to showErrorMessage with the error reason", async () => {

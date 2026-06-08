@@ -16,7 +16,9 @@ import {
   spawnSync as nodeSpawnSync,
   type ChildProcess,
 } from "node:child_process";
+import { win32 as pathWin32, posix as pathPosix } from "node:path";
 import * as vscode from "vscode";
+import { canonicalizeWorkspacePath } from "@claude-bridge/shared";
 
 const SECRET_KEY = "claudeBridge.anthropicApiKey";
 const SPAWN_OBSERVATION_WINDOW_MS = 5_000;
@@ -38,6 +40,23 @@ export function candidatesFor(
   return platform === "win32"
     ? ["claude-bridge.cmd", "claude-bridge.exe", "claude-bridge"]
     : ["claude-bridge"];
+}
+
+// P3′-3 (AC-3-5): derive the daemon's start args from the VS Code workspace
+// folder so the spawned daemon's identity can't drift from what discovery will
+// match. --workspace = canonicalized fsPath (the daemon re-canonicalizes +
+// case-folds to the identity the advert carries); --name = the folder basename.
+// Platform-injected basename so the win32 backslash path splits correctly on a
+// posix CI host too.
+export function deriveSpawnArgs(
+  fsPath: string,
+  platform: NodeJS.Platform = process.platform,
+): { workspace: string; name: string } {
+  const canonPlatform = platform === "win32" ? "win32" : "posix";
+  const workspace = canonicalizeWorkspacePath(fsPath, canonPlatform);
+  const pathApi = canonPlatform === "win32" ? pathWin32 : pathPosix;
+  const name = pathApi.basename(workspace) || workspace;
+  return { workspace, name };
 }
 
 export class CliBinaryNotFoundError extends Error {
@@ -175,6 +194,8 @@ export type StartDaemonResult =
 export async function startDaemon(
   context: { secrets: SecretsApi },
   config: { cliPath: string | undefined },
+  // P3′-3: the derived per-workspace target (canonical --workspace + --name).
+  target: { workspace: string; name: string },
   deps: StartDaemonDeps = {},
 ): Promise<StartDaemonResult> {
   const platform = deps.platform ?? process.platform;
@@ -200,9 +221,21 @@ export async function startDaemon(
   if (apiKey !== undefined) env.ANTHROPIC_API_KEY = apiKey;
 
   const spawnFn = deps.spawn ?? nodeSpawn;
+  // P3′-3: forward the derived --workspace/--name. On win32 the spawn uses
+  // shell:true (CVE-2024-27980 — the .cmd shim needs it), so the VALUE args
+  // (which can contain spaces) are double-quoted for cmd.exe; the literal flags
+  // need no quoting. On posix (shell:false) args pass through verbatim.
+  const q = platform === "win32" ? (s: string): string => `"${s}"` : (s: string): string => s;
+  const args = [
+    "start",
+    "--workspace",
+    q(target.workspace),
+    "--name",
+    q(target.name),
+  ];
   let child: ChildProcess;
   try {
-    child = spawnFn(binary, ["start"], {
+    child = spawnFn(binary, args, {
       detached: true,
       // stdio: ignore stdin/stdout (CLI's ready signal goes to stdout but
       // we're non-blocking; we only care about stderr for immediate
@@ -212,8 +245,7 @@ export async function startDaemon(
       windowsHide: true,
       env,
       // CVE-2024-27980: same workaround as the locateCliBinary probe —
-      // required for spawning a .cmd shim on Windows. Args are literal
-      // ("start") so cmd.exe parsing is unambiguous.
+      // required for spawning a .cmd shim on Windows.
       shell: platform === "win32",
     });
   } catch (err) {
@@ -300,22 +332,40 @@ export async function runStartDaemonCommand(
   context: { secrets: SecretsApi },
   deps: StartDaemonDeps = {},
 ): Promise<void> {
+  // P3′-3: derive --workspace/--name from the open folder so the spawned daemon
+  // advertises the identity discovery will match. Multi-root → folder [0]
+  // (consistent with 2b pairing-on-[0]).
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (folder === undefined) {
+    void vscode.window.showErrorMessage(
+      "Claude Bridge: open a workspace folder before starting a daemon.",
+    );
+    return;
+  }
+  const target = deriveSpawnArgs(folder.uri.fsPath);
   const config = vscode.workspace.getConfiguration("claudeBridge");
   const cliPath = config.get<string>("cliPath", "");
   const result = await startDaemon(
     context,
     { cliPath: cliPath === "" ? undefined : cliPath },
+    target,
     deps,
   );
   if (result.ok) {
+    // AC-3-8 (honest promise): the spawn brings the daemon UP + ADVERTISING; it
+    // does NOT create the tunnel/connector/OAuth binding (those stay operator
+    // steps). Discovery (2b) pairs once the advert appears — no "seamless setup".
     void vscode.window.showInformationMessage(
-      `Claude Bridge: daemon starting (pid ${String(result.pid)})...`,
+      `Claude Bridge: daemon starting for '${target.name}' (pid ${String(result.pid)}) — ` +
+        `pairing automatically once it's advertising.`,
     );
     return;
   }
   if (result.kind === "already_running") {
-    void vscode.window.showWarningMessage(
-      "Claude Bridge: daemon is already running. Use `claude-bridge stop` to stop it first.",
+    // AC-3-9: the 1c lock refused a duplicate; the incumbent is fine and
+    // discovery is already (or will be) paired with it. Benign.
+    void vscode.window.showInformationMessage(
+      "Claude Bridge: a daemon for this workspace is already running — connected.",
     );
     return;
   }

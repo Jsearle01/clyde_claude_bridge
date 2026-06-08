@@ -48,20 +48,35 @@ export function computeWorkspaceIdentity(
   return workspaceIdentityKey(fsPath, platform);
 }
 
-// Scan `daemons/` and return the advert whose canonical_workspace byte-matches
-// `identity` (or null). Unparseable adverts are skipped (defensive). Read-only:
-// never mutates or deletes adverts (the daemon owns the sweep, AC-2b-3).
-export async function findMatchingAdvert(
+export interface ScanResult {
+  /** Total parseable adverts present (any workspace) — drives the "no daemon"
+   *  vs "no matching daemon" distinction in the status bar. */
+  total: number;
+  /** The advert byte-matching `identity`, or null. */
+  match: DaemonAdvert | null;
+  /** canonical_workspace of every parseable advert — for the re-scan near-miss
+   *  diagnostic (so a path/case mismatch is visible to the operator). */
+  workspaces: string[];
+}
+
+// Scan `daemons/` once: count all parseable adverts and find the one whose
+// canonical_workspace byte-matches `identity`. Read-only: never mutates or
+// deletes adverts (the daemon owns the sweep, AC-2b-3).
+export async function scanAdverts(
   daemonsDir: string,
   identity: string,
-): Promise<DaemonAdvert | null> {
+): Promise<ScanResult> {
   let files: string[];
   try {
     files = await readdir(daemonsDir);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null; // no daemons yet
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { total: 0, match: null, workspaces: [] }; // no daemons yet
+    }
     throw err;
   }
+  let match: DaemonAdvert | null = null;
+  const workspaces: string[] = [];
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     try {
@@ -69,13 +84,22 @@ export async function findMatchingAdvert(
         await readFile(join(daemonsDir, file), "utf8"),
       );
       const advert = DaemonAdvertSchema.parse(parsed);
-      if (advert.canonical_workspace === identity) return advert;
+      workspaces.push(advert.canonical_workspace);
+      if (advert.canonical_workspace === identity) match = advert;
     } catch {
       // Unparseable / partial advert — skip (a daemon mid-write or a corrupt
-      // file). Not our match; the daemon sweep handles dead/corrupt ones.
+      // file). Not counted; the daemon sweep handles dead/corrupt ones.
     }
   }
-  return null;
+  return { total: workspaces.length, match, workspaces };
+}
+
+// Convenience wrapper used by the manual re-scan: just the matching advert.
+export async function findMatchingAdvert(
+  daemonsDir: string,
+  identity: string,
+): Promise<DaemonAdvert | null> {
+  return (await scanAdverts(daemonsDir, identity)).match;
 }
 
 export interface PairingHandle {
@@ -85,11 +109,16 @@ export interface PairingHandle {
 export interface PairingDeps {
   daemonsDir: string;
   identity: string;
-  // Resolve a matching advert (defaults to findMatchingAdvert); injected in tests.
-  scan?: (daemonsDir: string, identity: string) => Promise<DaemonAdvert | null>;
+  // Resolve {total, match} for the identity (defaults to scanAdverts); injected
+  // in tests.
+  scan?: (daemonsDir: string, identity: string) => Promise<ScanResult>;
   // Called once when a matching advert is found — wires the IpcClient endpoint
   // and connects (the handshake decides liveness).
   onMatch: (advert: DaemonAdvert) => void;
+  // Called after EVERY scan (P3′-3) with the latest discovery state so the
+  // status bar can show "daemon not running" (total 0) vs "no matching daemon"
+  // (total > 0) while not yet paired.
+  onScan?: (result: ScanResult) => void;
   pollMs?: number;
   // Injectable timers for deterministic tests.
   setIntervalFn?: (cb: () => void, ms: number) => unknown;
@@ -101,8 +130,10 @@ const DEFAULT_POLL_MS = 2000;
 // Start pairing: scan immediately; if no match yet (window-first ordering),
 // poll `daemons/` until a matching advert appears, then hand it to onMatch ONCE
 // and stop polling (the IpcClient reconnect loop owns the stable pipe after).
+// Every scan also reports via onScan (P3′-3 status). The extension re-starts
+// pairing on disconnect so the status stays truthful after a daemon dies.
 export function startPairing(deps: PairingDeps): PairingHandle {
-  const scan = deps.scan ?? findMatchingAdvert;
+  const scan = deps.scan ?? scanAdverts;
   const setIntervalFn = deps.setIntervalFn ?? ((cb, ms) => setInterval(cb, ms));
   const clearIntervalFn =
     deps.clearIntervalFn ?? ((h) => clearInterval(h as ReturnType<typeof setInterval>));
@@ -118,18 +149,23 @@ export function startPairing(deps: PairingDeps): PairingHandle {
     }
   };
 
-  const tryPair = async (): Promise<void> => {
-    if (done) return;
-    let advert: DaemonAdvert | null;
+  const tryScan = async (): Promise<void> => {
+    let result: ScanResult;
     try {
-      advert = await scan(deps.daemonsDir, deps.identity);
+      result = await scan(deps.daemonsDir, deps.identity);
     } catch (err) {
       diag("discovery: scan error", { error: String(err) });
       return; // transient (e.g. dir vanished mid-scan) — keep polling
     }
-    if (advert === null || done) return;
+    // Every scan feeds the status bar (P3′-3). The poll keeps running for the
+    // life of the window so discoveryTotal stays truthful after a daemon dies.
+    deps.onScan?.(result);
+    if (result.match === null || done) return;
+    // First match → connect ONCE. The IpcClient reconnect loop owns liveness on
+    // the stable per-daemon pipe thereafter, so we don't re-connect on later
+    // polls — but we keep polling for the status feed.
+    const advert = result.match;
     done = true;
-    stop();
     diag("discovery: matched advert", {
       name: advert.name,
       pipe: advert.pipe,
@@ -139,9 +175,9 @@ export function startPairing(deps: PairingDeps): PairingHandle {
   };
 
   // Immediate attempt (daemon-first: the advert already exists), then poll
-  // (window-first: pair when it appears).
-  void tryPair();
-  timer = setIntervalFn(() => void tryPair(), pollMs);
+  // (window-first: pair when it appears; status feed continues after).
+  void tryScan();
+  timer = setIntervalFn(() => void tryScan(), pollMs);
 
   return { dispose: stop };
 }

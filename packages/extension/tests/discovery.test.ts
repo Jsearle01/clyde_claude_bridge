@@ -84,7 +84,7 @@ describe("startPairing (P3'-2b)", () => {
     startPairing({
       daemonsDir: "d",
       identity: "id",
-      scan: () => Promise.resolve(advert()),
+      scan: () => Promise.resolve({ total: 1, match: advert(), workspaces: ["id"] }),
       onMatch: (a) => matched.push(a),
       setIntervalFn: () => 0,
       clearIntervalFn: () => undefined,
@@ -96,11 +96,11 @@ describe("startPairing (P3'-2b)", () => {
   it("AC-2b-2 window-first: pairs when a matching advert APPEARS via poll", async () => {
     const matched: DaemonAdvert[] = [];
     let tick: (() => void) | null = null;
-    let scanResult: DaemonAdvert | null = null; // no advert yet
+    let match: DaemonAdvert | null = null; // no advert yet
     startPairing({
       daemonsDir: "d",
       identity: "id",
-      scan: () => Promise.resolve(scanResult),
+      scan: () => Promise.resolve({ total: match ? 1 : 0, match, workspaces: [] }),
       onMatch: (a) => matched.push(a),
       setIntervalFn: (cb) => {
         tick = cb;
@@ -111,33 +111,32 @@ describe("startPairing (P3'-2b)", () => {
     await new Promise((r) => setImmediate(r));
     expect(matched).toHaveLength(0); // window-first: nothing yet
     // daemon starts → advert appears → next poll pairs
-    scanResult = advert();
+    match = advert();
     tick?.();
     await new Promise((r) => setImmediate(r));
     expect(matched).toHaveLength(1);
   });
 
-  it("fires onMatch exactly ONCE and stops polling after a match", async () => {
+  it("P3'-3: fires onMatch exactly ONCE, reports onScan every poll, keeps polling", async () => {
     const matched: DaemonAdvert[] = [];
+    const scans: number[] = [];
     let tick: (() => void) | null = null;
-    let cleared = false;
     startPairing({
       daemonsDir: "d",
       identity: "id",
-      scan: () => Promise.resolve(advert()),
+      scan: () => Promise.resolve({ total: 1, match: advert(), workspaces: ["id"] }),
       onMatch: (a) => matched.push(a),
+      onScan: (r) => scans.push(r.total),
       setIntervalFn: (cb) => {
         tick = cb;
         return 1;
       },
-      clearIntervalFn: () => {
-        cleared = true;
-      },
+      clearIntervalFn: () => undefined,
     });
     await new Promise((r) => setImmediate(r));
-    tick?.(); // a stray late poll
+    tick?.(); // a later poll — still feeds onScan, but does NOT re-connect
     await new Promise((r) => setImmediate(r));
-    expect(matched).toHaveLength(1); // not twice
-    expect(cleared).toBe(true); // polling stopped
+    expect(matched).toHaveLength(1); // connect once
+    expect(scans.length).toBeGreaterThanOrEqual(2); // status keeps updating
   });
 });
