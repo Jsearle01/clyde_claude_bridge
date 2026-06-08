@@ -62,6 +62,14 @@ export class WorkspaceRegistryImpl implements WorkspaceRegistry {
     };
   }
 
+  // P3′-4doc — NOT dead multi-workspace code. Production per-daemon serves ONE
+  // workspace (ADR-001), so list() returns ≤1 entry at runtime. The multi-entry
+  // path is the ADVERSARIAL FIXTURE that proves the OAuth isolation guarantee:
+  // the bound-token isolation proofs need ≥2 registered workspaces to show "a
+  // token bound to A cannot act on B" (AC-9/AC-10 — twoWorkspaceRegistry() in
+  // tests/mcp/tools/get_open_editors.test.ts:249-269). Do NOT collapse to
+  // single-workspace without deleting those proofs (the T-P3′-4pre near-miss:
+  // unreachable-in-production ≠ removable when tests use it to prove a property).
   list(): Workspace[] {
     return this.store.list().map((entry) => ({
       id: entry.identifier,

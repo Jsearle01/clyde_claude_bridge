@@ -147,6 +147,12 @@ export class TokenStore {
    * Returns the count removed. Other tokens + the DCR registration are
    * untouched (lighter unbind — the client can re-bind with the same id).
    */
+  // P3′-4doc — the per-workspace filter/iteration here (and in listBindings
+  // below) is per-daemon-trivial (≤1 binding at runtime) but NOT dead code: it
+  // drives the two-binding A⊥B / B⊥A isolation proofs (AC-12/AC-12d,
+  // tests/acceptance/p3-acceptance.test.ts:20-23,72-73). The ≥2-binding path
+  // exists so the single-binding isolation guarantee is provable. Do not
+  // collapse to at-most-one without deleting those proofs (T-P3′-4pre).
   async revokeByWorkspace(workspace: string): Promise<number> {
     this.assertLoaded();
     const before = this.store.tokens.length;

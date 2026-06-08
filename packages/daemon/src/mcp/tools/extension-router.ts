@@ -289,6 +289,12 @@ export function resolveInspectionWorkspace(
       "no workspaces are registered with the daemon",
     );
   }
+  // P3′-4doc — defensive guard, NOT dead code. Unreachable in per-daemon by
+  // 2b-discovery CONVENTION (only the identity-matching extension registers),
+  // NOT by construction (register_workspace doesn't reject a foreign workspace)
+  // — kept as a loud-fail guard. It's also part of the resolver the OAuth
+  // isolation tests exercise (extension-router.test.ts:196,
+  // get_open_editors.test.ts:111). Do not remove (the T-P3′-4pre abort).
   if (all.length > 1) {
     throw new ToolHandlerError(
       400,
