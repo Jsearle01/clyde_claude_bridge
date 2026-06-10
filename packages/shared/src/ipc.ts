@@ -53,6 +53,11 @@ export const StatusPayloadSchema = z
     // (a pre-fix daemon won't send it; the CLI prints "not reported"). Distinct
     // from `token_suffix` (the daemon Bearer token, not an OAuth binding).
     oauth_bindings: z.array(OAuthBindingSummarySchema).optional(),
+    // T-TUNNEL-1 (B): a dropped quick-tunnel respawned to a NEW url that is
+    // awaiting the operator's confirm/deny (never silently adopted). Surfaced
+    // in `status` so an operator with no extension connected still learns of it.
+    // Optional for wire compat; null/absent = no pending drop.
+    pending_tunnel_url: z.string().nullable().optional(),
   })
   .strict();
 export type StatusPayload = z.infer<typeof StatusPayloadSchema>;
@@ -168,6 +173,17 @@ export const IpcRequestSchema = z.discriminatedUnion("kind", [
       kind: z.literal("auth_consent_response"),
       request_id: z.string(),
       decision: z.enum(["approve", "deny", "dismiss"]),
+    })
+    .strict(),
+  // T-TUNNEL-1 (B): extension reports the operator's drop-recovery decision —
+  // confirm (adopt the new quick-tunnel URL) or deny (tear the respawn down,
+  // sit tunnel-less). Asymmetric (no daemon ack); request_id correlates back to
+  // the pending drop. Stale/unknown ids are discarded daemon-side.
+  z
+    .object({
+      kind: z.literal("tunnel_drop_response"),
+      request_id: z.string(),
+      decision: z.enum(["confirm", "deny"]),
     })
     .strict(),
   // T-P2-009 / T-P2-010: extension's responses to daemon-initiated
@@ -433,6 +449,18 @@ export const IpcServerMessageSchema = z.discriminatedUnion("kind", [
       severities: z.array(z.enum(["error", "warning", "info", "hint"])),
     })
     .strict(),
+  // T-TUNNEL-1 (B): daemon asks the extension to surface the drop-recovery
+  // modal — a dropped quick-tunnel respawned to `new_url`, awaiting the
+  // operator's confirm (adopt) / deny (tear down). Reuses the consent
+  // daemon-initiated-modal channel. Fired on drop, and re-fired when an
+  // extension connects while a drop is still pending.
+  z
+    .object({
+      kind: z.literal("tunnel_drop_request"),
+      request_id: z.string(),
+      new_url: z.string(),
+    })
+    .strict(),
   // T-P3-002: daemon asks the extension to surface the OAuth consent
   // modal. `client_id` + `client_name` are shown in the modal copy;
   // `redirect_uri` is the registered destination the auth code will be
@@ -534,6 +562,11 @@ export type GetDiagnosticsRequest = Extract<
 export type AuthConsentRequest = Extract<
   IpcServerMessage,
   { kind: "auth_consent_request" }
+>;
+// T-TUNNEL-1 (B): the drop-recovery modal request the extension renders.
+export type TunnelDropRequest = Extract<
+  IpcServerMessage,
+  { kind: "tunnel_drop_request" }
 >;
 export type AuthConsentTimeout = Extract<
   IpcServerMessage,

@@ -18,6 +18,7 @@ import {
   type GetOpenEditorsRequest,
   type GetDiagnosticsRequest,
   type AuthConsentRequest,
+  type TunnelDropRequest,
   type AuthConsentResolved,
   type AuthConsentTimeout,
   type BindingEstablished,
@@ -149,6 +150,12 @@ export class IpcClient {
   // callback fires AFTER parse so no C-26 ordering concern applies.
   public onAuthConsentRequest?: (
     request: AuthConsentRequest,
+  ) => Promise<void>;
+  // T-TUNNEL-1 (B): fires on each daemon-initiated tunnel_drop_request — the
+  // subscriber (tunnel-drop.ts) shows the adopt/disconnect modal and sends
+  // tunnel_drop_response. Fired on drop and re-fired on connect-while-pending.
+  public onTunnelDropRequest?: (
+    request: TunnelDropRequest,
   ) => Promise<void>;
   // T-P3-003: fires when the daemon broadcasts auth_consent_resolved
   // (T-P3-002R dismiss-siblings). Subscriber closes/marks a stale open
@@ -405,6 +412,14 @@ export class IpcClient {
                 void this.onAuthConsentRequest(msg).catch(() => {
                   // intentional swallow — the handler acks/responds on its
                   // own write path; failures must not corrupt the buffer.
+                });
+              } else if (
+                serverMsg.data.kind === "tunnel_drop_request" &&
+                this.onTunnelDropRequest !== undefined
+              ) {
+                const msg = serverMsg.data;
+                void this.onTunnelDropRequest(msg).catch(() => {
+                  // swallow — the handler responds on its own write path.
                 });
               } else if (
                 serverMsg.data.kind === "auth_consent_resolved" &&

@@ -10,6 +10,7 @@ import {
 import { makeStatusBarMenu, type MenuSources } from "./status-bar-menu.js";
 import { makeApprovalHandler } from "./approval-modal.js";
 import { makeConsentHandlers } from "./oauth-consent.js";
+import { makeTunnelDropHandler } from "./tunnel-drop.js";
 import {
   makeGetOpenEditorsHandler,
   makeGetDiagnosticsHandler,
@@ -135,6 +136,10 @@ export function activate(context: vscode.ExtensionContext): void {
   ipcClient.onAuthConsentRequest = consentHandlers.onAuthConsentRequest;
   ipcClient.onAuthConsentResolved = consentHandlers.onAuthConsentResolved;
   ipcClient.onAuthConsentTimeout = consentHandlers.onAuthConsentTimeout;
+  // T-TUNNEL-1 (B): the drop-recovery modal — adopt the respawned URL or
+  // disconnect. Fired on drop, and re-fired by the daemon on connect if a drop
+  // is still pending.
+  ipcClient.onTunnelDropRequest = makeTunnelDropHandler(ipcClient);
   // T-P3-003: when the daemon confirms this window won the binding, record
   // it and refresh the status bar so the bound client is inspectable.
   ipcClient.onBindingEstablished = (msg): void => {

@@ -29,6 +29,12 @@ export interface TunnelManagerOpts {
 
 export interface TunnelManagerEvents {
   url_change: (url: string) => void;
+  // T-TUNNEL-1 (B): a DROP-respawn produced a new quick-tunnel URL that must NOT
+  // be auto-adopted (it would silently strand the connector at the dead URL).
+  // Emitted instead of url_change on an automatic respawn; main.ts holds it out
+  // of state.tunnelUrl until the operator confirms. (Initial start + manual
+  // restart still emit url_change — those are operator-known URL changes.)
+  url_pending: (url: string) => void;
   status_change: (status: TunnelStatus) => void;
   // T-TUNNEL-1: the owned cloudflared child's pid changed — a new pid on each
   // (re)spawn, null when intentionally stopped. main.ts persists it to
@@ -138,9 +144,15 @@ export class TunnelManager extends EventEmitter {
         this.status = "up";
         this.emit("status_change", "up");
       }
-      this.emit("url_change", url);
-      if (isInitial && initialResolve !== undefined) {
-        initialResolve(url);
+      if (isInitial) {
+        // Initial start (and manual restart, which also runs isInitial=true):
+        // an operator-known URL — adopt it.
+        this.emit("url_change", url);
+        if (initialResolve !== undefined) initialResolve(url);
+      } else {
+        // T-TUNNEL-1 (B): a DROP-respawn rotated the URL — gate it. main.ts
+        // holds it pending until the operator confirms; never silent-adopt.
+        this.emit("url_pending", url);
       }
     });
 

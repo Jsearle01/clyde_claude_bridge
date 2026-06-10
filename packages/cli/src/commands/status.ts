@@ -73,6 +73,16 @@ export function formatStatusPayload(
   } else {
     lines.push(`URL:       (not assigned)`);
   }
+  // T-TUNNEL-1 (B): a dropped tunnel respawned to a new url awaiting the
+  // operator's confirm/deny — surfaced here so an operator with no extension
+  // connected still learns of it (and that they'll need to re-point the
+  // connector). null/absent = no pending drop.
+  const pendingUrl = payload.pending_tunnel_url;
+  if (pendingUrl !== null && pendingUrl !== undefined) {
+    lines.push(
+      `           ⚠ tunnel dropped — new URL ${pendingUrl} pending your confirmation (re-point the connector after you adopt it)`,
+    );
+  }
   // CB-SMOKE-READINESS-BATCH: label this clearly as the daemon BEARER token —
   // it is NOT an OAuth binding. The old `Token:` line misled the smoke into
   // reading a stale Bearer line as evidence of a binding. OAuth bindings are

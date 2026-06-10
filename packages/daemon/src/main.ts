@@ -23,6 +23,8 @@ import {
   getTunnelPidPath,
 } from "./config/paths.js";
 import { reclaimOrphanTunnel } from "./tunnel/reclaim.js";
+import { DropRecovery } from "./tunnel/drop-recovery.js";
+import { randomUUID } from "node:crypto";
 import { generateToken } from "./config/token.js";
 import { createLogger, type Logger } from "./log/logger.js";
 import { AuditLog } from "./audit/log.js";
@@ -792,6 +794,38 @@ async function main(): Promise<void> {
       });
     });
   });
+  // T-TUNNEL-1 (B): operator-gated drop recovery. A drop-respawn emits
+  // url_pending (NOT url_change) — held out of state.tunnelUrl until the operator
+  // confirms via the modal (never silent-adopt a rotated url).
+  const dropRecovery = new DropRecovery({
+    adopt: (url) => {
+      state.tunnelUrl = url; // confirm → the new url becomes live
+      logger.info("tunnel url changed", { url, via: "drop-adopt" });
+    },
+    teardown: async () => {
+      await tunnelManager.stop(); // deny → tear the respawn down, sit tunnel-less
+      state.tunnelUrl = null;
+    },
+    sendRequest: (req) => {
+      const server = ipcServerRef.current;
+      if (server === null) return false;
+      // Reuse the consent daemon-initiated-modal channel: broadcast to all
+      // connected extensions. delivered>0 ⇒ surfaced; 0 ⇒ stays pending, fires
+      // on next connect.
+      return (
+        server.broadcastServerMessage({
+          kind: "tunnel_drop_request",
+          request_id: req.request_id,
+          new_url: req.new_url,
+        }) > 0
+      );
+    },
+    genRequestId: () => randomUUID(),
+    logger,
+  });
+  tunnelManager.on("url_pending", (url) => {
+    dropRecovery.onDropRespawn(url);
+  });
   const tunnelUrl = await tunnelManager.start();
   // Listeners already mutated state.tunnelUrl/tunnelStatus on the first URL.
 
@@ -828,6 +862,9 @@ async function main(): Promise<void> {
         endpoint: `${config.daemon.bind_host}:${config.daemon.bind_port}`,
         tunnel_status: state.tunnelStatus,
         tunnel_url: state.tunnelUrl,
+        // T-TUNNEL-1 (B): a dropped tunnel's respawned url awaiting confirm —
+        // surfaced so an operator with no extension connected still learns of it.
+        pending_tunnel_url: dropRecovery.pendingUrl(),
         token_suffix: currentToken.slice(-4),
         audit_path: config.audit.path,
         audit_size_bytes: auditSizeBytes,
@@ -976,6 +1013,16 @@ async function main(): Promise<void> {
   ipcServer.setGranularitySetter({
     set: (identifier, value) =>
       tokenStore.setGranularityForWorkspace(identifier, value),
+  });
+  // T-TUNNEL-1 (B): wire the drop-recovery decision receiver + the connect hook
+  // (re-fire a pending drop modal when an extension connects).
+  ipcServer.setTunnelDropReceiver({
+    onDecision: (request_id, decision) => {
+      void dropRecovery.onDecision(request_id, decision);
+    },
+  });
+  ipcServer.setOnExtensionConnect(() => {
+    dropRecovery.fireIfPending();
   });
 
   components = {

@@ -138,7 +138,7 @@ describe("TunnelManager", () => {
     await manager.stop();
   });
 
-  it("respawned process URL emits url_change (15.d)", async () => {
+  it("respawned process URL emits url_pending, NOT url_change (15.d, gated by T-TUNNEL-1 B)", async () => {
     const manager = new TunnelManager({
       binary: "x",
       localUrl: "http://127.0.0.1:7423",
@@ -147,7 +147,9 @@ describe("TunnelManager", () => {
       processFactory: makeFactory(),
     });
     const urlChanges: string[] = [];
+    const urlPendings: string[] = [];
     manager.on("url_change", (url) => urlChanges.push(url));
+    manager.on("url_pending", (url) => urlPendings.push(url));
     const p = manager.start();
     lastFake().emit("url", "https://first.trycloudflare.com");
     await p;
@@ -155,8 +157,15 @@ describe("TunnelManager", () => {
     fakes[0]?.emit("exit", 0, null);
     lastFake().emit("url", "https://otter-orange-1234.trycloudflare.com");
 
-    expect(urlChanges).toContain("https://first.trycloudflare.com");
-    expect(urlChanges).toContain("https://otter-orange-1234.trycloudflare.com");
+    expect(urlChanges).toContain("https://first.trycloudflare.com"); // initial adopted
+    // The respawn url is GATED — pending, not auto-adopted.
+    expect(urlChanges).not.toContain(
+      "https://otter-orange-1234.trycloudflare.com",
+    );
+    expect(urlPendings).toContain(
+      "https://otter-orange-1234.trycloudflare.com",
+    );
+    // The manager still tracks the running tunnel's url internally.
     expect(manager.getUrl()).toBe("https://otter-orange-1234.trycloudflare.com");
     await manager.stop();
   });
@@ -369,6 +378,30 @@ describe("TunnelManager", () => {
       expect(fakes.filter((f) => f.isRunning())).toHaveLength(1);
       expect(fakes[0].isRunning()).toBe(false); // old gone
       expect(lastFake().isRunning()).toBe(true); // new live
+      await manager.stop();
+    });
+
+    it("AC-T-7 locus: a DROP-respawn emits url_pending, NOT url_change", async () => {
+      const urlChanges: string[] = [];
+      const urlPendings: string[] = [];
+      const manager = new TunnelManager({
+        binary: "cf",
+        localUrl: "http://localhost:1",
+        argsExtra: [],
+        logger: silentLogger,
+        processFactory: makeFactory(),
+      });
+      manager.on("url_change", (u) => urlChanges.push(u));
+      manager.on("url_pending", (u) => urlPendings.push(u));
+      const p = manager.start();
+      lastFake().emit("url", "https://first.trycloudflare.com");
+      await p;
+      expect(urlChanges).toEqual(["https://first.trycloudflare.com"]); // initial adopts
+      // Drop → respawn → the new url must be GATED (url_pending), not adopted.
+      fakes[0].emit("exit", 1, null);
+      lastFake().emit("url", "https://second.trycloudflare.com");
+      expect(urlPendings).toEqual(["https://second.trycloudflare.com"]); // gated
+      expect(urlChanges).toEqual(["https://first.trycloudflare.com"]); // NOT re-adopted
       await manager.stop();
     });
   });

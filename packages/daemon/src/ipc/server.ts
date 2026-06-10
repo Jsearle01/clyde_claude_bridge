@@ -143,6 +143,13 @@ export class IpcServer {
       bound_workspace: string | null,
     ) => void;
   } | null = null;
+  // T-TUNNEL-1 (B): optional drop-recovery receiver (the operator's confirm/deny
+  // on a tunnel_drop_request) + a connect hook (re-fire a pending drop modal
+  // when an extension connects). Wired by main.ts.
+  private tunnelDropReceiver: {
+    onDecision: (request_id: string, decision: "confirm" | "deny") => void;
+  } | null = null;
+  private onExtensionConnect: (() => void) | null = null;
   // T-P3-004b: optional binding revoker. Wired by main.ts to tear down a
   // workspace's OAuth token(s) + transient auth codes on unbind. When
   // absent, unbind_workspace responds with revoked_count 0.
@@ -214,6 +221,19 @@ export class IpcServer {
     ) => void;
   }): void {
     this.consentReceiver = receiver;
+  }
+
+  // T-TUNNEL-1 (B): wire the drop-recovery decision receiver (handles
+  // tunnel_drop_response) and the extension-connect hook (re-fires a pending
+  // drop modal). Both optional; absent in pre-tunnel-feature/test daemons.
+  public setTunnelDropReceiver(receiver: {
+    onDecision: (request_id: string, decision: "confirm" | "deny") => void;
+  }): void {
+    this.tunnelDropReceiver = receiver;
+  }
+
+  public setOnExtensionConnect(cb: () => void): void {
+    this.onExtensionConnect = cb;
   }
 
   // T-P3-004b: wire the binding revoker (token/auth-code teardown for a
@@ -561,6 +581,10 @@ export class IpcServer {
           build_id: request.build_id ?? "(none — pre-2b extension)",
           pid: request.pid,
         });
+        // T-TUNNEL-1 (B): an extension just connected — if a tunnel drop is
+        // pending an operator decision, surface it now (the no-extension-at-
+        // drop-time fallback fires here). Best-effort; fired after hello_ok.
+        this.onExtensionConnect?.();
       }
       await this.writeResponse(socket, {
         kind: "hello_ok",
@@ -666,7 +690,8 @@ export class IpcServer {
       case "auth_consent_ack":
       case "auth_consent_response":
       case "unbind_workspace":
-      case "set_granularity": {
+      case "set_granularity":
+      case "tunnel_drop_response": {
         // These are handled inline in dispatchLine (workspace cases need
         // per-socket access; hello is handled in the gate above). They
         // never reach this switch.
@@ -754,7 +779,8 @@ export class IpcServer {
       request.kind !== "auth_consent_ack" &&
       request.kind !== "auth_consent_response" &&
       request.kind !== "unbind_workspace" &&
-      request.kind !== "set_granularity"
+      request.kind !== "set_granularity" &&
+      request.kind !== "tunnel_drop_response"
     ) {
       return false;
     }
@@ -777,6 +803,12 @@ export class IpcServer {
         request.decision,
         bound_workspace,
       );
+      return true;
+    }
+    // T-TUNNEL-1 (B): the operator's drop-recovery decision. Asymmetric (no
+    // ack); stale/unknown ids discarded by the receiver.
+    if (request.kind === "tunnel_drop_response") {
+      this.tunnelDropReceiver?.onDecision(request.request_id, request.decision);
       return true;
     }
     // approval_response is processed in a dedicated path below — it
