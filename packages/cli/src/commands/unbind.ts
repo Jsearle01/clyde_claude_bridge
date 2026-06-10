@@ -64,7 +64,7 @@ export interface UnbindOpts {
   /** T-CLI-1: selectors — which daemon's binding to tear down. */
   workspace?: string;
   name?: string;
-  daemonsDir?: string;
+  configRoot?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -114,7 +114,7 @@ export async function unbindCommand(opts: UnbindOpts = {}): Promise<void> {
   const sel = await selectDaemonTarget({
     workspace: opts.workspace,
     name: opts.name,
-    daemonsDir: opts.daemonsDir,
+    configRoot: opts.configRoot,
     addressOverride: opts.addressOverride,
     pidPath: opts.pidPath,
   });

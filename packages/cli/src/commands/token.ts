@@ -41,7 +41,7 @@ export interface TokenRotateOpts {
   /** T-CLI-1: selectors. */
   workspace?: string;
   name?: string;
-  daemonsDir?: string;
+  configRoot?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -64,7 +64,7 @@ export async function tokenRotateCommand(
   const target = await selectDaemonTarget({
     workspace: opts.workspace,
     name: opts.name,
-    daemonsDir: opts.daemonsDir,
+    configRoot: opts.configRoot,
     addressOverride: opts.addressOverride,
     pidPath: opts.pidPath,
   });

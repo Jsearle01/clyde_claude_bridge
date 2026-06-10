@@ -85,8 +85,9 @@ export interface StopOpts {
   /** T-CLI-1: selectors — target a per-daemon daemon by workspace OR name. */
   workspace?: string;
   name?: string;
-  /** Test-only: the adverts dir the selector enumerates. */
-  daemonsDir?: string;
+  /** Test-only: the config-dir root the selector enumerates + its liveness probe. */
+  configRoot?: string;
+  probe?: (entry: { hash: string; configDir: string }) => Promise<boolean>;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -110,7 +111,8 @@ export async function stopCommand(opts: StopOpts = {}): Promise<void> {
     target = await selectDaemonTarget({
       workspace: opts.workspace,
       name: opts.name,
-      daemonsDir: opts.daemonsDir,
+      configRoot: opts.configRoot,
+      probe: opts.probe,
       addressOverride: opts.addressOverride,
       pidPath: opts.pidPath,
     });

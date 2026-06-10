@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -196,36 +196,38 @@ describe("verifyTerminationAndCleanup (reliable stop)", () => {
     afterEach(() => {
       spy.mockRestore();
     });
-    function advert(name: string): string {
-      return JSON.stringify({
-        canonical_workspace: `c:\\ws\\${name}`,
-        name,
-        pipe: `pipe-${name}`,
-        port: 7423,
-        pid: 1,
-        started_at: "2026-06-10T00:00:00.000Z",
-      });
+    async function makeDir(root: string, hash: string, name: string): Promise<void> {
+      const d = join(root, hash);
+      await mkdir(d, { recursive: true });
+      await writeFile(
+        join(d, "workspaces.json"),
+        JSON.stringify({
+          version: "1",
+          entries: [{ abs_path: `c:\\ws\\${name}`, name }],
+        }),
+      );
     }
     function captured(): string {
       return spy.mock.calls.map((c) => c[0] as string).join("");
     }
+    const live = (): Promise<boolean> => Promise.resolve(true);
 
-    it("MANY daemons → AmbiguousDaemonError (lists), NOT silent 'Daemon not running'", async () => {
-      const daemonsDir = await mkdtemp(join(tmpdir(), "cb-stop-many-"));
-      await writeFile(join(daemonsDir, "a.json"), advert("alpha"));
-      await writeFile(join(daemonsDir, "b.json"), advert("beta"));
-      await expect(stopCommand({ daemonsDir })).rejects.toBeInstanceOf(
-        AmbiguousDaemonError,
-      );
+    it("MANY live daemons → AmbiguousDaemonError (lists), NOT silent 'Daemon not running'", async () => {
+      const root = await mkdtemp(join(tmpdir(), "cb-stop-many-"));
+      await makeDir(root, "a".repeat(16), "alpha");
+      await makeDir(root, "b".repeat(16), "beta");
+      await expect(
+        stopCommand({ configRoot: root, probe: live }),
+      ).rejects.toBeInstanceOf(AmbiguousDaemonError);
       expect(captured()).not.toContain("Daemon not running"); // the killed misreport
-      await rm(daemonsDir, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
     });
 
-    it("NO daemons → idempotent 'No daemons running.' via the selector (not flat)", async () => {
-      const daemonsDir = await mkdtemp(join(tmpdir(), "cb-stop-none-"));
-      await stopCommand({ daemonsDir });
+    it("NO live daemons → idempotent 'No daemons running.' via the selector (not flat)", async () => {
+      const root = await mkdtemp(join(tmpdir(), "cb-stop-none-"));
+      await stopCommand({ configRoot: root, probe: live });
       expect(captured()).toContain("No daemons running.");
-      await rm(daemonsDir, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
     });
   });
 });

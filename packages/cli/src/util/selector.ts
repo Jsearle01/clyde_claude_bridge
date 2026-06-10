@@ -21,7 +21,13 @@ import {
   getCliConfigDir,
   getCliConfigPath,
   getCliPidPath,
+  ipcAddressForHash,
 } from "./paths.js";
+import {
+  enumerateConfigDirs,
+  renderDaemonList,
+  type ConfigDirEntry,
+} from "./config-dirs.js";
 
 export class NoDaemonsRunningError extends Error {
   constructor() {
@@ -31,10 +37,12 @@ export class NoDaemonsRunningError extends Error {
 }
 
 export class AmbiguousDaemonError extends Error {
-  constructor(public readonly names: readonly string[]) {
+  constructor(public readonly entries: readonly ConfigDirEntry[]) {
     super(
-      `${names.length} daemons running — name one with --name <name> (or --workspace <path>):\n` +
-        names.map((n) => `  - ${n}`).join("\n"),
+      `${entries.length} daemons running — name one with --name <name> (or --workspace <path>):\n` +
+        // T-CLI-4a: same shared renderer as the TTY pick — name+workspace+hash,
+        // not names-only.
+        renderDaemonList(entries),
     );
     this.name = "AmbiguousDaemonError";
   }
@@ -96,7 +104,12 @@ export interface SelectedTarget {
 export interface SelectorInput {
   workspace?: string;
   name?: string;
-  daemonsDir?: string;
+  // T-CLI-4a: the config-dir root the unified enumeration scans (test-only;
+  // defaults to getCliConfigDir()). Replaces the advert-dir source so the
+  // selector + `list` share ONE enumeration → identical render.
+  configRoot?: string;
+  // Test-only: liveness probe override (default = real IPC handshake).
+  probe?: (entry: { hash: string; configDir: string }) => Promise<boolean>;
   // Test-only overrides — bypass enumeration (the IPC mechanics are tested
   // directly elsewhere). Production passes neither.
   addressOverride?: string;
@@ -106,7 +119,7 @@ export interface SelectorInput {
   interactive?: boolean;
   // Test-only: inject the pick (returns the 1-based selection) instead of
   // rendering + reading stdin.
-  pickNumber?: (adverts: readonly DaemonAdvert[]) => Promise<number>;
+  pickNumber?: (entries: readonly ConfigDirEntry[]) => Promise<number>;
 }
 
 export class InvalidDaemonPickError extends Error {
@@ -143,27 +156,40 @@ export async function selectDaemonTarget(
       label: opts.workspace,
     };
   }
-  const adverts = await enumerateAdverts(opts.daemonsDir);
-  // Explicit --name: match by advertised name.
+  // T-CLI-4a: the unified enumeration — the config-dir layer + handshake
+  // liveness, the SAME source `list`/`delete-dir` use, so a daemon renders
+  // identically everywhere (no advert-vs-config-dir field divergence).
+  const all = await enumerateConfigDirs({
+    configRoot: opts.configRoot,
+    probe: opts.probe,
+  });
+  // Explicit --name: match any config-dir by name (live or dead — a dead target
+  // simply fails at IPC, which the verb reports).
   if (opts.name !== undefined && opts.name !== "") {
-    const match = adverts.find((a) => a.name === opts.name);
+    const match = all.find((e) => e.name === opts.name);
     if (match === undefined) {
       throw new DaemonNameNotFoundError(
         opts.name,
-        adverts.map((a) => a.name).sort(),
+        all
+          .map((e) => e.name)
+          .filter((n): n is string => n !== null)
+          .sort(),
       );
     }
-    return targetFromAdvert(match);
+    return targetFromConfigDir(match);
   }
-  // Bare — the §2 asymmetric default.
-  if (adverts.length === 0) throw new NoDaemonsRunningError();
-  if (adverts.length > 1) {
-    const sorted = [...adverts].sort((a, b) => a.name.localeCompare(b.name));
+  // Bare — act on a LIVE daemon (you can't act on a dead one).
+  const live = all.filter((e) => e.live);
+  if (live.length === 0) throw new NoDaemonsRunningError();
+  if (live.length > 1) {
+    const sorted = [...live].sort((a, b) =>
+      (a.name ?? a.hash).localeCompare(b.name ?? b.hash),
+    );
     // T-CLI-3: interactive → numbered pick; non-interactive → error-and-list.
     // (delete-dir does NOT call this path — it keeps typed-name-no-number.)
     const interactive = opts.interactive ?? Boolean(process.stdin.isTTY);
     if (!interactive) {
-      throw new AmbiguousDaemonError(sorted.map((a) => a.name));
+      throw new AmbiguousDaemonError(sorted);
     }
     const pick = opts.pickNumber ?? defaultPickNumber;
     const choice = await pick(sorted);
@@ -171,23 +197,21 @@ export async function selectDaemonTarget(
     if (chosen === undefined) {
       throw new InvalidDaemonPickError(String(choice), sorted.length);
     }
-    return targetFromAdvert(chosen);
+    return targetFromConfigDir(chosen);
   }
-  const sole = adverts[0];
+  const sole = live[0];
   if (sole === undefined) throw new NoDaemonsRunningError();
-  return targetFromAdvert(sole);
+  return targetFromConfigDir(sole);
 }
 
-// T-CLI-3: render the numbered list (name + workspace per entry, same surface as
-// `list`) and read a 1-based choice from stdin. Only used on an interactive TTY.
+// T-CLI-3/4a: render the numbered list via the SHARED renderer (same surface as
+// `list`), then read a 1-based choice from stdin. Only used on an interactive TTY.
 async function defaultPickNumber(
-  adverts: readonly DaemonAdvert[],
+  entries: readonly ConfigDirEntry[],
 ): Promise<number> {
-  process.stdout.write(`${adverts.length} daemons running:\n`);
-  adverts.forEach((a, i) => {
-    process.stdout.write(`  [${i + 1}] ${a.name} — ${a.canonical_workspace}\n`);
-  });
-  process.stdout.write(`Pick a number (1-${adverts.length}): `);
+  process.stdout.write(`${entries.length} daemons running:\n`);
+  process.stdout.write(renderDaemonList(entries, { numbered: true }));
+  process.stdout.write(`Pick a number (1-${entries.length}): `);
   const rl = createInterface({ input: process.stdin });
   try {
     const line = await new Promise<string>((resolve) => {
@@ -199,16 +223,14 @@ async function defaultPickNumber(
   }
 }
 
-function targetFromAdvert(advert: DaemonAdvert): SelectedTarget {
-  // The advert is authoritative for the address (it's what the daemon
-  // advertised); the per-daemon pid + config paths derive from the canonical
-  // workspace (match the daemon's own per-daemon resources).
-  const res = perDaemonResources(advert.canonical_workspace);
+function targetFromConfigDir(e: ConfigDirEntry): SelectedTarget {
+  // The address derives from the config-dir hash (matches the daemon's own
+  // per-daemon pipe); pid/config paths live in the dir.
   return {
-    pidPath: res.pidPath,
-    configPath: res.configPath,
-    addressOverride: advert.pipe,
-    workspace: advert.canonical_workspace,
-    label: advert.name,
+    pidPath: join(e.configDir, "daemon.pid"),
+    configPath: join(e.configDir, "config.json"),
+    addressOverride: ipcAddressForHash(e.hash, e.configDir),
+    workspace: e.workspace ?? e.hash,
+    label: e.name ?? e.hash,
   };
 }

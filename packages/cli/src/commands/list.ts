@@ -7,25 +7,20 @@
 
 import {
   enumerateConfigDirs,
+  renderDaemonList,
   type ConfigDirEntry,
   type EnumerateConfigDirsOpts,
 } from "../util/config-dirs.js";
 
 export type ListOpts = EnumerateConfigDirsOpts;
 
+// T-CLI-4a: route through the single shared renderDaemonList (was an ad-hoc
+// formatter). Empty-case message stays here.
 export function formatConfigDirList(entries: ConfigDirEntry[]): string {
   if (entries.length === 0) {
     return "No daemon config directories.\n";
   }
-  const lines: string[] = [];
-  for (const e of entries) {
-    const name = e.name ?? "(unnamed)";
-    const ws = e.workspace ?? "(unknown workspace)";
-    const status = e.live ? "live" : "dead";
-    lines.push(`${name}  [${status}]  ${ws}`);
-    lines.push(`    hash ${e.hash}  ·  ${e.configDir}`);
-  }
-  return lines.join("\n") + "\n";
+  return renderDaemonList(entries);
 }
 
 export async function listCommand(opts: ListOpts = {}): Promise<void> {

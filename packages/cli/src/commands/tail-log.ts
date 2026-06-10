@@ -19,7 +19,7 @@ export interface TailLogOpts {
   /** T-CLI-1: selectors — which daemon's log to tail. */
   workspace?: string;
   name?: string;
-  daemonsDir?: string;
+  configRoot?: string;
   /** Test-only override (the per-daemon config path). */
   configPath?: string;
 }
@@ -61,7 +61,7 @@ export async function tailLogCommand(opts: TailLogOpts = {}): Promise<void> {
     const target = await selectDaemonTarget({
       workspace: opts.workspace,
       name: opts.name,
-      daemonsDir: opts.daemonsDir,
+      configRoot: opts.configRoot,
     });
     configPath = target.configPath;
   }

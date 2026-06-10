@@ -144,4 +144,19 @@ describe("deleteDirCommand (T-CLI-2 safety stack)", () => {
     expect(out).not.toMatch(/\[\s*\d+\s*\]/); // NO numbered pick (irreversible)
     expect(removeDir).not.toHaveBeenCalled();
   });
+
+  it("AC-4a-3: an orphan dir (no workspaces.json → null name) is prunable by --hash (closes the prune gap)", async () => {
+    // No workspaces.json → null name → NOT --name-targetable. --hash is the only
+    // way to prune the dir that most needs pruning.
+    const orphanHash = "d".repeat(16);
+    await mkdir(join(root, orphanHash), { recursive: true });
+    const removeDir = vi.fn(() => Promise.resolve());
+    await deleteDirCommand({
+      configRoot: root,
+      hash: orphanHash,
+      probe: dead,
+      removeDir,
+    });
+    expect(removeDir).toHaveBeenCalledWith(join(root, orphanHash));
+  });
 });

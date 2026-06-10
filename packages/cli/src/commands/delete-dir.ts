@@ -28,23 +28,26 @@ import { ipcAddressForHash } from "../util/paths.js";
 export class DeleteDirNameRequiredError extends Error {
   constructor() {
     super(
-      "delete-dir requires an explicit --name (the list above shows the names). " +
-        "It never deletes on a bare invocation and offers no numbered pick — " +
-        "type the name of the daemon to delete.",
+      "delete-dir requires an explicit --name (or --hash for an unnamed/orphan " +
+        "dir — the list above shows both). It never deletes on a bare invocation " +
+        "and offers no numbered pick — type the name or hash of the dir to delete.",
     );
     this.name = "DeleteDirNameRequiredError";
   }
 }
 
 export class DeleteDirNameNotFoundError extends Error {
-  constructor(public readonly name: string) {
-    super(`No config dir for a daemon named '${name}' (see the list above).`);
+  constructor(public readonly selector: string) {
+    super(`No config dir matching '${selector}' (see the list above).`);
     this.name = "DeleteDirNameNotFoundError";
   }
 }
 
 export interface DeleteDirOpts extends EnumerateConfigDirsOpts {
   name?: string;
+  // T-CLI-4a: target by hash — the ONLY way to prune an orphan dir (no
+  // workspaces.json → null name → not --name-targetable). Closes the prune gap.
+  hash?: string;
   /** Injected typed-input reader for the live-target confirm/cancel. */
   readConfirm?: () => Promise<string>;
   /** Test-only: inject the destructive ops. */
@@ -55,22 +58,28 @@ export interface DeleteDirOpts extends EnumerateConfigDirsOpts {
 export async function deleteDirCommand(opts: DeleteDirOpts = {}): Promise<void> {
   const entries = await enumerateConfigDirs(opts);
 
-  // (a) Bare → list + require a typed --name. Never deletes; no number.
-  if (opts.name === undefined || opts.name === "") {
+  // (a) Bare → list + require a typed --name (or --hash for orphans). Never
+  // deletes; no number.
+  const byName = opts.name !== undefined && opts.name !== "";
+  const byHash = opts.hash !== undefined && opts.hash !== "";
+  if (!byName && !byHash) {
     process.stdout.write(formatConfigDirList(entries));
     throw new DeleteDirNameRequiredError();
   }
 
-  const target = entries.find((e) => e.name === opts.name);
+  const target = entries.find(
+    (e) =>
+      (byName && e.name === opts.name) || (byHash && e.hash === opts.hash),
+  );
   if (target === undefined) {
     process.stdout.write(formatConfigDirList(entries));
-    throw new DeleteDirNameNotFoundError(opts.name);
+    throw new DeleteDirNameNotFoundError(opts.name ?? opts.hash ?? "");
   }
 
   // (b) Live target → alert + typed confirm/cancel (the friction).
   if (target.live) {
     process.stdout.write(
-      `⚠ '${target.name}' is a LIVE daemon ` +
+      `⚠ '${target.name ?? target.hash}' is a LIVE daemon ` +
         `(${target.workspace ?? target.hash}). Deleting its config dir will ` +
         `STOP it and remove its durable binding state — this is irreversible.\n` +
         `Type 'confirm' to stop + delete, or 'cancel' to abort: `,
@@ -91,7 +100,7 @@ export async function deleteDirCommand(opts: DeleteDirOpts = {}): Promise<void> 
     opts.removeDir ?? ((dir) => rm(dir, { recursive: true, force: true }));
   await remove(target.configDir);
   process.stdout.write(
-    `Deleted the config dir for '${target.name}' (${target.hash}).\n`,
+    `Deleted the config dir for '${target.name ?? target.hash}' (${target.hash}).\n`,
   );
 }
 

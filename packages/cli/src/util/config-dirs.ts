@@ -13,7 +13,7 @@
 //                        presence — a list showing a dead daemon as live is the
 //                        stale trap this layer exists to avoid).
 
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getCliConfigDir, ipcAddressForHash } from "./paths.js";
 import { sendIpc } from "../ipc-client.js";
@@ -27,6 +27,38 @@ export interface ConfigDirEntry {
   workspace: string | null;
   name: string | null;
   live: boolean;
+  // T-CLI-4a: config-dir mtime — a disambiguator for an ORPHAN dir (no
+  // workspaces.json → no name/workspace), so it's still recognisable + prunable.
+  mtime: Date | null;
+}
+
+// T-CLI-4a: THE single shared daemon-list renderer (the rendering analog of
+// selectDaemonTarget for targeting / the pick for selection). Every daemon-list
+// surface routes through this — `list`, `delete-dir`'s bare list, the bare-many
+// pick, and the non-TTY error — so a daemon renders IDENTICALLY everywhere
+// (name/workspace/live-dead/hash), instead of the 4 ad-hoc formatters that let
+// every verb be an independent chance to be broken. `numbered` adds the `[N]`
+// prefix for the interactive pick. An orphan (no identity) shows hash + mtime so
+// it stays actionable (prunable by --hash).
+export function renderDaemonList(
+  entries: readonly ConfigDirEntry[],
+  opts: { numbered?: boolean } = {},
+): string {
+  const lines: string[] = [];
+  entries.forEach((e, i) => {
+    const num = opts.numbered === true ? `[${i + 1}] ` : "";
+    const name = e.name ?? "(unnamed)";
+    const ws = e.workspace ?? "(unknown workspace)";
+    const status = e.live ? "live" : "dead";
+    lines.push(`${num}${name}  [${status}]  ${ws}`);
+    // mtime is the orphan disambiguator (a no-identity dir has only hash + age).
+    const mtime =
+      e.name === null && e.mtime !== null
+        ? `  ·  last-modified ${e.mtime.toISOString().slice(0, 10)}`
+        : "";
+    lines.push(`    hash ${e.hash}${mtime}`);
+  });
+  return lines.length > 0 ? lines.join("\n") + "\n" : "";
 }
 
 export interface EnumerateConfigDirsOpts {
@@ -55,7 +87,20 @@ export async function enumerateConfigDirs(
     const configDir = join(root, e.name);
     const id = await readIdentity(configDir);
     const live = await probe({ hash: e.name, configDir });
-    result.push({ hash: e.name, configDir, workspace: id.workspace, name: id.name, live });
+    let mtime: Date | null = null;
+    try {
+      mtime = (await stat(configDir)).mtime;
+    } catch {
+      // best-effort — a dir that vanished mid-scan just has no mtime.
+    }
+    result.push({
+      hash: e.name,
+      configDir,
+      workspace: id.workspace,
+      name: id.name,
+      live,
+      mtime,
+    });
   }
   result.sort((a, b) =>
     (a.name ?? a.hash).localeCompare(b.name ?? b.hash),

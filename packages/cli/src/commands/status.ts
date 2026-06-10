@@ -162,7 +162,9 @@ async function statusTargeted(opts: StatusOpts): Promise<void> {
   const target = await selectDaemonTarget({
     workspace: opts.workspace,
     name: opts.name,
-    daemonsDir: opts.daemonsDir,
+    // T-CLI-4a: the selector now enumerates the config-dir layer; status's bare
+    // enumerate still uses the adverts dir (daemonsDir) separately below.
+    configRoot: opts.daemonsDir,
     addressOverride: opts.addressOverride,
     pidPath: opts.pidPath,
   });

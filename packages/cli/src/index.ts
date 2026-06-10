@@ -197,9 +197,10 @@ program
     "Delete a daemon's config dir (durable binding state). Bare lists + requires --name.",
   )
   .option("--name <name>", "the daemon to delete (typed name; no numbered pick)")
-  .action(async (opts: { name?: string }) => {
+  .option("--hash <hash>", "delete by config-dir hash (for an unnamed/orphan dir)")
+  .action(async (opts: { name?: string; hash?: string }) => {
     try {
-      await deleteDirCommand({ name: opts.name });
+      await deleteDirCommand({ name: opts.name, hash: opts.hash });
     } catch (err) {
       process.exit(reportError(err));
     }
