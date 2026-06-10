@@ -20,6 +20,7 @@ import { stopCommand, DaemonStopTimeoutError } from "./commands/stop.js";
 import { statusCommand } from "./commands/status.js";
 import { tailLogCommand } from "./commands/tail-log.js";
 import { listCommand } from "./commands/list.js";
+import { directoriesCommand } from "./commands/directories.js";
 import { deleteDirCommand } from "./commands/delete-dir.js";
 import {
   tokenRotateCommand,
@@ -186,6 +187,19 @@ program
   .action(async () => {
     try {
       await listCommand();
+    } catch (err) {
+      process.exit(reportError(err));
+    }
+  });
+
+program
+  .command("directories")
+  .description(
+    "Print each daemon's config-dir path (+ name/hash + live/dead) — verify before delete-dir.",
+  )
+  .action(async () => {
+    try {
+      await directoriesCommand();
     } catch (err) {
       process.exit(reportError(err));
     }
