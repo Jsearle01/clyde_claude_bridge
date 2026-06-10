@@ -4,10 +4,16 @@
 // (`token` only has `rotate`; unbind was extension-only).
 //
 // FOOTGUN GUARD (operator decision): clearing all bindings must be DELIBERATE.
-//   - `unbind <target>`  → unbind that one binding.
-//   - `unbind --all`     → unbind every binding (opt-in).
-//   - `unbind` (no args) → ERROR. Never a silent clear-all.
+//   - `unbind` (no args) → LIST the daemon's bindings (sight — never clears).
+//   - `unbind <target>`  → unbind that one binding (a typed workspace/client id).
+//   - `unbind --all`     → unbind every binding (opt-in). Never a silent clear-all.
+// T-CLI-4b: bare unbind LISTS (was a "specify a target" error) — the binding
+// analog of `list`, so the operator can SEE what to revoke instead of detouring
+// through `status`. The list shows the typeable target ids; NO numbered pick (a
+// mis-picked number revokes the wrong binding — mirrors delete-dir). The binding
+// data comes from the existing `status` IPC (oauth_bindings) — no daemon change.
 
+import type { OAuthBindingSummary } from "@claude-bridge/shared";
 import {
   sendIpc,
   IpcClientConnectionError,
@@ -18,16 +24,6 @@ import { checkStalePid } from "../util/pidfile.js";
 import { DaemonNotRunningError } from "./token.js";
 
 const UNBIND_TIMEOUT_MS = 10000;
-
-export class UnbindTargetRequiredError extends Error {
-  constructor() {
-    super(
-      "unbind: specify a target binding (a workspace identifier or client id), " +
-        "or pass --all to clear ALL bindings.",
-    );
-    this.name = "UnbindTargetRequiredError";
-  }
-}
 
 export class UnbindTargetAndAllError extends Error {
   constructor() {
@@ -96,21 +92,44 @@ export function formatUnbindOutput(
   return lines.join("\n") + "\n";
 }
 
+// T-CLI-4b: the binding-list (the daemon→bindings enumeration). Shows each
+// binding's workspace + client_id (both are typeable `unbind` targets) + the
+// issued/expires dates. NO numbered pick — the operator types the workspace or
+// client id (a mis-picked number revokes the wrong binding; mirrors delete-dir).
+export function formatBindingList(
+  bindings: readonly OAuthBindingSummary[],
+): string {
+  if (bindings.length === 0) {
+    return "No active bindings.\n";
+  }
+  const lines: string[] = [];
+  lines.push(
+    `${bindings.length} active binding${bindings.length === 1 ? "" : "s"} — ` +
+      "type a workspace or client id below to unbind it (or --all):",
+  );
+  for (const b of bindings) {
+    const ws = b.bound_workspace ?? "(no workspace — non-binding)";
+    lines.push(`  - ${ws}`);
+    lines.push(
+      `      client ${b.client_id}  ·  issued ${b.issued_at}, ` +
+        `expires ${new Date(b.expires_at).toISOString()}`,
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
 export async function unbindCommand(opts: UnbindOpts = {}): Promise<void> {
   const all = opts.all ?? false;
   const target = opts.target;
 
-  // Footgun guard + arg validation BEFORE any IPC — a no-args clear-all must
-  // never happen by omission.
+  // Arg validation BEFORE any IPC — a target AND --all is ambiguous.
   if (all && target !== undefined) {
     throw new UnbindTargetAndAllError();
   }
-  if (!all && (target === undefined || target === "")) {
-    throw new UnbindTargetRequiredError();
-  }
 
-  // T-CLI-1: target the right DAEMON via the unified selector (the binding-level
-  // target/--all is unchanged — it composes with delete-dir at the dir level).
+  // T-CLI-1/4b: resolve WHICH daemon via the unified selector (picking the daemon
+  // is non-destructive — the numbered pick is fine here; the destructive REVOKE
+  // below requires a typed target).
   const sel = await selectDaemonTarget({
     workspace: opts.workspace,
     name: opts.name,
@@ -121,6 +140,14 @@ export async function unbindCommand(opts: UnbindOpts = {}): Promise<void> {
   const state = await checkStalePid(sel.pidPath);
   if (state === "absent" || state === "stale") {
     throw new DaemonNotRunningError();
+  }
+
+  // T-CLI-4b: bare (no target, no --all) → LIST the bindings (sight, never
+  // clears — the footgun "no silent clear-all" holds because listing ≠ clearing).
+  if (!all && (target === undefined || target === "")) {
+    const bindings = await fetchBindings(sel.addressOverride);
+    process.stdout.write(formatBindingList(bindings));
+    return;
   }
 
   try {
@@ -146,4 +173,20 @@ export async function unbindCommand(opts: UnbindOpts = {}): Promise<void> {
     }
     throw err;
   }
+}
+
+// T-CLI-4b: fetch the daemon's bindings via the existing `status` IPC — the
+// oauth_bindings array is already on the status payload, so listing needs NO
+// daemon change (CLI-only). Empty/absent → no bindings.
+async function fetchBindings(
+  addressOverride: string | undefined,
+): Promise<OAuthBindingSummary[]> {
+  const response = await sendIpc(
+    { kind: "status" },
+    { addressOverride, timeoutMs: UNBIND_TIMEOUT_MS },
+  );
+  if (response.kind !== "status_ok") {
+    throw new Error(`Unexpected IPC response kind: ${response.kind}`);
+  }
+  return response.payload.oauth_bindings ?? [];
 }

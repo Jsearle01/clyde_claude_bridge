@@ -12,14 +12,30 @@ import {
   type IpcHandlers,
 } from "../../../daemon/src/ipc/server.js";
 import type { Logger } from "../../../daemon/src/log/logger.js";
+import type { StatusPayload } from "@claude-bridge/shared";
 import { DaemonNotRunningError } from "../../src/commands/token.js";
 import {
   unbindCommand,
   formatUnbindOutput,
-  UnbindTargetRequiredError,
+  formatBindingList,
   UnbindTargetAndAllError,
   type UnbindResultEntry,
 } from "../../src/commands/unbind.js";
+
+function makeStatusPayload(overrides: Partial<StatusPayload> = {}): StatusPayload {
+  return {
+    daemon_pid: 84231,
+    daemon_uptime_s: 8054,
+    endpoint: "127.0.0.1:7423",
+    tunnel_status: "up",
+    tunnel_url: "https://plum-otter-7821.trycloudflare.com",
+    token_suffix: "d219",
+    audit_path: "/home/user/.claude-bridge/audit.jsonl",
+    audit_size_bytes: 14336,
+    attached_workspaces: 0,
+    ...overrides,
+  };
+}
 
 const silentLogger: Logger = {
   debug: () => undefined,
@@ -75,22 +91,37 @@ describe("formatUnbindOutput", () => {
 });
 
 describe("unbindCommand — footgun guard (no IPC)", () => {
-  it("no args (no target, no --all) ERRORS — never a silent clear-all", async () => {
-    await expect(unbindCommand({})).rejects.toBeInstanceOf(
-      UnbindTargetRequiredError,
-    );
-  });
-
-  it("empty-string target ERRORS too", async () => {
-    await expect(unbindCommand({ target: "" })).rejects.toBeInstanceOf(
-      UnbindTargetRequiredError,
-    );
-  });
-
-  it("both a target AND --all ERRORS (ambiguous)", async () => {
+  it("both a target AND --all ERRORS (ambiguous) — before any IPC", async () => {
     await expect(
       unbindCommand({ target: "x", all: true }),
     ).rejects.toBeInstanceOf(UnbindTargetAndAllError);
+  });
+});
+
+describe("formatBindingList (T-CLI-4b binding-list)", () => {
+  const binding = {
+    client_id: "cb_client_abcdef123456",
+    bound_workspace: "c:\\Projects\\foo",
+    issued_at: "2026-06-01T00:00:00.000Z",
+    expires_at: 1780000000000,
+  };
+
+  it("AC-4b-1: renders client + workspace + issued date (the typeable target ids)", () => {
+    const out = formatBindingList([binding]);
+    expect(out).toContain("c:\\Projects\\foo"); // workspace (a typeable target)
+    expect(out).toContain("cb_client_abcdef123456"); // client id (a typeable target)
+    expect(out).toContain("2026-06-01"); // issued date
+  });
+
+  it("AC-4b-2: empty → 'No active bindings.' (not blank, not error)", () => {
+    expect(formatBindingList([])).toContain("No active bindings.");
+  });
+
+  it("unbind revokes by typed target, never a numbered pick", () => {
+    // mirrors delete-dir: a mis-picked number revokes the wrong binding.
+    const out = formatBindingList([binding]);
+    expect(out).toContain("type a workspace or client id"); // the typed-target instruction
+    expect(out).not.toMatch(/\[\s*\d+\s*\]/); // NO numbered pick
   });
 });
 
@@ -186,5 +217,49 @@ describe("unbindCommand — over IPC", () => {
     await unbindCommand({ target: "ghost", pidPath, addressOverride: address });
     const out = stdoutSpy.mock.calls[0]?.[0] as string;
     expect(out).toContain("No binding matched 'ghost'");
+  });
+
+  it("AC-4b-1/4b-4/4b-5: bare unbind LISTS the daemon's bindings (via status IPC), never revokes", async () => {
+    const revokeCalls: unknown[] = [];
+    await startServer(
+      makeHandlers({
+        status: () =>
+          Promise.resolve(
+            makeStatusPayload({
+              oauth_bindings: [
+                {
+                  client_id: "cb_client_xyz789",
+                  bound_workspace: "c:\\Projects\\bar",
+                  issued_at: "2026-06-02T00:00:00.000Z",
+                  expires_at: 1780000000000,
+                },
+              ],
+            }),
+          ),
+        unbindBinding: (a) => {
+          revokeCalls.push(a);
+          return Promise.resolve({ unbound: [] });
+        },
+      }),
+    );
+    await writeFile(pidPath, String(process.pid), { mode: 0o600 });
+    await unbindCommand({ pidPath, addressOverride: address });
+    const out = stdoutSpy.mock.calls.map((c) => c[0] as string).join("");
+    expect(out).toContain("cb_client_xyz789"); // listed (client id to type)
+    expect(out).toContain("c:\\Projects\\bar"); // workspace to type
+    expect(revokeCalls).toEqual([]); // bare LISTS, never clears — footgun preserved
+  });
+
+  it("AC-4b-2: bare unbind with no bindings shows the empty state (not blank/error)", async () => {
+    await startServer(
+      makeHandlers({
+        status: () =>
+          Promise.resolve(makeStatusPayload({ oauth_bindings: [] })),
+      }),
+    );
+    await writeFile(pidPath, String(process.pid), { mode: 0o600 });
+    await unbindCommand({ pidPath, addressOverride: address });
+    const out = stdoutSpy.mock.calls.map((c) => c[0] as string).join("");
+    expect(out).toContain("No active bindings");
   });
 });

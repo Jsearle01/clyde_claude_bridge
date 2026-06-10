@@ -30,7 +30,6 @@ import {
 } from "./commands/token.js";
 import {
   unbindCommand,
-  UnbindTargetRequiredError,
   UnbindTargetAndAllError,
   UnbindConnectionLostError,
   UnbindTimeoutError,
@@ -99,7 +98,6 @@ function reportErrorBody(err: unknown): void {
     err instanceof TunnelRestartConnectionLostError ||
     err instanceof TunnelRestartTimeoutError ||
     err instanceof TunnelRestartFailedError ||
-    err instanceof UnbindTargetRequiredError ||
     err instanceof UnbindTargetAndAllError ||
     err instanceof UnbindConnectionLostError ||
     err instanceof UnbindTimeoutError
