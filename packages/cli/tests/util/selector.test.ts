@@ -60,12 +60,40 @@ describe("selectDaemonTarget (T-CLI-1 unified selector)", () => {
     expect(t.label).toBe("solo");
   });
 
-  it("asymmetric default — bare + MANY → AmbiguousDaemonError (lists), never silently picks", async () => {
+  it("AC-C3-4: bare + MANY + NON-interactive (piped/CI) → error-and-list, never hangs / silently picks", async () => {
     await write("alpha");
     await write("beta");
     await expect(
-      selectDaemonTarget({ daemonsDir: dir }),
+      selectDaemonTarget({ daemonsDir: dir, interactive: false }),
     ).rejects.toBeInstanceOf(AmbiguousDaemonError);
+  });
+
+  it("AC-C3-2: bare + MANY + interactive → numbered pick selects that daemon (sorted)", async () => {
+    await write("alpha", { pipe: "pipe-alpha", canonical_workspace: "c:\\ws\\a" });
+    await write("beta", { pipe: "pipe-beta", canonical_workspace: "c:\\ws\\b" });
+    // pick "2" → beta (sorted alpha[1], beta[2]).
+    const t = await selectDaemonTarget({
+      daemonsDir: dir,
+      interactive: true,
+      pickNumber: () => Promise.resolve(2),
+    });
+    expect(t.label).toBe("beta");
+    expect(t.addressOverride).toBe("pipe-beta");
+  });
+
+  it("an out-of-range pick → InvalidDaemonPickError (does not act)", async () => {
+    await write("alpha");
+    await write("beta");
+    const { InvalidDaemonPickError } = await import(
+      "../../src/util/selector.js"
+    );
+    await expect(
+      selectDaemonTarget({
+        daemonsDir: dir,
+        interactive: true,
+        pickNumber: () => Promise.resolve(9),
+      }),
+    ).rejects.toBeInstanceOf(InvalidDaemonPickError);
   });
 
   it("asymmetric default — bare + NONE → NoDaemonsRunningError, never flat fallthrough", async () => {

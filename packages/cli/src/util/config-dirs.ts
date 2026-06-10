@@ -67,10 +67,13 @@ async function readIdentity(
   configDir: string,
 ): Promise<{ workspace: string | null; name: string | null }> {
   try {
+    // The WorkspacesStore persists `{ version, entries: [{ abs_path, name, … }] }`
+    // — the field is `entries`, NOT `workspaces` (the defect-1 bug read the wrong
+    // key → always null → rendered "(unknown workspace)").
     const raw = JSON.parse(
       await readFile(join(configDir, "workspaces.json"), "utf8"),
-    ) as { workspaces?: unknown };
-    const list: unknown[] = Array.isArray(raw.workspaces) ? raw.workspaces : [];
+    ) as { entries?: unknown };
+    const list: unknown[] = Array.isArray(raw.entries) ? raw.entries : [];
     const entry = (list[0] ?? {}) as { abs_path?: unknown; name?: unknown };
     return {
       workspace: typeof entry.abs_path === "string" ? entry.abs_path : null,

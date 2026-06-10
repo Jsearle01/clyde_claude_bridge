@@ -33,7 +33,9 @@ describe("deleteDirCommand (T-CLI-2 safety stack)", () => {
       join(dir, "workspaces.json"),
       JSON.stringify({
         version: "1",
-        workspaces: [{ abs_path: ws, identifier: name, name, trusted_at: "x" }],
+        // The REAL WorkspacesStore shape — `entries`, not `workspaces` (the
+        // defect-1 field-name bug both code and the old fixture shared).
+        entries: [{ abs_path: ws, identifier: name, name, trusted_at: "x" }],
       }),
     );
     return dir;
@@ -124,6 +126,22 @@ describe("deleteDirCommand (T-CLI-2 safety stack)", () => {
     await expect(
       deleteDirCommand({ configRoot: root, probe: dead, removeDir }),
     ).rejects.toBeInstanceOf(DeleteDirNameRequiredError);
+    expect(removeDir).not.toHaveBeenCalled();
+  });
+
+  it("delete-dir requires typed name, never a numbered pick (the irreversible-op guard, T-CLI-3)", async () => {
+    await makeDir(HASH_A, "alpha", "c:\\ws\\a");
+    await makeDir(HASH_B, "beta", "c:\\ws\\b");
+    const removeDir = vi.fn(() => Promise.resolve());
+    // Even with MANY dirs, delete-dir lists (names visible to TYPE) + requires
+    // --name — it must NOT gain the non-destructive verbs' [1]/[2] numbered pick.
+    await expect(
+      deleteDirCommand({ configRoot: root, probe: dead, removeDir }),
+    ).rejects.toBeInstanceOf(DeleteDirNameRequiredError);
+    const out = captured();
+    expect(out).toContain("alpha"); // names visible to type
+    expect(out).toContain("beta");
+    expect(out).not.toMatch(/\[\s*\d+\s*\]/); // NO numbered pick (irreversible)
     expect(removeDir).not.toHaveBeenCalled();
   });
 });

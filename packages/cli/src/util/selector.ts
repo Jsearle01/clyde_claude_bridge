@@ -14,6 +14,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import { DaemonAdvertSchema, type DaemonAdvert } from "@claude-bridge/shared";
 import {
   perDaemonResources,
@@ -100,6 +101,19 @@ export interface SelectorInput {
   // directly elsewhere). Production passes neither.
   addressOverride?: string;
   pidPath?: string;
+  // T-CLI-3: interactive numbered pick when bare + many daemons. Defaults to
+  // process.stdin.isTTY; non-interactive (piped/CI) → error-and-list (no hang).
+  interactive?: boolean;
+  // Test-only: inject the pick (returns the 1-based selection) instead of
+  // rendering + reading stdin.
+  pickNumber?: (adverts: readonly DaemonAdvert[]) => Promise<number>;
+}
+
+export class InvalidDaemonPickError extends Error {
+  constructor(public readonly choice: string, public readonly count: number) {
+    super(`'${choice}' is not a valid choice (pick 1–${count}).`);
+    this.name = "InvalidDaemonPickError";
+  }
 }
 
 // Resolve which per-daemon daemon a verb targets. Throws a typed error for the
@@ -144,11 +158,45 @@ export async function selectDaemonTarget(
   // Bare — the §2 asymmetric default.
   if (adverts.length === 0) throw new NoDaemonsRunningError();
   if (adverts.length > 1) {
-    throw new AmbiguousDaemonError(adverts.map((a) => a.name).sort());
+    const sorted = [...adverts].sort((a, b) => a.name.localeCompare(b.name));
+    // T-CLI-3: interactive → numbered pick; non-interactive → error-and-list.
+    // (delete-dir does NOT call this path — it keeps typed-name-no-number.)
+    const interactive = opts.interactive ?? Boolean(process.stdin.isTTY);
+    if (!interactive) {
+      throw new AmbiguousDaemonError(sorted.map((a) => a.name));
+    }
+    const pick = opts.pickNumber ?? defaultPickNumber;
+    const choice = await pick(sorted);
+    const chosen = sorted[choice - 1];
+    if (chosen === undefined) {
+      throw new InvalidDaemonPickError(String(choice), sorted.length);
+    }
+    return targetFromAdvert(chosen);
   }
   const sole = adverts[0];
   if (sole === undefined) throw new NoDaemonsRunningError();
   return targetFromAdvert(sole);
+}
+
+// T-CLI-3: render the numbered list (name + workspace per entry, same surface as
+// `list`) and read a 1-based choice from stdin. Only used on an interactive TTY.
+async function defaultPickNumber(
+  adverts: readonly DaemonAdvert[],
+): Promise<number> {
+  process.stdout.write(`${adverts.length} daemons running:\n`);
+  adverts.forEach((a, i) => {
+    process.stdout.write(`  [${i + 1}] ${a.name} — ${a.canonical_workspace}\n`);
+  });
+  process.stdout.write(`Pick a number (1-${adverts.length}): `);
+  const rl = createInterface({ input: process.stdin });
+  try {
+    const line = await new Promise<string>((resolve) => {
+      rl.once("line", (l) => resolve(l));
+    });
+    return Number.parseInt(line.trim(), 10);
+  } finally {
+    rl.close();
+  }
 }
 
 function targetFromAdvert(advert: DaemonAdvert): SelectedTarget {

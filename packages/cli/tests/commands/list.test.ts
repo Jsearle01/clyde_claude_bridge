@@ -42,11 +42,12 @@ describe("enumerateConfigDirs (T-CLI-2)", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(
       join(dir, "workspaces.json"),
-      JSON.stringify({ version: "1", workspaces: [{ abs_path: ws, name }] }),
+      // The REAL WorkspacesStore shape — `entries`, not `workspaces`.
+      JSON.stringify({ version: "1", entries: [{ abs_path: ws, name }] }),
     );
   }
 
-  it("reads workspace/name from workspaces.json + liveness from the probe; skips non-hash entries", async () => {
+  it("reads workspace/name from workspaces.json (entries) + liveness from the probe; skips non-hash entries", async () => {
     await makeDir("a".repeat(16), "alpha", "c:\\ws\\a");
     await makeDir("b".repeat(16), "beta", "c:\\ws\\b");
     await mkdir(join(root, "daemons"), { recursive: true }); // not a hash → skipped
@@ -61,5 +62,19 @@ describe("enumerateConfigDirs (T-CLI-2)", () => {
     expect(entries.find((e) => e.name === "alpha")?.live).toBe(true);
     expect(entries.find((e) => e.name === "beta")?.live).toBe(false);
     expect(entries.find((e) => e.name === "alpha")?.workspace).toBe("c:\\ws\\a");
+  });
+
+  it("AC-C3-1: the RENDERED list output (not the data) shows workspace + name per entry", async () => {
+    await makeDir("a".repeat(16), "alpha", "c:\\Projects\\alpha");
+    const entries = await enumerateConfigDirs({
+      configRoot: root,
+      probe: () => Promise.resolve(false),
+    });
+    // Assert the SURFACE a human reads — the defect-1 lesson.
+    const rendered = formatConfigDirList(entries);
+    expect(rendered).toContain("alpha"); // name
+    expect(rendered).toContain("c:\\Projects\\alpha"); // workspace
+    expect(rendered).not.toContain("(unknown workspace)"); // the bug's tell
+    expect(rendered).not.toContain("(unnamed)");
   });
 });
