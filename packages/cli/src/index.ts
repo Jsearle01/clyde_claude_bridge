@@ -19,6 +19,8 @@ import {
 import { stopCommand, DaemonStopTimeoutError } from "./commands/stop.js";
 import { statusCommand } from "./commands/status.js";
 import { tailLogCommand } from "./commands/tail-log.js";
+import { listCommand } from "./commands/list.js";
+import { deleteDirCommand } from "./commands/delete-dir.js";
 import {
   tokenRotateCommand,
   DaemonNotRunningError,
@@ -171,6 +173,33 @@ program
   .action(async (opts: { workspace?: string; name?: string }) => {
     try {
       await statusCommand({ workspace: opts.workspace, name: opts.name });
+    } catch (err) {
+      process.exit(reportError(err));
+    }
+  });
+
+program
+  .command("list")
+  .description(
+    "List the per-daemon config dirs (workspace + name, live/dead via handshake).",
+  )
+  .action(async () => {
+    try {
+      await listCommand();
+    } catch (err) {
+      process.exit(reportError(err));
+    }
+  });
+
+program
+  .command("delete-dir")
+  .description(
+    "Delete a daemon's config dir (durable binding state). Bare lists + requires --name.",
+  )
+  .option("--name <name>", "the daemon to delete (typed name; no numbered pick)")
+  .action(async (opts: { name?: string }) => {
+    try {
+      await deleteDirCommand({ name: opts.name });
     } catch (err) {
       process.exit(reportError(err));
     }

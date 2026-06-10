@@ -70,6 +70,25 @@ describe("floor §2 — hard-denied (un-overridable by any dispatch)", () => {
     expect(write(join(CFG, "workspaces.json")).denied).toBe(true);
   });
 
+  it("floor denies delete-dir-class op under delegation (T-CLI-2)", () => {
+    // A delete-dir-class op = rm of ANY per-daemon config dir
+    // (…/claude-bridge/<16-hex hash>) — the durable binding state. Denied under
+    // delegation regardless of root, incl. the win32 %APPDATA%\claude-bridge\…
+    // path the ~/.claude-bridge tilde regex misses, AND a SIBLING daemon's dir
+    // (a different hash than this daemon's own CFG). delete-dir is CLI-only.
+    const otherHash = "135cfaa3d11a768c";
+    expect(
+      bash(`rm -rf /home/x/.claude-bridge/${otherHash}`).denied,
+    ).toBe(true);
+    expect(
+      bash(`rm -rf C:\\Users\\x\\AppData\\Roaming\\claude-bridge\\${otherHash}`)
+        .denied,
+    ).toBe(true);
+    expect(
+      bash(`rm -rf /home/x/.claude-bridge/${otherHash}`).reason,
+    ).toMatch(/claude-bridge/);
+  });
+
   it("base deny-list still enforced (carried into the floor)", () => {
     expect(bash("sudo rm x").denied).toBe(true);
     expect(bash("rm -rf /").denied).toBe(true);

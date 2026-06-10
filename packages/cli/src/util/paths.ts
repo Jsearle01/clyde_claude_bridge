@@ -62,6 +62,19 @@ function daemonPipeName(hash: string): string {
   return `\\\\.\\pipe\\claude-bridge-${hash}`;
 }
 
+// T-CLI-2: the IPC address for a per-daemon daemon identified by its config-dir
+// HASH (the dir name), used by `list`/`delete-dir` to probe liveness without a
+// workspace path. Mirrors perDaemonResources' address derivation.
+export function ipcAddressForHash(
+  hash: string,
+  configDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "win32"
+    ? daemonPipeName(hash)
+    : join(configDir, "daemon.sock");
+}
+
 // Resolve the per-daemon config-dir + IPC address for a given --workspace
 // input, matching the daemon's computeDaemonResources exactly so `start` can
 // read the spawned daemon's config + connect to its pipe.

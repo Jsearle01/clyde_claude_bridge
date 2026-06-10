@@ -120,6 +120,15 @@ function checkConfigDirReference(
   if (tilde.test(command)) {
     return deny("write/read of the claude-bridge auth dir (~/.claude-bridge)");
   }
+  // T-CLI-2 (delete-dir-class deny): ANY per-daemon config dir —
+  // `…/claude-bridge/<16-hex-hash>` — is the binding state a `delete-dir`-class
+  // op (or a raw `rm`) would remove. Deny it under delegation regardless of root
+  // (this catches the win32 `%APPDATA%\claude-bridge\<hash>` path that the
+  // ~/.claude-bridge tilde regex misses, and a SIBLING daemon's dir that the
+  // own-configDir check below misses). delete-dir is CLI-only, never delegated.
+  if (/[/\\]claude-bridge[/\\][0-9a-f]{16}(?:[/\\]|\b)/i.test(command)) {
+    return deny("write/read of a claude-bridge per-daemon config dir");
+  }
   // Absolute config-dir path appearing literally in the command (case-folded
   // on win32 so a case-variant of the auth-dir path cannot slip the check).
   const hay = NOCASE ? command.toLowerCase() : command;
