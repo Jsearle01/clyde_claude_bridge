@@ -9,7 +9,7 @@ import {
   IpcClientConnectionError,
   IpcClientTimeoutError,
 } from "../ipc-client.js";
-import { getCliPidPath } from "../util/paths.js";
+import { selectDaemonTarget } from "../util/selector.js";
 import { checkStalePid } from "../util/pidfile.js";
 
 const TOKEN_ROTATE_TIMEOUT_MS = 10000;
@@ -38,6 +38,10 @@ export class TokenRotateTimeoutError extends Error {
 }
 
 export interface TokenRotateOpts {
+  /** T-CLI-1: selectors. */
+  workspace?: string;
+  name?: string;
+  daemonsDir?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -55,8 +59,16 @@ export function formatTokenRotateOutput(newToken: string): string {
 export async function tokenRotateCommand(
   opts: TokenRotateOpts = {},
 ): Promise<void> {
-  const pidPath = opts.pidPath ?? getCliPidPath();
-  const state = await checkStalePid(pidPath);
+  // T-CLI-1: target via the unified selector (--workspace / --name / asymmetric
+  // default) instead of the flat pid path.
+  const target = await selectDaemonTarget({
+    workspace: opts.workspace,
+    name: opts.name,
+    daemonsDir: opts.daemonsDir,
+    addressOverride: opts.addressOverride,
+    pidPath: opts.pidPath,
+  });
+  const state = await checkStalePid(target.pidPath);
   if (state === "absent" || state === "stale") {
     throw new DaemonNotRunningError();
   }
@@ -65,7 +77,7 @@ export async function tokenRotateCommand(
     const response = await sendIpc(
       { kind: "token_rotate" },
       {
-        addressOverride: opts.addressOverride,
+        addressOverride: target.addressOverride,
         timeoutMs: TOKEN_ROTATE_TIMEOUT_MS,
       },
     );

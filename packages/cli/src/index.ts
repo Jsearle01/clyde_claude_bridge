@@ -152,14 +152,12 @@ program
 
 program
   .command("stop")
-  .description("Stop the running daemon (graceful shutdown via IPC).")
-  .option(
-    "--workspace <path>",
-    "target the per-daemon daemon serving this workspace (P3′); omit for the legacy single daemon",
-  )
-  .action(async (opts: { workspace?: string }) => {
+  .description("Stop a running daemon (graceful shutdown via IPC).")
+  .option("--workspace <path>", "target the daemon serving this workspace")
+  .option("--name <name>", "target the daemon by name (see `status`)")
+  .action(async (opts: { workspace?: string; name?: string }) => {
     try {
-      await stopCommand({ workspace: opts.workspace });
+      await stopCommand({ workspace: opts.workspace, name: opts.name });
     } catch (err) {
       process.exit(reportError(err));
     }
@@ -167,14 +165,12 @@ program
 
 program
   .command("status")
-  .description("Print daemon + tunnel status.")
-  .option(
-    "--workspace <path>",
-    "target the per-daemon daemon serving this workspace (P3′); omit for the legacy single daemon",
-  )
-  .action(async (opts: { workspace?: string }) => {
+  .description("Print daemon + tunnel status (bare = all daemons).")
+  .option("--workspace <path>", "target the daemon serving this workspace")
+  .option("--name <name>", "target the daemon by name")
+  .action(async (opts: { workspace?: string; name?: string }) => {
     try {
-      await statusCommand({ workspace: opts.workspace });
+      await statusCommand({ workspace: opts.workspace, name: opts.name });
     } catch (err) {
       process.exit(reportError(err));
     }
@@ -182,15 +178,23 @@ program
 
 program
   .command("tail-log")
-  .description("Stream the daemon log to stdout.")
+  .description("Stream a daemon's log to stdout.")
   .option("-f, --follow", "follow the log for new appends")
-  .action(async (opts: { follow?: boolean }) => {
-    try {
-      await tailLogCommand({ follow: opts.follow });
-    } catch (err) {
-      process.exit(reportError(err));
-    }
-  });
+  .option("--workspace <path>", "target the daemon serving this workspace")
+  .option("--name <name>", "target the daemon by name")
+  .action(
+    async (opts: { follow?: boolean; workspace?: string; name?: string }) => {
+      try {
+        await tailLogCommand({
+          follow: opts.follow,
+          workspace: opts.workspace,
+          name: opts.name,
+        });
+      } catch (err) {
+        process.exit(reportError(err));
+      }
+    },
+  );
 
 const tokenCmd = program
   .command("token")
@@ -198,9 +202,11 @@ const tokenCmd = program
 tokenCmd
   .command("rotate")
   .description("Generate a new daemon token; invalidate the previous one.")
-  .action(async () => {
+  .option("--workspace <path>", "target the daemon serving this workspace")
+  .option("--name <name>", "target the daemon by name")
+  .action(async (opts: { workspace?: string; name?: string }) => {
     try {
-      await tokenRotateCommand();
+      await tokenRotateCommand({ workspace: opts.workspace, name: opts.name });
     } catch (err) {
       process.exit(reportError(err));
     }
@@ -210,14 +216,26 @@ program
   .command("unbind")
   .argument("[target]", "binding to unbind (a workspace identifier or client id)")
   .option("--all", "unbind ALL bindings (opt-in; required to clear everything)")
+  .option("--workspace <path>", "target the daemon serving this workspace")
+  .option("--name <name>", "target the daemon by name")
   .description("Tear down an OAuth binding (or --all). Requires an explicit target.")
-  .action(async (target: string | undefined, opts: { all?: boolean }) => {
-    try {
-      await unbindCommand({ target, all: opts.all });
-    } catch (err) {
-      process.exit(reportError(err));
-    }
-  });
+  .action(
+    async (
+      target: string | undefined,
+      opts: { all?: boolean; workspace?: string; name?: string },
+    ) => {
+      try {
+        await unbindCommand({
+          target,
+          all: opts.all,
+          workspace: opts.workspace,
+          name: opts.name,
+        });
+      } catch (err) {
+        process.exit(reportError(err));
+      }
+    },
+  );
 
 const tunnelCmd = program
   .command("tunnel")
@@ -225,9 +243,11 @@ const tunnelCmd = program
 tunnelCmd
   .command("restart")
   .description("Restart the cloudflared tunnel; print the new URL.")
-  .action(async () => {
+  .option("--workspace <path>", "target the daemon serving this workspace")
+  .option("--name <name>", "target the daemon by name")
+  .action(async (opts: { workspace?: string; name?: string }) => {
     try {
-      await tunnelRestartCommand();
+      await tunnelRestartCommand({ workspace: opts.workspace, name: opts.name });
     } catch (err) {
       process.exit(reportError(err));
     }

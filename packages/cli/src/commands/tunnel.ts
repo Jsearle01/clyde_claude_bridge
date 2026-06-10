@@ -9,7 +9,7 @@ import {
   IpcClientConnectionError,
   IpcClientTimeoutError,
 } from "../ipc-client.js";
-import { getCliPidPath } from "../util/paths.js";
+import { selectDaemonTarget } from "../util/selector.js";
 import { checkStalePid } from "../util/pidfile.js";
 import { DaemonNotRunningError } from "./token.js";
 
@@ -39,6 +39,10 @@ export class TunnelRestartFailedError extends Error {
 }
 
 export interface TunnelRestartOpts {
+  /** T-CLI-1: selectors. */
+  workspace?: string;
+  name?: string;
+  daemonsDir?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -56,8 +60,15 @@ export function formatTunnelRestartOutput(newUrl: string): string {
 export async function tunnelRestartCommand(
   opts: TunnelRestartOpts = {},
 ): Promise<void> {
-  const pidPath = opts.pidPath ?? getCliPidPath();
-  const state = await checkStalePid(pidPath);
+  // T-CLI-1: target via the unified selector instead of the flat pid path.
+  const target = await selectDaemonTarget({
+    workspace: opts.workspace,
+    name: opts.name,
+    daemonsDir: opts.daemonsDir,
+    addressOverride: opts.addressOverride,
+    pidPath: opts.pidPath,
+  });
+  const state = await checkStalePid(target.pidPath);
   if (state === "absent" || state === "stale") {
     throw new DaemonNotRunningError();
   }
@@ -66,7 +77,7 @@ export async function tunnelRestartCommand(
     const response = await sendIpc(
       { kind: "tunnel_restart" },
       {
-        addressOverride: opts.addressOverride,
+        addressOverride: target.addressOverride,
         timeoutMs: TUNNEL_RESTART_TIMEOUT_MS,
       },
     );

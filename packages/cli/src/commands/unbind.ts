@@ -13,7 +13,7 @@ import {
   IpcClientConnectionError,
   IpcClientTimeoutError,
 } from "../ipc-client.js";
-import { getCliPidPath } from "../util/paths.js";
+import { selectDaemonTarget } from "../util/selector.js";
 import { checkStalePid } from "../util/pidfile.js";
 import { DaemonNotRunningError } from "./token.js";
 
@@ -61,6 +61,10 @@ export interface UnbindResultEntry {
 export interface UnbindOpts {
   target?: string;
   all?: boolean;
+  /** T-CLI-1: selectors — which daemon's binding to tear down. */
+  workspace?: string;
+  name?: string;
+  daemonsDir?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -105,8 +109,16 @@ export async function unbindCommand(opts: UnbindOpts = {}): Promise<void> {
     throw new UnbindTargetRequiredError();
   }
 
-  const pidPath = opts.pidPath ?? getCliPidPath();
-  const state = await checkStalePid(pidPath);
+  // T-CLI-1: target the right DAEMON via the unified selector (the binding-level
+  // target/--all is unchanged — it composes with delete-dir at the dir level).
+  const sel = await selectDaemonTarget({
+    workspace: opts.workspace,
+    name: opts.name,
+    daemonsDir: opts.daemonsDir,
+    addressOverride: opts.addressOverride,
+    pidPath: opts.pidPath,
+  });
+  const state = await checkStalePid(sel.pidPath);
   if (state === "absent" || state === "stale") {
     throw new DaemonNotRunningError();
   }
@@ -115,7 +127,7 @@ export async function unbindCommand(opts: UnbindOpts = {}): Promise<void> {
     const response = await sendIpc(
       { kind: "unbind_binding", target: target ?? null, all },
       {
-        addressOverride: opts.addressOverride,
+        addressOverride: sel.addressOverride,
         timeoutMs: UNBIND_TIMEOUT_MS,
       },
     );

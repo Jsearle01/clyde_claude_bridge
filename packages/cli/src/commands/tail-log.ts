@@ -12,11 +12,15 @@ import { createReadStream, watch, type FSWatcher } from "node:fs";
 import { stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { loadCliConfig } from "../util/config.js";
-import { getCliConfigPath } from "../util/paths.js";
+import { selectDaemonTarget } from "../util/selector.js";
 
 export interface TailLogOpts {
   follow?: boolean;
-  /** Test-only override. */
+  /** T-CLI-1: selectors — which daemon's log to tail. */
+  workspace?: string;
+  name?: string;
+  daemonsDir?: string;
+  /** Test-only override (the per-daemon config path). */
   configPath?: string;
 }
 
@@ -48,7 +52,19 @@ async function dumpFrom(path: string, start: number): Promise<void> {
 }
 
 export async function tailLogCommand(opts: TailLogOpts = {}): Promise<void> {
-  const configPath = opts.configPath ?? getCliConfigPath();
+  // T-CLI-1: resolve the per-daemon config (→ its log path) via the unified
+  // selector instead of the flat config. The test `configPath` override wins.
+  let configPath: string;
+  if (opts.configPath !== undefined) {
+    configPath = opts.configPath;
+  } else {
+    const target = await selectDaemonTarget({
+      workspace: opts.workspace,
+      name: opts.name,
+      daemonsDir: opts.daemonsDir,
+    });
+    configPath = target.configPath;
+  }
   const config = await loadCliConfig(configPath);
   const logPath = config.log.path;
 

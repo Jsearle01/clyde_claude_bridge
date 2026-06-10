@@ -4,27 +4,22 @@
 // of waiting for a connection refused).
 
 import { homedir } from "node:os";
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import {
-  DaemonAdvertSchema,
-  type DaemonAdvert,
-  type StatusPayload,
-} from "@claude-bridge/shared";
+import { type StatusPayload } from "@claude-bridge/shared";
 import { sendIpc } from "../ipc-client.js";
-import { resolveCliTarget, getCliConfigDir } from "../util/paths.js";
+import { selectDaemonTarget, enumerateAdverts } from "../util/selector.js";
 import { checkStalePid, readPidFromFile } from "../util/pidfile.js";
 
 const STATUS_TIMEOUT_MS = 10000;
 
 export interface StatusOpts {
-  /** P3′-3-fix: target a specific per-daemon (P3′) daemon by its workspace. */
+  /** Selectors — target a specific per-daemon daemon by workspace OR name. */
   workspace?: string;
+  name?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
   homeDir?: string;
-  /** Test-only: the adverts dir bare `status` enumerates. */
+  /** Test-only: the adverts dir bare `status` enumerates / the selector uses. */
   daemonsDir?: string;
 }
 
@@ -152,6 +147,7 @@ export async function statusCommand(opts: StatusOpts = {}): Promise<void> {
   // misreport "down" while daemons are actually running.
   if (
     (opts.workspace !== undefined && opts.workspace !== "") ||
+    (opts.name !== undefined && opts.name !== "") ||
     opts.addressOverride !== undefined ||
     opts.pidPath !== undefined
   ) {
@@ -160,11 +156,18 @@ export async function statusCommand(opts: StatusOpts = {}): Promise<void> {
   return statusEnumerate(opts);
 }
 
-// Single-daemon status: --workspace target, or legacy flat (test overrides).
+// Single-daemon status: --workspace / --name target (or test overrides), routed
+// through the unified selector.
 async function statusTargeted(opts: StatusOpts): Promise<void> {
-  const target = resolveCliTarget(opts.workspace);
-  const pidPath = opts.pidPath ?? target.pidPath;
-  const addressOverride = opts.addressOverride ?? target.addressOverride;
+  const target = await selectDaemonTarget({
+    workspace: opts.workspace,
+    name: opts.name,
+    daemonsDir: opts.daemonsDir,
+    addressOverride: opts.addressOverride,
+    pidPath: opts.pidPath,
+  });
+  const pidPath = target.pidPath;
+  const addressOverride = target.addressOverride;
   const state = await checkStalePid(pidPath);
   if (state === "absent" || state === "stale") {
     process.stdout.write("Daemon:    down\n");
@@ -186,28 +189,9 @@ async function statusTargeted(opts: StatusOpts): Promise<void> {
 // print a status block for each. A reachable advert handshakes + reports full
 // status; an unreachable one (stale advert, daemon gone) is flagged, not hidden.
 async function statusEnumerate(opts: StatusOpts): Promise<void> {
-  const daemonsDir = opts.daemonsDir ?? join(getCliConfigDir(), "daemons");
   const home = opts.homeDir ?? (process.env.HOME ?? homedir());
-
-  let files: string[] = [];
-  try {
-    files = await readdir(daemonsDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
-  const adverts: DaemonAdvert[] = [];
-  for (const file of files) {
-    if (!file.endsWith(".json")) continue;
-    try {
-      adverts.push(
-        DaemonAdvertSchema.parse(
-          JSON.parse(await readFile(join(daemonsDir, file), "utf8")),
-        ),
-      );
-    } catch {
-      // Unparseable / partial advert — skip.
-    }
-  }
+  // T-CLI-1: shares the selector's advert enumeration (one enumerator).
+  const adverts = await enumerateAdverts(opts.daemonsDir);
 
   if (adverts.length === 0) {
     process.stdout.write("No daemons running.\n");

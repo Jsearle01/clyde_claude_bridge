@@ -14,6 +14,9 @@ import {
   DaemonStopTimeoutError,
   type ProcessControl,
 } from "../../src/commands/stop.js";
+import {
+  AmbiguousDaemonError,
+} from "../../src/util/selector.js";
 import { readFile } from "node:fs/promises";
 
 const silentLogger: Logger = {
@@ -177,6 +180,52 @@ describe("verifyTerminationAndCleanup (reliable stop)", () => {
     expect(signals).toEqual([]); // never signalled self
     await expect(readFile(pidPath, "utf8")).rejects.toMatchObject({
       code: "ENOENT",
+    });
+  });
+
+  // T-CLI-1 (AC-C1-3): bare `stop` no longer falls through to the flat layout and
+  // misreports "Daemon not running" while per-daemon daemons are live. It routes
+  // through the unified selector: act-on-sole if one, error-and-list if many.
+  describe("bare stop acts-on-sole / errors-many, never flat-fallthrough misreport", () => {
+    let spy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      spy = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation(() => true);
+    });
+    afterEach(() => {
+      spy.mockRestore();
+    });
+    function advert(name: string): string {
+      return JSON.stringify({
+        canonical_workspace: `c:\\ws\\${name}`,
+        name,
+        pipe: `pipe-${name}`,
+        port: 7423,
+        pid: 1,
+        started_at: "2026-06-10T00:00:00.000Z",
+      });
+    }
+    function captured(): string {
+      return spy.mock.calls.map((c) => c[0] as string).join("");
+    }
+
+    it("MANY daemons → AmbiguousDaemonError (lists), NOT silent 'Daemon not running'", async () => {
+      const daemonsDir = await mkdtemp(join(tmpdir(), "cb-stop-many-"));
+      await writeFile(join(daemonsDir, "a.json"), advert("alpha"));
+      await writeFile(join(daemonsDir, "b.json"), advert("beta"));
+      await expect(stopCommand({ daemonsDir })).rejects.toBeInstanceOf(
+        AmbiguousDaemonError,
+      );
+      expect(captured()).not.toContain("Daemon not running"); // the killed misreport
+      await rm(daemonsDir, { recursive: true, force: true });
+    });
+
+    it("NO daemons → idempotent 'No daemons running.' via the selector (not flat)", async () => {
+      const daemonsDir = await mkdtemp(join(tmpdir(), "cb-stop-none-"));
+      await stopCommand({ daemonsDir });
+      expect(captured()).toContain("No daemons running.");
+      await rm(daemonsDir, { recursive: true, force: true });
     });
   });
 });

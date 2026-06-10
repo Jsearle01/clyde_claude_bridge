@@ -9,7 +9,11 @@ import {
   IpcClientConnectionError,
   IpcClientTimeoutError,
 } from "../ipc-client.js";
-import { resolveCliTarget } from "../util/paths.js";
+import {
+  selectDaemonTarget,
+  NoDaemonsRunningError,
+  type SelectedTarget,
+} from "../util/selector.js";
 import {
   checkStalePid,
   readPidFromFile,
@@ -78,8 +82,11 @@ export class DaemonStopTimeoutError extends Error {
 }
 
 export interface StopOpts {
-  /** P3′-3-fix: target a specific per-daemon (P3′) daemon by its workspace. */
+  /** T-CLI-1: selectors — target a per-daemon daemon by workspace OR name. */
   workspace?: string;
+  name?: string;
+  /** Test-only: the adverts dir the selector enumerates. */
+  daemonsDir?: string;
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
@@ -93,11 +100,30 @@ export interface StopOpts {
 }
 
 export async function stopCommand(opts: StopOpts = {}): Promise<void> {
-  // P3′-3-fix (finding B): `--workspace` targets that per-daemon daemon's pid +
-  // pipe; without it, the legacy flat layout. Explicit test overrides win.
-  const target = resolveCliTarget(opts.workspace);
-  const pidPath = opts.pidPath ?? target.pidPath;
-  const addressOverride = opts.addressOverride ?? target.addressOverride;
+  // T-CLI-1: resolve the target through the unified selector — --workspace /
+  // --name / the bare asymmetric default (act-on-sole / error-and-list). This
+  // KILLS the old flat-fallthrough misreport: bare `stop` no longer reads the
+  // empty flat pid path and claims "Daemon not running" while per-daemon daemons
+  // are live; it acts on the sole daemon, or errors-and-lists when there are many.
+  let target: SelectedTarget;
+  try {
+    target = await selectDaemonTarget({
+      workspace: opts.workspace,
+      name: opts.name,
+      daemonsDir: opts.daemonsDir,
+      addressOverride: opts.addressOverride,
+      pidPath: opts.pidPath,
+    });
+  } catch (err) {
+    if (err instanceof NoDaemonsRunningError) {
+      // Idempotent: nothing to stop is success (the v1 stop semantic).
+      process.stdout.write("No daemons running.\n");
+      return;
+    }
+    throw err; // Ambiguous / name-not-found → reportError prints + exits 1
+  }
+  const pidPath = target.pidPath;
+  const addressOverride = target.addressOverride;
   const state = await checkStalePid(pidPath);
 
   if (state === "absent") {
