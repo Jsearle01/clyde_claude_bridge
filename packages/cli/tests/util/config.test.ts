@@ -42,11 +42,13 @@ describe("util/config", () => {
     await expect(loadCliConfig(join(tempDir, "nope.json"))).rejects.toThrow();
   });
 
-  it("loadCliConfig throws on schema violation (missing auth.token)", async () => {
+  it("loadCliConfig throws on schema violation (malformed auth.token)", async () => {
+    // T-BEARER-1: a MISSING auth.token is now valid (optional/inert). A PRESENT
+    // token must still match the regex — that's the remaining violation.
     const bad = {
       version: 1,
       daemon: { ipc_socket: "/tmp/daemon.sock" },
-      auth: {},
+      auth: { token: "not-a-valid-token" },
       tunnel: {},
       audit: { path: "/tmp/audit.jsonl" },
       log: { path: "/tmp/daemon.log" },

@@ -31,7 +31,8 @@ describe("Config init + load", () => {
   it("initConfig produces a valid Config (13.a)", async () => {
     const config = await initConfig(configPath);
     expect(config.version).toBe(1);
-    expect(config.auth.token).toMatch(/^cb_live_[A-Z2-7]{32}$/);
+    // T-BEARER-1: no `auth` block is minted — the static Bearer was removed.
+    expect(config.auth).toBeUndefined();
     expect(config.daemon.bind_host).toBe("127.0.0.1");
     expect(config.daemon.bind_port).toBe(7423);
     expect(config.tunnel.provider).toBe("cloudflared");

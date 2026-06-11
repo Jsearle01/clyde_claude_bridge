@@ -9,7 +9,7 @@
 // the daemon is past the listening + tunnel-up gate. The summary lines
 // below it match `01-p0-bus.md` §"claude-bridge start".
 
-import { writeFile, chmod, stat, mkdir } from "node:fs/promises";
+import { stat, mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -25,7 +25,6 @@ import {
 import { reclaimOrphanTunnel } from "./tunnel/reclaim.js";
 import { DropRecovery } from "./tunnel/drop-recovery.js";
 import { randomUUID } from "node:crypto";
-import { generateToken } from "./config/token.js";
 import { createLogger, type Logger } from "./log/logger.js";
 import { AuditLog } from "./audit/log.js";
 import { makeInteractionLog, InteractionRecorder } from "./audit/interaction.js";
@@ -420,10 +419,11 @@ async function main(): Promise<void> {
     });
   }
 
-  // 5. State + token closure (token is mutable; T-0017 token rotate swaps it).
+  // 5. State. T-BEARER-1: the static Bearer was removed — no token closure /
+  // getExpectedToken; OAuth bound tokens (resolved via lookupOAuthToken) are the
+  // only credential. config.auth.token is retained as an inert/deprecated field
+  // (nothing reads it for auth).
   const state = makeInitialState(config);
-  let currentToken = config.auth.token;
-  const getExpectedToken = (): string => currentToken;
 
   // 5.5. Workspace registry (P2 — T-P2-007). Backed by workspaces.json
   // (the persistent trust + identifier store from T-P2-003). The
@@ -708,7 +708,6 @@ async function main(): Promise<void> {
     bindPort: config.daemon.bind_port,
     autoAllocate,
     logger,
-    getExpectedToken,
     auditLog,
     state,
     registry,
@@ -865,7 +864,6 @@ async function main(): Promise<void> {
         // T-TUNNEL-1 (B): a dropped tunnel's respawned url awaiting confirm —
         // surfaced so an operator with no extension connected still learns of it.
         pending_tunnel_url: dropRecovery.pendingUrl(),
-        token_suffix: currentToken.slice(-4),
         audit_path: config.audit.path,
         audit_size_bytes: auditSizeBytes,
         attached_workspaces: connected_extensions.length,
@@ -887,19 +885,7 @@ async function main(): Promise<void> {
       }
       return Promise.resolve();
     },
-    tokenRotate: async () => {
-      const newToken = generateToken();
-      config.auth.token = newToken;
-      await writeFile(configPath, JSON.stringify(config, null, 2), {
-        mode: 0o600,
-      });
-      if (process.platform !== "win32") {
-        await chmod(configPath, 0o600);
-      }
-      currentToken = newToken;
-      logger.info("token rotated", { suffix: newToken.slice(-4) });
-      return { new_token: newToken };
-    },
+    // T-BEARER-1: tokenRotate removed — there is no Bearer to rotate.
     tunnelRestart: async () => {
       const newUrl = await tunnelManager.restart();
       // Listeners already updated state.
@@ -1091,7 +1077,6 @@ async function main(): Promise<void> {
     `Daemon up on ${config.daemon.bind_host}:${config.daemon.bind_port}\n`,
   );
   process.stdout.write(`Tunnel: ${tunnelUrl}\n`);
-  process.stdout.write(`Token:  ${currentToken}\n`);
 
   // 12. Signal handlers.
   const onSignal = (signal: NodeJS.Signals): void => {

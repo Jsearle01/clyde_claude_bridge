@@ -5,7 +5,6 @@
 import { mkdir, writeFile, chmod, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { type Config } from "@claude-bridge/shared";
-import { generateToken } from "./token.js";
 
 export class ConfigAlreadyExistsError extends Error {
   constructor(public readonly path: string) {
@@ -44,7 +43,8 @@ export async function initConfig(path: string): Promise<Config> {
       bind_port: 7423,
       ipc_socket: join(parentDir, "daemon.sock"),
     },
-    auth: { token: generateToken() },
+    // T-BEARER-1: no `auth` block — the static Bearer was removed. OAuth-bound
+    // tokens are the only credential; new configs carry no token.
     tunnel: {
       provider: "cloudflared",
       binary: "cloudflared",

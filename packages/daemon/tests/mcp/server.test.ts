@@ -108,7 +108,10 @@ describe("McpServer", () => {
       bindHost: opts.bindHost ?? "127.0.0.1",
       bindPort: opts.bindPort ?? 0,
       logger: silentLogger,
-      getExpectedToken: () => token,
+      // T-BEARER-1: the test token now resolves as a BOUND OAuth token (the
+      // static Bearer was removed; OAuth-bound is the only credential).
+      lookupOAuthToken: (t) =>
+        t === token ? { bound_workspace: "ws-test", granularity: null } : null,
       auditLog,
       state,
       registry,
@@ -175,7 +178,10 @@ describe("McpServer", () => {
       bindHost: "127.0.0.1",
       bindPort: addr.port,
       logger: silentLogger,
-      getExpectedToken: () => token,
+      // T-BEARER-1: the test token now resolves as a BOUND OAuth token (the
+      // static Bearer was removed; OAuth-bound is the only credential).
+      lookupOAuthToken: (t) =>
+        t === token ? { bound_workspace: "ws-test", granularity: null } : null,
       auditLog,
       state: makeInitialState("0.1.0"),
       registry,

@@ -242,7 +242,8 @@ describe("CB-SMOKE-READINESS-BATCH — listBindings + revokeAll", () => {
 });
 
 describe("T-P3-004b — AC-12d: a REVOKED token authenticates as INVALID, never unconstrained", () => {
-  const STATIC_BEARER = "cb_live_STATICSTATICSTATICSTATICSTAT";
+  // T-BEARER-1: authenticate() is now 2-arg (OAuth lookup only). The guard
+  // STRENGTHENS — there is no unconstrained path to fall through to at all.
   function reqWith(token: string): IncomingMessage {
     return { headers: { authorization: `Bearer ${token}` } } as IncomingMessage;
   }
@@ -265,7 +266,7 @@ describe("T-P3-004b — AC-12d: a REVOKED token authenticates as INVALID, never 
 
     // Before revoke: the token authenticates, bound to ws-A (T-P3-005: the
     // binding now carries a default granularity, null here).
-    const before = authenticate(reqWith(access_token), STATIC_BEARER, lookup);
+    const before = authenticate(reqWith(access_token), lookup);
     expect(before.ok).toBe(true);
     if (before.ok) {
       expect(before.binding).toEqual({
@@ -277,11 +278,41 @@ describe("T-P3-004b — AC-12d: a REVOKED token authenticates as INVALID, never 
 
     // Revoke (unbind), then present the SAME token again.
     await store.revokeByWorkspace("ws-A");
-    const after = authenticate(reqWith(access_token), STATIC_BEARER, lookup);
+    const after = authenticate(reqWith(access_token), lookup);
 
     // CRITICAL: rejected — must NOT be {kind:"unconstrained"} (that would be
     // an UPGRADE to global access on revocation — the inverse-isolation trap).
     expect(after).toEqual({ ok: false, reason: "invalid_token" });
+  });
+
+  it("OAuth bootstrap establishes a binding without the Bearer", async () => {
+    // AC-B1-3: the DCR/token flow's output (a minted bound token) authenticates
+    // with NO Bearer presented anywhere — proving removal didn't break the path
+    // that SUPERSEDES it. The bootstrap (DCR/token unauthenticated; consent IPC)
+    // never needed the Bearer; here we mint a binding + authenticate it cold.
+    const store = new TokenStore(storePath);
+    await store.load();
+    const { access_token } = await store.mint({
+      client_id: "boot",
+      bound_workspace: "ws-boot",
+    });
+    const lookup = (
+      t: string,
+    ): { bound_workspace: string | null; granularity: null } | null => {
+      const b = store.lookup(t);
+      return b === null
+        ? null
+        : { bound_workspace: b.bound_workspace, granularity: null };
+    };
+    const r = authenticate(reqWith(access_token), lookup);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.binding).toEqual({
+        kind: "bound",
+        workspace: "ws-boot",
+        granularity: null,
+      });
+    }
   });
 });
 

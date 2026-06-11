@@ -2,13 +2,13 @@
 
 **Repository:** https://github.com/Jsearle01/clyde_claude_bridge
 
-An MCP bridge that connects Claude.ai project chats to local development workspaces over a Cloudflare tunnel. The bridge daemon hosts a single MCP endpoint, owns the bearer token, writes an audit log, and coordinates headless delegations to a Claude Code SDK sub-agent running against a configured workspace. Delegations enqueue, run to completion (or cancel), and return a structured report with diff, files-changed, transcript URI, and shell-command record.
+An MCP bridge that connects Claude.ai project chats to local development workspaces over a Cloudflare tunnel. The bridge daemon hosts a single MCP endpoint, authenticates clients via per-workspace OAuth bound tokens, writes an audit log, and coordinates headless delegations to a Claude Code SDK sub-agent running against a configured workspace. Delegations enqueue, run to completion (or cancel), and return a structured report with diff, files-changed, transcript URI, and shell-command record.
 
 **Project status:** **P0 GATE-CLOSED 2026-05-23**; **P1 GATE-CLOSED 2026-05-24**. P2 (VS Code extension) is a future gate; design conversation pending. All 10 P0 ACs VERIFIED; all 16 P1 ACs MECH/MCP/INFER-VERIFIED on both Windows and WSL Ubuntu. The current tool surface: `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. See [`docs/snapshot/orchestrator-context-p1-close.md`](docs/snapshot/orchestrator-context-p1-close.md) for the full P1 close snapshot.
 
 ## What is this?
 
-A long-running local daemon publishes one MCP endpoint over a Cloudflare ephemeral tunnel (`*.trycloudflare.com`). An MCP client — MCP Inspector, Claude Code, Claude Desktop, or any HTTP-capable MCP client — connects to that endpoint with a Bearer token. The daemon authenticates, dispatches the request to a registered tool, writes an audit entry, and responds.
+A long-running local daemon publishes one MCP endpoint over a Cloudflare ephemeral tunnel (`*.trycloudflare.com`). An OAuth-capable MCP client (e.g. Claude.ai's custom connector) connects to that endpoint, completes the OAuth binding flow (DCR → consent → workspace-bound token), and the daemon authenticates the bound token, dispatches the request to a registered tool, writes an audit entry, and responds.
 
 P0 shipped the bus. P1 shipped the delegation surface: `delegate_to_claude_code` enqueues an SDK-driven Claude Code session against a configured workspace; `poll_delegation` long-polls for completion (event-driven, no busy-wait); `cancel_delegation` aborts via AbortController. The runner is single-concurrent in P1. Read-only delegations enforce a `disallowedTools` belt-and-suspenders to prevent the SDK's plan-mode `ExitPlanMode` escape hatch. Transcripts persist as JSONL at `~/.claude-bridge/transcripts/{job_id}.jsonl`; reports include git/fallback diff, files-created/modified/deleted, shell commands, and truncation reason if any.
 
@@ -62,7 +62,6 @@ Output:
 ```
 Daemon up on 127.0.0.1:7423
 Tunnel: https://random-words-here.trycloudflare.com
-Token:  cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
 
 The CLI exits; the daemon stays running detached. Subsequent commands work from any directory:
@@ -73,29 +72,32 @@ claude-bridge tail-log   # stream daemon log
 claude-bridge stop       # graceful shutdown
 ```
 
-Token and tunnel management:
+Tunnel management:
 
 ```bash
-claude-bridge token rotate    # mint new token; old token immediately invalidated
 claude-bridge tunnel restart  # restart cloudflared with a new URL
 ```
 
 ## Connecting an MCP client
 
-Recommended for testing: **[MCP Inspector](https://github.com/modelcontextprotocol/inspector)**
+The daemon authenticates via the **OAuth binding flow** — a client registers
+(RFC 7591 DCR), the operator consents (per-workspace), and the daemon issues a
+**workspace-bound** access token. There is no static Bearer: every connection is
+bound to exactly one workspace, consent-gated, and revocable (`claude-bridge
+unbind`). This is the model Claude.ai's custom MCP connector uses.
 
-```bash
-npx @modelcontextprotocol/inspector
-```
+Point the connector at `<tunnel-url>/mcp` and complete the OAuth consent prompt;
+the daemon binds the resulting token to the workspace you approve. `tools/list`
+then shows `ping`, `delegate_to_claude_code`, `poll_delegation`,
+`cancel_delegation`. A typical delegation flow: call `delegate_to_claude_code`
+with `{"prompt": "...", "mode": "agentic"}` to enqueue, then `poll_delegation`
+with `{"job_id": "...", "wait_ms": 30000}` until the response includes a `report`
+field. See the [runbook's Operating Delegations section](docs/runbook.md#operating-delegations-p1)
+for tool semantics and the [walkthrough](docs/walkthrough.md) for end-to-end usage.
 
-In the Inspector UI, set:
-- Transport: **Streamable HTTP**
-- URL: `<tunnel-url>/mcp`
-- Header: `Authorization: Bearer <token>`
-
-Click `Connect`, then `tools/list` should show four tools: `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. A typical delegation flow: call `delegate_to_claude_code` with `{"prompt": "...", "mode": "agentic"}` to enqueue, then `poll_delegation` with `{"job_id": "...", "wait_ms": 30000}` until the response includes a `report` field. See the [runbook's Operating Delegations section](docs/runbook.md#operating-delegations-p1) for tool semantics and the [walkthrough](docs/walkthrough.md) for end-to-end usage examples.
-
-**Claude.ai connector UI caveat.** The custom MCP connector in Claude.ai's project settings requires OAuth client credentials; static Bearer tokens are not supported. For Bearer-auth use, drive the daemon via MCP Inspector, Claude Code (`claude mcp add --transport http <url>/mcp --header "Authorization: Bearer <token>"`), or Claude Desktop's `mcpServers` config entry. **OAuth in the daemon's auth layer is P3 priority #1 (C-27)**; deferred from P2 to keep the gate-close shape clean. See [`docs/runbook.md`](docs/runbook.md) for full client procedures and [`docs/snapshot/orchestrator-context-p2-close.md`](docs/snapshot/orchestrator-context-p2-close.md) § P3 entry surface for the P3 framing.
+> **Note (T-BEARER-1):** the legacy unconstrained static Bearer was removed —
+> OAuth-bound is the only auth model. A non-OAuth MCP client (raw `curl`, a
+> static-token-only connector) can no longer authenticate.
 
 ## P2 — VS Code Extension + Real Workspace Registration
 

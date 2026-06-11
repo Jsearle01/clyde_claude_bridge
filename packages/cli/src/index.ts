@@ -22,12 +22,7 @@ import { tailLogCommand } from "./commands/tail-log.js";
 import { listCommand } from "./commands/list.js";
 import { directoriesCommand } from "./commands/directories.js";
 import { deleteDirCommand } from "./commands/delete-dir.js";
-import {
-  tokenRotateCommand,
-  DaemonNotRunningError,
-  TokenRotateConnectionLostError,
-  TokenRotateTimeoutError,
-} from "./commands/token.js";
+import { DaemonNotRunningError } from "./util/selector.js";
 import {
   unbindCommand,
   UnbindTargetAndAllError,
@@ -93,8 +88,6 @@ function reportErrorBody(err: unknown): void {
   }
   if (
     err instanceof DaemonNotRunningError ||
-    err instanceof TokenRotateConnectionLostError ||
-    err instanceof TokenRotateTimeoutError ||
     err instanceof TunnelRestartConnectionLostError ||
     err instanceof TunnelRestartTimeoutError ||
     err instanceof TunnelRestartFailedError ||
@@ -238,21 +231,8 @@ program
     },
   );
 
-const tokenCmd = program
-  .command("token")
-  .description("Token management.");
-tokenCmd
-  .command("rotate")
-  .description("Generate a new daemon token; invalidate the previous one.")
-  .option("--workspace <path>", "target the daemon serving this workspace")
-  .option("--name <name>", "target the daemon by name")
-  .action(async (opts: { workspace?: string; name?: string }) => {
-    try {
-      await tokenRotateCommand({ workspace: opts.workspace, name: opts.name });
-    } catch (err) {
-      process.exit(reportError(err));
-    }
-  });
+// T-BEARER-1: the `token` command (rotate) was removed — there is no static
+// Bearer to rotate (OAuth-bound tokens are the only credential).
 
 program
   .command("unbind")

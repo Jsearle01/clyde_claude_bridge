@@ -12,7 +12,6 @@ const validStatusPayload: StatusPayload = {
   endpoint: "127.0.0.1:7423",
   tunnel_status: "up",
   tunnel_url: "https://plum-otter-7821.trycloudflare.com",
-  token_suffix: "d219",
   audit_path: "/home/user/.claude-bridge/audit.jsonl",
   audit_size_bytes: 14336,
   attached_workspaces: 0,
@@ -22,7 +21,7 @@ describe("IpcRequestSchema", () => {
   it.each([
     { kind: "status" as const },
     { kind: "stop" as const },
-    { kind: "token_rotate" as const },
+    // T-BEARER-1: token_rotate removed.
     { kind: "tunnel_restart" as const },
   ])("parses valid request variant: $kind (5.a)", (input) => {
     expect(IpcRequestSchema.safeParse(input).success).toBe(true);
@@ -40,14 +39,10 @@ describe("IpcRequestSchema", () => {
 });
 
 describe("IpcResponseSchema", () => {
-  // Inert placeholder token: matches the cb_live_ regex but is obviously a
-  // fixture. Per CC-4, never write realistic-looking secrets in tests.
-  const FAKE_TOKEN = "cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-
   it.each([
     { kind: "status_ok" as const, payload: validStatusPayload },
     { kind: "stop_ok" as const },
-    { kind: "token_rotate_ok" as const, new_token: FAKE_TOKEN },
+    // T-BEARER-1: token_rotate_ok removed.
     {
       kind: "tunnel_restart_ok" as const,
       new_url: "https://plum-otter-7821.trycloudflare.com",
@@ -73,12 +68,7 @@ describe("StatusPayloadSchema", () => {
     const result = StatusPayloadSchema.parse(validStatusPayload);
     expect(result.daemon_pid).toBe(12345);
     expect(result.tunnel_status).toBe("up");
-    expect(result.token_suffix).toBe("d219");
     expect(result.attached_workspaces).toBe(0);
   });
-
-  it("rejects token_suffix of wrong length (5.h)", () => {
-    const input = { ...validStatusPayload, token_suffix: "d2199" };
-    expect(StatusPayloadSchema.safeParse(input).success).toBe(false);
-  });
+  // T-BEARER-1: the token_suffix field (and its length check, 5.h) was removed.
 });

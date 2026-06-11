@@ -52,7 +52,7 @@ function addressFor(socketPath: string): string {
 export interface IpcHandlers {
   status(): Promise<StatusPayload>;
   stop(): Promise<void>;
-  tokenRotate(): Promise<{ new_token: string }>;
+  // T-BEARER-1: tokenRotate removed — no static Bearer to rotate.
   tunnelRestart(): Promise<{ new_url: string }>;
   // CB-SMOKE-READINESS-BATCH: CLI-initiated unbind (`claude-bridge unbind`).
   // Optional so existing handler constructions (tests) keep compiling; when
@@ -651,10 +651,7 @@ export class IpcServer {
         await this.handlers.stop();
         return { kind: "stop_ok" };
       }
-      case "token_rotate": {
-        const { new_token } = await this.handlers.tokenRotate();
-        return { kind: "token_rotate_ok", new_token };
-      }
+      // T-BEARER-1: token_rotate removed.
       case "tunnel_restart": {
         const { new_url } = await this.handlers.tunnelRestart();
         return { kind: "tunnel_restart_ok", new_url };

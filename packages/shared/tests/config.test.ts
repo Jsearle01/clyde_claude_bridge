@@ -60,12 +60,19 @@ describe("ConfigSchema", () => {
     expect(result.log.level).toBe("info");
   });
 
-  it("rejects a config missing auth.token (3.c)", () => {
-    const input = { ...fullConfig, auth: {} };
-    expect(ConfigSchema.safeParse(input).success).toBe(false);
+  it("accepts a config with no auth block — T-BEARER-1 (3.c)", () => {
+    // The static Bearer was removed; `auth`/`auth.token` is now optional/inert.
+    // New configs omit it; existing on-disk configs that still carry it validate
+    // too (see 3.d — a PRESENT token must still match the regex).
+    const noAuth: Record<string, unknown> = { ...fullConfig };
+    delete noAuth.auth;
+    expect(ConfigSchema.safeParse(noAuth).success).toBe(true);
+    expect(ConfigSchema.safeParse({ ...fullConfig, auth: {} }).success).toBe(
+      true,
+    );
   });
 
-  it("rejects a config with a malformed auth.token (3.d)", () => {
+  it("a PRESENT auth.token must still match the regex — inert but validated (3.d)", () => {
     const input = { ...fullConfig, auth: { token: "wrong-format" } };
     expect(ConfigSchema.safeParse(input).success).toBe(false);
   });

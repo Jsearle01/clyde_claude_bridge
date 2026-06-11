@@ -3,11 +3,13 @@
 **Status:** Active
 **Last updated:** 2026-05-01
 
-> **Status (2026-05-30, post-P2):** P2 ships the developer workflow via Bearer-compatible
-> MCP clients (Claude Code CLI, MCP Inspector, Claude Desktop, raw curl). Claude.ai
-> project-chat integration via the connector UI requires OAuth in the daemon's auth
-> layer; deferred to P3. See C-27 in `docs/project-state.md` and § "OAuth deferral"
-> in `docs/walkthrough.md`.
+> **Status (T-BEARER-1, post-P3′):** OAuth-bound is the ONLY auth model. The
+> legacy unconstrained static Bearer (the P2 "Bearer-compatible MCP client" path —
+> Claude Code CLI, MCP Inspector, Claude Desktop, raw curl) was REMOVED: it
+> bypassed the per-workspace isolation (workspace-targeting enforcement + the
+> operator clamp), and a non-OAuth client can no longer authenticate. Claude.ai's
+> connector uses the OAuth binding flow (DCR → consent → workspace-bound token).
+> See C-27 in `docs/project-state.md`.
 
 ## Purpose
 

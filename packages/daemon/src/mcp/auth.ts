@@ -8,7 +8,6 @@
 
 import type { IncomingMessage } from "node:http";
 import type { OperationGranularity } from "@claude-bridge/shared";
-import { constantTimeEqual } from "../config/token.js";
 
 export type AuthFailureReason =
   | "missing_header"
@@ -16,21 +15,20 @@ export type AuthFailureReason =
   | "invalid_token";
 
 // T-P3-004a: the workspace constraint an authenticated request carries.
-// - "unconstrained": the legacy global static Bearer — no binding, retains
-//   pre-P3 global behavior (any registered workspace, per the tool's own
-//   resolution).
+// T-BEARER-1: the legacy global static Bearer ({kind:"unconstrained"}) was
+// removed — it bypassed the per-workspace isolation model (workspace-targeting
+// enforcement + the operator clamp). EVERY authenticated request is now an OAuth
+// bound token, so `bound` is the only kind:
 // - "bound": an OAuth access token — may act ONLY on `workspace`. A null
 //   workspace (a non-binding approve, T-P3-002R) acts on NOTHING; the
 //   enforcement layer rejects every workspace-targeting tool.
-export type WorkspaceBinding =
-  | { kind: "unconstrained" }
-  | {
-      kind: "bound";
-      workspace: string | null;
-      // T-P3-005: the binding's default operation granularity (null =
-      // unspecified → the gate resolves to its per_call fail-safe).
-      granularity: OperationGranularity | null;
-    };
+export type WorkspaceBinding = {
+  kind: "bound";
+  workspace: string | null;
+  // T-P3-005: the binding's default operation granularity (null =
+  // unspecified → the gate resolves to its per_call fail-safe).
+  granularity: OperationGranularity | null;
+};
 
 export type AuthResult =
   | { ok: true; token_suffix: string; binding: WorkspaceBinding }
@@ -66,10 +64,10 @@ function readAuthHeader(req: IncomingMessage): string | undefined {
 
 export function authenticate(
   req: IncomingMessage,
-  expectedToken: string,
-  // T-P3-004a: optional OAuth-token resolver. When a presented token isn't
-  // the static Bearer, it is looked up here; a hit yields a bound result.
-  lookupOAuthToken?: OAuthTokenLookup,
+  // T-BEARER-1: the OAuth-token resolver is now the ONLY credential path. The
+  // presented token must resolve to a binding; there is no static-Bearer
+  // fallback (the unconstrained path was removed).
+  lookupOAuthToken: OAuthTokenLookup,
 ): AuthResult {
   const header = readAuthHeader(req);
   if (header === undefined || header === "") {
@@ -88,17 +86,10 @@ export function authenticate(
     return { ok: false, reason: "malformed_header" };
   }
 
-  // 1. Legacy global static Bearer (constant-time compare). Unconstrained.
-  if (constantTimeEqual(presented, expectedToken)) {
-    return {
-      ok: true,
-      token_suffix: presented.slice(-4),
-      binding: { kind: "unconstrained" },
-    };
-  }
-
-  // 2. OAuth access token (T-P3-004a). A hit is workspace-bound.
-  const oauth = lookupOAuthToken?.(presented) ?? null;
+  // T-BEARER-1: OAuth access token is the ONLY accepted credential. A hit is
+  // workspace-bound; anything else (incl. the old static Bearer) is rejected —
+  // there is no {kind:"unconstrained"} grant.
+  const oauth = lookupOAuthToken(presented);
   if (oauth !== null) {
     return {
       ok: true,

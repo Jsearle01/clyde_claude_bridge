@@ -88,20 +88,20 @@ export interface McpServerOpts {
   bindHost: string;
   bindPort: number;
   logger: Logger;
-  getExpectedToken: () => string;
   auditLog: AuditLog;
   state: DaemonState;
   registry: ToolRegistry;
   // T-P3-001: OAuth bootstrap handler. Routes `/.well-known/oauth-
-  // authorization-server` and `/register` BEFORE the Bearer auth check
+  // authorization-server` and `/register` BEFORE the auth check
   // (both endpoints are unauthenticated by RFC 8414 / RFC 7591 design).
   // Returns true when the request was handled (caller short-circuits);
   // false when the request should fall through to MCP routing.
   oauthHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-  // T-P3-004a: resolve a presented OAuth access token to its binding (wraps
-  // TokenStore.lookup). Optional — when absent, only the static Bearer
-  // authenticates (legacy behavior; all OAuth tokens fail as invalid_token).
-  lookupOAuthToken?: OAuthTokenLookup;
+  // T-P3-004a / T-BEARER-1: resolve a presented OAuth access token to its
+  // binding (wraps TokenStore.lookup). REQUIRED — it is now the ONLY credential
+  // path (the static Bearer was removed); a token that doesn't resolve is
+  // rejected as invalid_token.
+  lookupOAuthToken: OAuthTokenLookup;
   // P3′-1c (ITEM 2): when true, the bind IS the allocation — listen retries on
   // EADDRINUSE, incrementing from bindPort to the next free port (closes the
   // concurrent-start TOCTOU race). When false (explicit --port / legacy),
@@ -291,11 +291,7 @@ export class McpServer {
     mcpSessionId: string | undefined,
     startMs: number,
   ): void {
-    const authResult = authenticate(
-      req,
-      this.opts.getExpectedToken(),
-      this.opts.lookupOAuthToken,
-    );
+    const authResult = authenticate(req, this.opts.lookupOAuthToken);
     if (!authResult.ok) {
       res.writeHead(401);
       res.end();

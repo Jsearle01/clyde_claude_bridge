@@ -25,7 +25,6 @@ const silentLogger: Logger = {
   close: () => Promise.resolve(),
 };
 
-const INERT_TOKEN = "cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 function uniquePipeName(): string {
   return `\\\\.\\pipe\\claude-bridge-cli-test-${randomBytes(6).toString("hex")}`;
@@ -38,7 +37,6 @@ function makeStatusPayload(): StatusPayload {
     endpoint: "127.0.0.1:7423",
     tunnel_status: "up",
     tunnel_url: "https://test.trycloudflare.com",
-    token_suffix: "AAAA",
     audit_path: "/tmp/audit.jsonl",
     audit_size_bytes: 1024,
     attached_workspaces: 0,
@@ -49,7 +47,6 @@ function makeHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
   return {
     status: () => Promise.resolve(makeStatusPayload()),
     stop: () => Promise.resolve(),
-    tokenRotate: () => Promise.resolve({ new_token: INERT_TOKEN }),
     tunnelRestart: () =>
       Promise.resolve({ new_url: "https://test.trycloudflare.com" }),
     ...overrides,
@@ -95,17 +92,7 @@ describe("sendIpc", () => {
     }
   });
 
-  it("token_rotate roundtrip (b)", async () => {
-    await startServer(makeHandlers());
-    const response = await sendIpc(
-      { kind: "token_rotate" },
-      { addressOverride: address },
-    );
-    expect(response.kind).toBe("token_rotate_ok");
-    if (response.kind === "token_rotate_ok") {
-      expect(response.new_token).toBe(INERT_TOKEN);
-    }
-  });
+  // T-BEARER-1: token_rotate roundtrip (b) removed — no Bearer to rotate.
 
   it("connection refused for non-existent address (c)", async () => {
     const fakeAddress =

@@ -34,8 +34,10 @@ export interface ToolContext {
   // (mcp_session_id + workspace_id) so bypass never leaks across sessions.
   readonly mcp_session_id?: string;
   // T-P3-004a: the authenticated request's workspace binding. Optional so
-  // P0 ctx-construction sites (tests, ping) compile unchanged; undefined is
-  // treated as "unconstrained" (legacy global) by the enforcement helper.
+  // P0 ctx-construction sites (tests, ping) compile unchanged. T-BEARER-1:
+  // `undefined` is now ONLY an internal/test ctx (no auth) — the enforcement
+  // helper passes it through; every EXTERNAL request carries a bound binding
+  // (the legacy "unconstrained" grant was removed).
   readonly workspaceBinding?: WorkspaceBinding;
   readonly auditLog: AuditLog;
   readonly logger: Logger;

@@ -38,7 +38,7 @@ export const StatusPayloadSchema = z
     endpoint: z.string(),                       // e.g. "127.0.0.1:7423"
     tunnel_status: z.enum(["up", "degraded", "down"]),
     tunnel_url: z.string().nullable(),
-    token_suffix: z.string().length(4),         // last 4 chars only
+    // T-BEARER-1: token_suffix removed — the static Bearer was removed.
     audit_path: z.string(),
     audit_size_bytes: z.number().int().nonnegative(),
     // CB-DAEMON-LIFECYCLE-FIX: count of active registered extension sessions
@@ -51,7 +51,8 @@ export const StatusPayloadSchema = z
     // CB-SMOKE-READINESS-BATCH: the active OAuth bindings from tokens.json, so
     // a real bind is VISIBLE in `status` (it wasn't). Optional for wire compat
     // (a pre-fix daemon won't send it; the CLI prints "not reported"). Distinct
-    // from `token_suffix` (the daemon Bearer token, not an OAuth binding).
+    // (T-BEARER-1: the daemon Bearer token / token_suffix was removed; the
+    // OAuth binding is now the only credential.)
     oauth_bindings: z.array(OAuthBindingSummarySchema).optional(),
     // T-TUNNEL-1 (B): a dropped quick-tunnel respawned to a NEW url that is
     // awaiting the operator's confirm/deny (never silently adopted). Surfaced
@@ -65,7 +66,7 @@ export type StatusPayload = z.infer<typeof StatusPayloadSchema>;
 export const IpcRequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("status") }).strict(),
   z.object({ kind: z.literal("stop") }).strict(),
-  z.object({ kind: z.literal("token_rotate") }).strict(),
+  // T-BEARER-1: token_rotate removed — there is no Bearer to rotate.
   z.object({ kind: z.literal("tunnel_restart") }).strict(),
   z
     .object({
@@ -284,12 +285,7 @@ export const IpcResponseSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("stop_ok") }).strict(),
-  z
-    .object({
-      kind: z.literal("token_rotate_ok"),
-      new_token: z.string(),
-    })
-    .strict(),
+  // T-BEARER-1: token_rotate_ok removed.
   z
     .object({
       kind: z.literal("tunnel_restart_ok"),

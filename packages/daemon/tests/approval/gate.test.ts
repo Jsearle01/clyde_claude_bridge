@@ -279,7 +279,10 @@ describe("helpers (T-P2-008)", () => {
 const BOUND = (
   granularity: "per_call" | "task" | "auto" | null,
 ): WorkspaceBinding => ({ kind: "bound", workspace: "ws-aaaaaa", granularity });
-const UNCONSTRAINED: WorkspaceBinding = { kind: "unconstrained" };
+// T-BEARER-1: UNCONSTRAINED removed. The only no-operator-ceiling caller now is
+// an INTERNAL/test ctx with `undefined` binding (no external request is ever
+// unconstrained — they all carry a bound binding). The two tests that exercised
+// the no-ceiling path are retargeted to `undefined` below.
 
 describe("resolveOperationGranularity (T-P3-005 — resolution order)", () => {
   let tempDir: string;
@@ -326,9 +329,9 @@ describe("resolveOperationGranularity (T-P3-005 — resolution order)", () => {
     expect(resolveOperationGranularity(undefined, BOUND(null), gate, "ws-aaaaaa")).toBe("per_call");
   });
 
-  it("3. legacy Bearer (unconstrained) falls back to the per-workspace mode", async () => {
+  it("3. a no-ceiling caller (undefined binding) falls back to the per-workspace mode", async () => {
     await gate.setModeForWorkspace("ws-aaaaaa", "auto");
-    expect(resolveOperationGranularity(undefined, UNCONSTRAINED, gate, "ws-aaaaaa")).toBe("auto");
+    expect(resolveOperationGranularity(undefined, undefined, gate, "ws-aaaaaa")).toBe("auto");
   });
 
   it("3b. no binding info (internal/test callers) also uses the per-workspace mode", () => {
@@ -337,7 +340,7 @@ describe("resolveOperationGranularity (T-P3-005 — resolution order)", () => {
 
   it("deprecated session_bypass mode normalizes to per_call", async () => {
     await gate.setModeForWorkspace("ws-aaaaaa", "session_bypass");
-    expect(resolveOperationGranularity(undefined, UNCONSTRAINED, gate, "ws-aaaaaa")).toBe("per_call");
+    expect(resolveOperationGranularity(undefined, undefined, gate, "ws-aaaaaa")).toBe("per_call");
   });
 
   it("fail-safe: unspecified everywhere → per_call (never auto/unsupervised)", () => {
@@ -412,10 +415,10 @@ describe("awaitApprovalForDelegation — granularity behavior (T-P3-005 AC-13/14
     expect(gate.pendingSize()).toBe(0);
   });
 
-  it("legacy Bearer path preserved: unconstrained binding uses the per-workspace mode", async () => {
+  it("no-ceiling caller (undefined binding) uses the per-workspace mode", async () => {
     await gate.setModeForWorkspace("ws-aaaaaa", "auto");
     const d = await awaitApprovalForDelegation(
-      gate, "s", "ws-aaaaaa", makeRequest(), undefined, UNCONSTRAINED,
+      gate, "s", "ws-aaaaaa", makeRequest(), undefined, undefined,
     );
     expect(d).toBe("approve"); // workspace auto mode → approve
   });

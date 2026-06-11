@@ -36,6 +36,15 @@ export class NoDaemonsRunningError extends Error {
   }
 }
 
+// A specific targeted daemon was selected but is not running (absent/stale pid).
+// (Relocated from the removed token.ts in T-BEARER-1; reused by tunnel/unbind.)
+export class DaemonNotRunningError extends Error {
+  constructor() {
+    super("Daemon not running. Start it with `claude-bridge start` first.");
+    this.name = "DaemonNotRunningError";
+  }
+}
+
 export class AmbiguousDaemonError extends Error {
   constructor(public readonly entries: readonly ConfigDirEntry[]) {
     super(

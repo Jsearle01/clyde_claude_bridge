@@ -156,9 +156,11 @@ export class ApprovalGateImpl implements ApprovalGate {
  *   effective = moreCautiousGranularity(ceiling, request). So switch=`per_call`
  *   + request=`auto` resolves `per_call` — the gated party cannot widen its own
  *   gate. The override-first path (operation value wins) is GONE.
- * Legacy global Bearer / no-binding callers (internal/test) keep the pre-005
- * Bearer path: there is no operator ceiling to clamp to, so the per-workspace
- * mode stands (deprecated `session_bypass` normalizes to per_call).
+ * No-binding callers (internal ctx / ping / tests — `binding === undefined`)
+ * have no operator ceiling to clamp to, so the per-workspace mode stands
+ * (deprecated `session_bypass` normalizes to per_call). T-BEARER-1: the legacy
+ * unconstrained-Bearer path is gone — every EXTERNAL connection is bound and
+ * takes the clamp above; only internal ctx reaches the no-ceiling path below.
  * Unspecified never means "unsupervised": the floor is always per_call.
  */
 export function resolveOperationGranularity(
@@ -167,15 +169,15 @@ export function resolveOperationGranularity(
   gate: ApprovalGate,
   identifier: string,
 ): OperationGranularity {
-  if (binding !== undefined && binding.kind === "bound") {
+  if (binding !== undefined) {
+    // Bound OAuth token (the only authenticated kind): clamp under its ceiling.
     const ceiling = binding.granularity ?? "per_call";
     // CLAMP: claude.ai may tighten under the operator ceiling, never loosen past.
     return callGranularity === undefined
       ? ceiling
       : moreCautiousGranularity(ceiling, callGranularity);
   }
-  // Legacy Bearer (unconstrained) or no binding info: no operator ceiling
-  // exists to clamp against, so the pre-005 Bearer path stands.
+  // No binding info (internal/test ctx): no operator ceiling to clamp against.
   if (callGranularity !== undefined) return callGranularity;
   const mode = gate.getModeForWorkspace(identifier);
   return mode === "session_bypass" ? "per_call" : mode;

@@ -17,7 +17,6 @@ import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { sendIpc } from "../ipc-client.js";
 import { getCliPidPath, perDaemonResources } from "../util/paths.js";
-import { loadCliConfig } from "../util/config.js";
 import { checkStalePid, readPidFromFile } from "../util/pidfile.js";
 
 const localRequire = createRequire(import.meta.url);
@@ -304,13 +303,11 @@ export async function startCommand(args: StartArgs): Promise<void> {
     throw new Error(`Unexpected IPC response kind: ${response.kind}`);
   }
 
-  // 8. read config for the full token (status only carries the suffix)
-  const config = await loadCliConfig(configPath);
-
-  // 9. print user-facing summary (matches daemon's own startup block)
+  // 8. print user-facing summary (matches daemon's own startup block)
   process.stdout.write(`Daemon up on ${response.payload.endpoint}\n`);
   process.stdout.write(
     `Tunnel: ${response.payload.tunnel_url ?? "(not available)"}\n`,
   );
-  process.stdout.write(`Token:  ${config.auth.token}\n`);
+  // T-BEARER-1: no `Token:` line — the static Bearer was removed. Clients
+  // authenticate via the OAuth binding flow (claude.ai's path).
 }

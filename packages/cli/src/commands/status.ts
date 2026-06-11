@@ -78,13 +78,8 @@ export function formatStatusPayload(
       `           ⚠ tunnel dropped — new URL ${pendingUrl} pending your confirmation (re-point the connector after you adopt it)`,
     );
   }
-  // CB-SMOKE-READINESS-BATCH: label this clearly as the daemon BEARER token —
-  // it is NOT an OAuth binding. The old `Token:` line misled the smoke into
-  // reading a stale Bearer line as evidence of a binding. OAuth bindings are
-  // listed separately below (from tokens.json).
-  lines.push(
-    `Bearer:    cb_live_…${payload.token_suffix} (daemon Bearer token — not an OAuth binding)`,
-  );
+  // T-BEARER-1: no Bearer line — the static daemon Bearer was removed. The
+  // active OAuth bindings (the only credential) are listed below from tokens.json.
   lines.push(
     `Audit:     ${collapsePath(payload.audit_path, home)} (current size: ${formatBytes(payload.audit_size_bytes)})`,
   );

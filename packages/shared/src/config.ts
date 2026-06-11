@@ -37,9 +37,20 @@ export const ConfigSchema = z
       bind_port: z.number().int().min(1).max(65535).default(7423),
       ipc_socket: z.string(),
     }),
-    auth: z.object({
-      token: z.string().regex(/^cb_live_[A-Z2-7]{32}$/),
-    }),
+    // T-BEARER-1: the static Bearer auth path was removed (OAuth-bound is the
+    // only model). `auth.token` is RETAINED as an inert/deprecated field —
+    // nothing mints, reads, or shows it — purely so existing on-disk configs
+    // (the strict schema + `version: 1` with no migration mechanism) still
+    // validate and start. New configs omit it. Truly removing it needs a config
+    // migration mechanism (future work).
+    auth: z
+      .object({
+        token: z
+          .string()
+          .regex(/^cb_live_[A-Z2-7]{32}$/)
+          .optional(),
+      })
+      .optional(),
     tunnel: z.object({
       provider: z.enum(["cloudflared", "ngrok"]).default("cloudflared"),
       binary: z.string().default("cloudflared"),

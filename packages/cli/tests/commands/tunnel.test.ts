@@ -8,7 +8,7 @@ import {
   type IpcHandlers,
 } from "../../../daemon/src/ipc/server.js";
 import type { Logger } from "../../../daemon/src/log/logger.js";
-import { DaemonNotRunningError } from "../../src/commands/token.js";
+import { DaemonNotRunningError } from "../../src/util/selector.js";
 import {
   tunnelRestartCommand,
   TunnelRestartConnectionLostError,
@@ -33,7 +33,6 @@ function makeHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
   return {
     status: () => Promise.reject(new Error("not used")),
     stop: () => Promise.reject(new Error("not used")),
-    tokenRotate: () => Promise.reject(new Error("not used")),
     tunnelRestart: () => Promise.resolve({ new_url: NEW_URL }),
     ...overrides,
   };

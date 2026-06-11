@@ -36,13 +36,13 @@ function makeStatusPayload(overrides: Partial<StatusPayload> = {}): StatusPayloa
     endpoint: "127.0.0.1:7423",
     tunnel_status: "up",
     tunnel_url: "https://plum-otter-7821.trycloudflare.com",
-    token_suffix: "d219",
     audit_path: "/home/user/.claude-bridge/audit.jsonl",
     audit_size_bytes: 14336,
     attached_workspaces: 0,
     ...overrides,
   };
 }
+// (T-BEARER-1: token_suffix removed from the StatusPayload.)
 
 describe("formatUptime", () => {
   it("renders seconds for short uptime", () => {
@@ -90,12 +90,9 @@ describe("formatStatusPayload", () => {
     expect(out).toContain("Endpoint:  127.0.0.1:7423");
     expect(out).toContain("Tunnel:    up");
     expect(out).toContain("URL:       https://plum-otter-7821.trycloudflare.com");
-    // CB-SMOKE-READINESS-BATCH: relabeled from "Token:" so a stale Bearer line
-    // is never misread as an OAuth binding.
-    expect(out).toContain(
-      "Bearer:    cb_live_…d219 (daemon Bearer token — not an OAuth binding)",
-    );
-    expect(out).not.toContain("Token:     cb_live_");
+    // T-BEARER-1: the static Bearer was removed — status shows NO Bearer line.
+    expect(out).not.toContain("Bearer:");
+    expect(out).not.toContain("Token:");
     expect(out).toContain("Audit:     ~/.claude-bridge/audit.jsonl (current size: 14 KB)");
   });
 
@@ -235,7 +232,7 @@ describe("statusCommand", () => {
     const out = stdoutSpy.mock.calls[0]?.[0] as string;
     expect(out).toContain("Daemon:    up");
     expect(out).toContain("Endpoint:  127.0.0.1:7423");
-    expect(out).toContain("Bearer:    cb_live_…d219");
+    expect(out).not.toContain("Bearer:"); // T-BEARER-1: no Bearer line
   });
 
   // P3′-3-fix: bare `status` (no --workspace) enumerates per-daemon daemons via

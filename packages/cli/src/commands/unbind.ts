@@ -19,9 +19,11 @@ import {
   IpcClientConnectionError,
   IpcClientTimeoutError,
 } from "../ipc-client.js";
-import { selectDaemonTarget } from "../util/selector.js";
+import {
+  selectDaemonTarget,
+  DaemonNotRunningError,
+} from "../util/selector.js";
 import { checkStalePid } from "../util/pidfile.js";
-import { DaemonNotRunningError } from "./token.js";
 
 const UNBIND_TIMEOUT_MS = 10000;
 

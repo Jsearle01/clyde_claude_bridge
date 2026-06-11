@@ -13,7 +13,7 @@ import {
 } from "../../../daemon/src/ipc/server.js";
 import type { Logger } from "../../../daemon/src/log/logger.js";
 import type { StatusPayload } from "@claude-bridge/shared";
-import { DaemonNotRunningError } from "../../src/commands/token.js";
+import { DaemonNotRunningError } from "../../src/util/selector.js";
 import {
   unbindCommand,
   formatUnbindOutput,
@@ -29,7 +29,6 @@ function makeStatusPayload(overrides: Partial<StatusPayload> = {}): StatusPayloa
     endpoint: "127.0.0.1:7423",
     tunnel_status: "up",
     tunnel_url: "https://plum-otter-7821.trycloudflare.com",
-    token_suffix: "d219",
     audit_path: "/home/user/.claude-bridge/audit.jsonl",
     audit_size_bytes: 14336,
     attached_workspaces: 0,
@@ -53,7 +52,6 @@ function makeHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
   return {
     status: () => Promise.reject(new Error("not used")),
     stop: () => Promise.reject(new Error("not used")),
-    tokenRotate: () => Promise.reject(new Error("not used")),
     tunnelRestart: () => Promise.reject(new Error("not used")),
     ...overrides,
   };

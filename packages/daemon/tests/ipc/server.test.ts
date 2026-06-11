@@ -19,7 +19,6 @@ import {
 } from "../../src/ipc/server.js";
 import type { Logger } from "../../src/log/logger.js";
 
-const INERT_TOKEN = "cb_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const INERT_TUNNEL_URL = "https://plum-otter-7821.trycloudflare.com";
 
 const FIXED_PAYLOAD: StatusPayload = {
@@ -47,7 +46,7 @@ function makeHandlers(): IpcHandlers {
   return {
     status: vi.fn(() => Promise.resolve(FIXED_PAYLOAD)),
     stop: vi.fn(() => Promise.resolve()),
-    tokenRotate: vi.fn(() => Promise.resolve({ new_token: INERT_TOKEN })),
+    // T-BEARER-1: tokenRotate handler removed.
     tunnelRestart: vi.fn(() => Promise.resolve({ new_url: INERT_TUNNEL_URL })),
   };
 }
@@ -213,16 +212,7 @@ describe("IpcServer", () => {
     expect(handlers.stop).toHaveBeenCalledOnce();
   });
 
-  it("token_rotate request returns token_rotate_ok (11.d)", async () => {
-    const { s, address } = startConfig();
-    await s.start();
-    const line = await rpc(address, JSON.stringify({ kind: "token_rotate" }));
-    const response = JSON.parse(line) as IpcResponse;
-    expect(response.kind).toBe("token_rotate_ok");
-    if (response.kind === "token_rotate_ok") {
-      expect(response.new_token).toBe(INERT_TOKEN);
-    }
-  });
+  // T-BEARER-1: the token_rotate IPC (11.d) was removed — no Bearer to rotate.
 
   it("tunnel_restart request returns tunnel_restart_ok (11.e)", async () => {
     const { s, address } = startConfig();

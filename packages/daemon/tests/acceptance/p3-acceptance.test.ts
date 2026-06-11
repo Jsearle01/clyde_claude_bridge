@@ -53,7 +53,8 @@ import type { AuditLog } from "../../src/audit/log.js";
 import type { Logger } from "../../src/log/logger.js";
 import type { DaemonState } from "../../src/state.js";
 
-const STATIC_BEARER = "cb_live_ACCEPTANCESTATICBEARERTOKENXXXX";
+// T-BEARER-1: STATIC_BEARER removed — the static Bearer auth path is gone
+// (the only remaining uses were the deleted coexistence test + the sig args).
 const silentLogger: Logger = {
   debug: () => undefined,
   info: () => undefined,
@@ -124,8 +125,10 @@ function lookup(token: string): { bound_workspace: string | null; granularity: n
   return b === null ? null : { bound_workspace: b.bound_workspace, granularity: null };
 }
 // Resolve a presented token → its WorkspaceBinding via the real auth layer.
+// T-BEARER-1: authenticate() is now 2-arg (OAuth lookup only); the static-Bearer
+// arg was removed. Binding shape unchanged — the isolation assertions hold.
 function bindingFor(token: string): WorkspaceBinding {
-  const r = authenticate(reqWith(token), STATIC_BEARER, lookup);
+  const r = authenticate(reqWith(token), lookup);
   if (!r.ok) throw new Error(`auth failed: ${r.reason}`);
   return r.binding;
 }
@@ -182,17 +185,16 @@ describe("P3 ACCEPTANCE — isolation chain end-to-end (AC-8/9/10/11/12)", () =>
       granularity: null,
     });
     await store.revokeByWorkspace("ws-a"); // unbind
-    const after = authenticate(reqWith(a.access_token), STATIC_BEARER, lookup);
-    expect(after).toEqual({ ok: false, reason: "invalid_token" }); // NOT {kind:"unconstrained"}
+    const after = authenticate(reqWith(a.access_token), lookup);
+    // NOT a fall-through to a global/unconstrained grant — invalid, full stop.
+    // T-BEARER-1 strengthens this: no unconstrained path exists at all now.
+    expect(after).toEqual({ ok: false, reason: "invalid_token" });
     // The freed workspace re-enters the unbound set.
     expect(store.hasActiveBindingFor("ws-a")).toBe(false);
   });
-
-  it("the legacy static Bearer stays unconstrained (coexistence preserved)", () => {
-    const r = authenticate(reqWith(STATIC_BEARER), STATIC_BEARER, lookup);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.binding).toEqual({ kind: "unconstrained" });
-  });
+  // T-BEARER-1: the "legacy static Bearer stays unconstrained (coexistence
+  // preserved)" test was DELETED — it asserted the bypass that was removed.
+  // Its deletion STRENGTHENS isolation: the unconstrained hole is gone.
 });
 
 describe("P3 ACCEPTANCE — floor holds incl. Windows path semantics (AC-16/17, AC-P3-13)", () => {

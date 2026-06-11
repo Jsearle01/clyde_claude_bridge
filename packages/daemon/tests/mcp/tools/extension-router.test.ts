@@ -2,8 +2,38 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   ExtensionToolRouter,
   resolveInspectionWorkspace,
+  enforceBoundWorkspace,
 } from "../../../src/mcp/tools/extension-router.js";
 import { ToolHandlerError } from "../../../src/mcp/dispatch.js";
+import type { WorkspaceBinding } from "../../../src/mcp/auth.js";
+
+// T-BEARER-1 / AC-B1-4: enforcement is now UNIVERSAL — there is no
+// {kind:"unconstrained"} credential that bypasses workspace-targeting. Every
+// authenticated request is a bound token, so a cross-workspace request the old
+// unconstrained Bearer would have waved through is now rejected (403).
+describe("enforceBoundWorkspace — universal workspace enforcement (AC-B1-4)", () => {
+  const bound = (ws: string | null): WorkspaceBinding => ({
+    kind: "bound",
+    workspace: ws,
+    granularity: null,
+  });
+
+  it("a bound token may NOT target another workspace (the old unconstrained bypass is gone)", () => {
+    expect(() => enforceBoundWorkspace(bound("ws-a"), "ws-b")).toThrow(
+      ToolHandlerError,
+    );
+  });
+
+  it("a bound token targeting its OWN workspace is allowed", () => {
+    expect(enforceBoundWorkspace(bound("ws-a"), "ws-a")).toBe("ws-a");
+  });
+
+  it("a bound-to-null token may not act on any workspace", () => {
+    expect(() => enforceBoundWorkspace(bound(null), "ws-a")).toThrow(
+      ToolHandlerError,
+    );
+  });
+});
 
 describe("ExtensionToolRouter (T-P2-009 / T-P2-010)", () => {
   beforeEach(() => {

@@ -237,10 +237,15 @@ export function enforceBoundWorkspace(
   requested: string | undefined,
   logger?: Logger,
 ): string | undefined {
-  if (binding === undefined || binding.kind === "unconstrained") {
+  // T-BEARER-1: only `undefined` remains a pass-through, and that is an
+  // INTERNAL ctx (ping / P0 construction sites / tests) that carries no auth —
+  // never an external authenticated request (those always carry a bound binding
+  // from authenticate()). The unconstrained-Bearer bypass is gone: every
+  // external connection is now bound-enforced below.
+  if (binding === undefined) {
     return requested;
   }
-  // Bound OAuth token.
+  // Bound OAuth token (the only authenticated kind now).
   if (binding.workspace === null) {
     logger?.warn(
       "auth: binding violation — bound token has no workspace; rejecting workspace-targeting tool",
