@@ -2,24 +2,29 @@
 
 **Repository:** https://github.com/Jsearle01/clyde_claude_bridge
 
-An MCP bridge that connects Claude.ai project chats to local development workspaces over a Cloudflare tunnel. The bridge daemon hosts a single MCP endpoint, authenticates clients via per-workspace OAuth bound tokens, writes an audit log, and coordinates headless delegations to a Claude Code SDK sub-agent running against a configured workspace. Delegations enqueue, run to completion (or cancel), and return a structured report with diff, files-changed, transcript URI, and shell-command record.
+claude-bridge connects a Claude.ai project chat to a local VS Code workspace. Each workspace runs its own **daemon** — an MCP server exposed over a Cloudflare tunnel, authenticated by a per-workspace OAuth binding — and a **VS Code extension** discovers, launches, and monitors it. From the project chat, Claude.ai delegates work to a headless Claude Code SDK sub-agent running against the bound workspace; delegations enqueue, run to completion (or cancel), and return a structured report (diff, files-changed, transcript URI, shell-command record).
 
-**Project status:** **P0 GATE-CLOSED 2026-05-23**; **P1 GATE-CLOSED 2026-05-24**. P2 (VS Code extension) is a future gate; design conversation pending. All 10 P0 ACs VERIFIED; all 16 P1 ACs MECH/MCP/INFER-VERIFIED on both Windows and WSL Ubuntu. The current tool surface: `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. See [`docs/snapshot/orchestrator-context-p1-close.md`](docs/snapshot/orchestrator-context-p1-close.md) for the full P1 close snapshot.
+The architecture is **daemon-per-workspace** (ADR-001): one workspace = one daemon = one tunnel URL = one named connector in Claude.ai. Isolation is **physical** (separate processes), not logical.
 
-## What is this?
+## What it is
 
-A long-running local daemon publishes one MCP endpoint over a Cloudflare ephemeral tunnel (`*.trycloudflare.com`). An OAuth-capable MCP client (e.g. Claude.ai's custom connector) connects to that endpoint, completes the OAuth binding flow (DCR → consent → workspace-bound token), and the daemon authenticates the bound token, dispatches the request to a registered tool, writes an audit entry, and responds.
+A long-running local daemon publishes one MCP endpoint over a Cloudflare tunnel (`*.trycloudflare.com`). Claude.ai's custom MCP connector connects to that endpoint and completes the **OAuth binding flow** (register via RFC 7591 DCR → operator consent → workspace-bound access token); the daemon authenticates the bound token, dispatches the request to a registered tool, writes an audit entry, and responds. Each daemon serves exactly the one workspace its binding names.
 
-P0 shipped the bus. P1 shipped the delegation surface: `delegate_to_claude_code` enqueues an SDK-driven Claude Code session against a configured workspace; `poll_delegation` long-polls for completion (event-driven, no busy-wait); `cancel_delegation` aborts via AbortController. The runner is single-concurrent in P1. Read-only delegations enforce a `disallowedTools` belt-and-suspenders to prevent the SDK's plan-mode `ExitPlanMode` escape hatch. Transcripts persist as JSONL at `~/.claude-bridge/transcripts/{job_id}.jsonl`; reports include git/fallback diff, files-created/modified/deleted, shell commands, and truncation reason if any.
-
-The architecture is intentionally layered:
+The MCP tool surface: `ping`, `delegate_to_claude_code` (enqueues an SDK-driven Claude Code session against the bound workspace), `poll_delegation` (event-driven long-poll for completion, no busy-wait), `cancel_delegation` (aborts via AbortController), plus read-only inspection tools (`get_open_editors`, `get_diagnostics`). Transcripts persist as JSONL under the daemon's config-dir; reports include git/fallback diff, files created/modified/deleted, shell commands, and any truncation reason.
 
 | Gate | Adds | Status |
 |---|---|---|
 | P0 | Bus validation: daemon + tunnel + auth + audit + one tool | **GATE-CLOSED** 2026-05-23 |
 | P1 | Headless delegation: queued jobs, SDK integration, snapshot/diff, transcripts, cross-platform | **GATE-CLOSED** 2026-05-24 |
 | P2 | VS Code extension + workspace registration + approval flow + inspection tools | **GATE-CLOSED** 2026-05-30 |
-| P3+ | Polish: last-shell routing, named tunnels, autostart | Not started |
+| P3′ | Per-workspace binding (ADR-001 daemon-per-workspace), OAuth-only auth (T-BEARER-1), the full multi-daemon CLI (T-CLI), tunnel lifecycle (T-TUNNEL-1) | **SHIPPED** |
+| next | The autonomous-collaboration LOOP layer (restructure-reissue, retry limit, loop logging); the operator cycle dashboard; stable named tunnels (ADR-002, opt-in) | In progress / opt-in |
+
+The current design authority is [`docs/design/05-autonomous-collaboration-model.md`](docs/design/05-autonomous-collaboration-model.md) (the binding/isolation model, the per-operation granularity clamp, the autonomy floor, and §9 — what has shipped). The phase build records (`docs/design/00`–`04`) are historically stamped; where they and `05` conflict, `05` wins.
+
+---
+
+# For operators — running the bridge
 
 ## Prerequisites
 
@@ -51,10 +56,14 @@ claude-bridge --version
 
 `npm link` registers `claude-bridge` as a global command pointing at your built workspace; rebuilding picks up changes automatically. To unlink: `npm unlink -g @claude-bridge/cli`.
 
-## Quick start
+The VS Code extension ships as a `.vsix` sideload (`packages/extension`) — it discovers and launches the workspace's daemon, shows daemon/tunnel state in the status bar, and surfaces the consent + tunnel-drop modals.
+
+## Start a daemon for a workspace
+
+Each workspace gets its **own** daemon (ADR-001) — its own config-dir, its own tunnel URL, its own connector in Claude.ai:
 
 ```bash
-claude-bridge start
+claude-bridge start --workspace /path/to/your/workspace --name my-project
 ```
 
 Output:
@@ -64,73 +73,90 @@ Daemon up on 127.0.0.1:7423
 Tunnel: https://random-words-here.trycloudflare.com
 ```
 
-The CLI exits; the daemon stays running detached. Subsequent commands work from any directory:
+The CLI exits; the daemon runs detached. (The VS Code extension can launch the daemon for the current workspace folder for you.)
 
-```bash
-claude-bridge status     # daemon + tunnel state
-claude-bridge tail-log   # stream daemon log
-claude-bridge stop       # graceful shutdown
+## Connect it to Claude.ai (OAuth binding)
+
+The daemon authenticates via the **OAuth binding flow only** — there is no static Bearer / manual-client connection. In Claude.ai's project settings, add a custom MCP connector pointing at **`<tunnel-url>/mcp`** and complete the OAuth consent prompt; the daemon binds the resulting token to the workspace you approve. The binding is **workspace-bound, consent-gated, and revocable** (`claude-bridge unbind`); a non-bound credential is rejected.
+
+Once connected, `tools/list` shows `ping`, `delegate_to_claude_code`, `poll_delegation`, `cancel_delegation`. A typical delegation: call `delegate_to_claude_code` with `{"prompt": "...", "mode": "agentic"}` to enqueue, then `poll_delegation` with `{"job_id": "...", "wait_ms": 30000}` until the response includes a `report` field. See the [runbook's Operating Delegations section](docs/runbook.md#operating-delegations-p1) and the [walkthrough](docs/walkthrough.md) for end-to-end usage.
+
+## Managing daemons — the CLI
+
+The CLI is **multi-daemon**: target a specific daemon with `--name` or `--workspace`; a bare command acts on the sole daemon if exactly one runs, and lists / offers a numbered pick (for non-destructive verbs) when several do.
+
+| command | what it does |
+|---|---|
+| `start --workspace <path> [--name <n>]` | launch a daemon for a workspace |
+| `stop [--name\|--workspace]` | graceful shutdown |
+| `status [--name\|--workspace]` | daemon + tunnel + bindings state (bare = all daemons) |
+| `list` | what daemons exist — name, workspace, live/dead |
+| `directories` | where each daemon's files live on disk (verify before pruning) |
+| `delete-dir --name <n>` (or `--hash <h>`) | prune a daemon's config-dir; confirms on a live target, then graceful-stops it before deleting |
+| `unbind [--name\|--workspace]` | list a daemon's OAuth bindings; revoke one by typed target (or `--all`) |
+| `tail-log [-f]` | stream a daemon's log |
+| `tunnel restart` | restart cloudflared with a new URL |
+
+## Tunnel behavior
+
+A daemon owns **exactly one** cloudflared tunnel for its life (kill-before-respawn; reclaims an orphaned tunnel on startup). If the tunnel drops and respawns with a **new URL**, you **confirm adopting it** (via the extension modal) — never a silent swap; re-point the Claude.ai connector at the new URL after you adopt it. Stable named tunnels (a fixed URL) are an operator **opt-in** (ADR-002; needs a domain — currently optional/deferred).
+
+---
+
+# For contributors — architecture
+
+## Components
+
+- **daemon** (`packages/daemon`, TypeScript/Node) — the MCP server, the OAuth auth layer (per-workspace bound tokens), the cloudflared tunnel manager, the job queue + Claude Code SDK runner, the audit log, the approval gate.
+- **VS Code extension** (`packages/extension`, ships as `.vsix`) — daemon discovery/launch, the status bar, workspace registration (one-time trust prompt), and the consent + tunnel-drop modals.
+- **CLI** (`packages/cli`) — multi-daemon management (the command table above), built on a shared daemon selector + a single surface-tested list renderer.
+- **shared** (`packages/shared`) — the config and IPC schemas (zod), shared by daemon and CLI.
+
+## Topology — daemon-per-workspace (ADR-001)
+
+Each workspace runs its own daemon, keyed by a hash of the workspace path, with its own config-dir (`%APPDATA%/claude-bridge/<hash>/` on Windows, `~/.claude-bridge/<hash>/` elsewhere), its own IPC pipe/socket, its own tunnel URL, and its own named connector in Claude.ai. Connectors are account-global and URL-keyed in Claude.ai but **enabled per-project** — that is the isolation seam. Isolation is **physical by construction**: one daemon is a separate process and cannot see another daemon's workspace.
+
+## Auth — OAuth-bound is the only model (T-BEARER-1)
+
+The daemon authenticates via the OAuth binding flow only. A presented token must resolve to a workspace-bound binding (`{kind:"bound", workspace}`) or it is rejected (`invalid_token`). The legacy unconstrained static Bearer (and `token rotate`, and the `Token:`/`Bearer:` surface) was **removed** — there is no manual-client / non-OAuth path. Because every connection is now bound, the **per-workspace targeting enforcement** and the **operator approval clamp** apply to *every* connection — no unconstrained bypass. Bindings are consent-gated and revocable (`unbind`).
+
+## Connection path
+
+```
+Claude.ai project chat
+  → custom MCP connector (the workspace's tunnel URL)
+    → cloudflared tunnel
+      → daemon (OAuth-authenticated; bound to the workspace)
+        → MCP tool dispatch (approval gate)
+          → headless Claude Code SDK against the local VS Code workspace
 ```
 
-Tunnel management:
+## Design authority
+
+- [`docs/design/05-autonomous-collaboration-model.md`](docs/design/05-autonomous-collaboration-model.md) — **the current design authority**: the binding/isolation model (§3), per-operation granularity + the tighten-only clamp (§4), the autonomy floor and gate boundary (§5–6), and §9 reconciliation (what has shipped). The architectural decisions **ADR-001** (daemon-per-workspace) and **ADR-002** (stable-tunnel opt-in) are referenced throughout the design docs; daemon-per-workspace is implemented per the P3′ build sequence.
+- [`docs/design/04-p3-oauth.md`](docs/design/04-p3-oauth.md) — OAuth mechanics (DCR, consent, bound-token lookup); topology + Bearer-coexistence portions are superseded (stamped).
+- [`docs/design/00-overview.md`](docs/design/00-overview.md) – [`03-p2-extension.md`](docs/design/03-p2-extension.md) — phase build records (historically stamped; one-daemon-many-workspaces + static-Bearer portions superseded).
+
+## Build / dev
 
 ```bash
-claude-bridge tunnel restart  # restart cloudflared with a new URL
+npm install          # install workspace deps (npm workspaces monorepo)
+npm run build        # tsc -b across packages + esbuild bundle for the extension
+npm test             # vitest, per workspace
+npm run lint         # eslint (flat config, recommendedTypeChecked)
 ```
 
-## Connecting an MCP client
+`packages/{daemon,extension,cli,shared}` are npm workspaces. See [`docs/conventions.md`](docs/conventions.md) for the TypeScript / ESM / cross-cutting conventions.
 
-The daemon authenticates via the **OAuth binding flow** — a client registers
-(RFC 7591 DCR), the operator consents (per-workspace), and the daemon issues a
-**workspace-bound** access token. There is no static Bearer: every connection is
-bound to exactly one workspace, consent-gated, and revocable (`claude-bridge
-unbind`). This is the model Claude.ai's custom MCP connector uses.
-
-Point the connector at `<tunnel-url>/mcp` and complete the OAuth consent prompt;
-the daemon binds the resulting token to the workspace you approve. `tools/list`
-then shows `ping`, `delegate_to_claude_code`, `poll_delegation`,
-`cancel_delegation`. A typical delegation flow: call `delegate_to_claude_code`
-with `{"prompt": "...", "mode": "agentic"}` to enqueue, then `poll_delegation`
-with `{"job_id": "...", "wait_ms": 30000}` until the response includes a `report`
-field. See the [runbook's Operating Delegations section](docs/runbook.md#operating-delegations-p1)
-for tool semantics and the [walkthrough](docs/walkthrough.md) for end-to-end usage.
-
-> **Note (T-BEARER-1):** the legacy unconstrained static Bearer was removed —
-> OAuth-bound is the only auth model. A non-OAuth MCP client (raw `curl`, a
-> static-token-only connector) can no longer authenticate.
-
-## P2 — VS Code Extension + Real Workspace Registration
-
-**Status: GATE-CLOSED 2026-05-30.** See [`docs/snapshot/orchestrator-context-p2-close.md`](docs/snapshot/orchestrator-context-p2-close.md) for the close report.
-
-P2 ships the developer workflow end-to-end via Bearer-compatible MCP clients
-(Claude Code CLI, MCP Inspector, Claude Desktop, raw curl):
-
-- VS Code extension installs via `.vsix` sideload
-- Workspace registration with one-time trust prompt
-- Daemon-side workspace registry
-- Per-delegation approval flow with three modes (`per_call`, `session_bypass`, `auto`)
-- Read-only inspection tools (`get_open_editors`, `get_diagnostics`)
-- Multi-workspace routing via explicit `workspace` argument
-- Cross-platform validated on Windows + WSL Ubuntu
-
-Claude.ai project-chat integration via the connector UI is deferred to P3
-pending OAuth implementation in the daemon's auth layer (C-27).
-
-See `docs/walkthrough.md` Part 1 for end-to-end usage examples.
+---
 
 ## Where to dive deeper
 
-- [`docs/runbook.md`](docs/runbook.md) — operator reference: prerequisites, installation, configuration, lifecycle, operating delegations, troubleshooting (WSL pre-flight, undici warning, cloudflared per OS, Node engine matrix), MCP client setup, AC verification procedures, uninstallation
-- [`docs/walkthrough.md`](docs/walkthrough.md) — contributor narrative: steady-state UX target (P2+) followed by the "P1 — Delegation surface" section covering job lifecycle, MCP tools, snapshot/diff, transcripts, report assembly, SDK integration with the `READ_ONLY_DISALLOWED_TOOLS` belt-and-suspenders rationale, acceptance harnesses, CC-1 through CC-6 cross-platform discipline
-- [`docs/design/00-overview.md`](docs/design/00-overview.md) — architecture overview, topology, frozen design decisions
-- [`docs/design/01-p0-bus.md`](docs/design/01-p0-bus.md) — P0 specification and acceptance criteria
-- [`docs/design/02-p1-delegation.md`](docs/design/02-p1-delegation.md) — P1 specification: tool schemas, 16 acceptance criteria, modes, snapshot/diff, transcripts
-- [`docs/design/p0-build-plan.md`](docs/design/p0-build-plan.md) — P0 concrete file paths and build order
-- [`docs/design/p1-build-plan.md`](docs/design/p1-build-plan.md) — P1 concrete file paths and build order
-- [`docs/snapshot/orchestrator-context-p0-close.md`](docs/snapshot/orchestrator-context-p0-close.md) — P0 close snapshot
-- [`docs/snapshot/orchestrator-context-p1-close.md`](docs/snapshot/orchestrator-context-p1-close.md) — P1 close snapshot (16 ACs, 14 phases, calibration summary, pattern inventory, P2 deferrals)
-- [`docs/claude-orchestrated-methodology-v0_6.md`](docs/claude-orchestrated-methodology-v0_6.md) — methodology in effect (dual-band reporting, docs-vs-runtime pattern, harness brittleness defense, CC-N artifacts, numbered C-N conventions including pre-dispatch grep + mandatory elapsed-time block, verdict-time evidence sub-rules)
+- [`docs/runbook.md`](docs/runbook.md) — operator reference: prerequisites, installation, configuration, lifecycle, operating delegations, troubleshooting (WSL pre-flight, undici warning, cloudflared per OS, Node engine matrix), AC verification, uninstallation
+- [`docs/walkthrough.md`](docs/walkthrough.md) — contributor narrative: steady-state UX, the delegation surface (job lifecycle, MCP tools, snapshot/diff, transcripts, report assembly), SDK integration with the read-only `disallowedTools` rationale, acceptance harnesses, cross-platform discipline
+- [`docs/design/05-autonomous-collaboration-model.md`](docs/design/05-autonomous-collaboration-model.md) — the current design authority (binding, granularity clamp, autonomy floor, shipped-reconciliation §9)
+- [`docs/design/00-overview.md`](docs/design/00-overview.md) — architecture overview (historically stamped)
+- [`docs/design/02-p1-delegation.md`](docs/design/02-p1-delegation.md) — the delegation surface: tool schemas, modes, snapshot/diff, transcripts
 - [`docs/conventions.md`](docs/conventions.md) — TypeScript / ESM / cross-cutting concerns
 
 ## License
