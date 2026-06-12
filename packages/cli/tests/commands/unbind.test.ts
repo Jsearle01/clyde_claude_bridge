@@ -3,7 +3,7 @@
 // --all forms over a real IpcServer, and the daemon-down / no-match paths.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -12,13 +12,15 @@ import {
   type IpcHandlers,
 } from "../../../daemon/src/ipc/server.js";
 import type { Logger } from "../../../daemon/src/log/logger.js";
-import type { StatusPayload } from "@claude-bridge/shared";
+import type { OAuthBindingSummary, StatusPayload } from "@claude-bridge/shared";
 import { DaemonNotRunningError } from "../../src/util/selector.js";
+import type { ConfigDirEntry } from "../../src/util/config-dirs.js";
 import {
   unbindCommand,
   formatUnbindOutput,
   formatBindingList,
   UnbindTargetAndAllError,
+  AmbiguousBindingDaemonError,
   type UnbindResultEntry,
 } from "../../src/commands/unbind.js";
 
@@ -259,5 +261,127 @@ describe("unbindCommand — over IPC", () => {
     await unbindCommand({ pidPath, addressOverride: address });
     const out = stdoutSpy.mock.calls.map((c) => c[0] as string).join("");
     expect(out).toContain("No active bindings");
+  });
+});
+
+describe("unbindCommand — T-CLI-5 binding-presence-driven fan-out", () => {
+  let root: string;
+  let spy: ReturnType<typeof vi.spyOn>;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "cb-unbind-fanout-"));
+    spy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+  afterEach(async () => {
+    spy.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  });
+  async function makeDir(hash: string, name: string): Promise<void> {
+    const d = join(root, hash);
+    await mkdir(d, { recursive: true });
+    await writeFile(
+      join(d, "workspaces.json"),
+      JSON.stringify({
+        version: "1",
+        entries: [{ abs_path: `c:\\ws\\${name}`, name }],
+      }),
+    );
+  }
+  function captured(): string {
+    return spy.mock.calls.map((c) => c[0] as string).join("");
+  }
+  const live = (): Promise<boolean> => Promise.resolve(true);
+  function binding(client: string, ws: string): OAuthBindingSummary {
+    return {
+      client_id: client,
+      bound_workspace: ws,
+      issued_at: "2026-06-01T00:00:00.000Z",
+      expires_at: 1780000000000,
+    };
+  }
+
+  it("AC-C5-1: 0 bindings on any daemon → 'No active bindings on any daemon', NO menu", async () => {
+    await makeDir("a".repeat(16), "alpha");
+    await makeDir("b".repeat(16), "beta");
+    await unbindCommand({
+      configRoot: root,
+      probe: live,
+      fetchBindingsFor: () => Promise.resolve([]),
+    });
+    const out = captured();
+    expect(out).toContain("No active bindings on any daemon");
+    expect(out).not.toMatch(/\[\s*\d+\s*\]/); // no daemon menu
+  });
+
+  it("AC-C5-2: bindings on exactly ONE daemon (of several) → skip the pick, list it", async () => {
+    await makeDir("a".repeat(16), "alpha");
+    await makeDir("b".repeat(16), "beta");
+    await unbindCommand({
+      configRoot: root,
+      probe: live,
+      fetchBindingsFor: (e: ConfigDirEntry) =>
+        Promise.resolve(
+          e.name === "alpha" ? [binding("cb_client_x", "c:\\ws\\alpha")] : [],
+        ),
+    });
+    const out = captured();
+    expect(out).toContain("cb_client_x"); // alpha's binding listed directly
+    expect(out).toContain("type a workspace or client id"); // the revoke instruction
+    expect(out).not.toMatch(/\[\s*\d+\s*\]/); // the daemon-pick was SKIPPED
+  });
+
+  it("AC-C5-3: bindings on SEVERAL daemons → pick among ONLY those (binding-less daemon excluded)", async () => {
+    await makeDir("a".repeat(16), "alpha");
+    await makeDir("b".repeat(16), "beta");
+    await makeDir("c".repeat(16), "gamma"); // live but NO bindings
+    let menu: { name: string | null; count: number }[] = [];
+    await unbindCommand({
+      configRoot: root,
+      probe: live,
+      fetchBindingsFor: (e: ConfigDirEntry) =>
+        Promise.resolve(
+          e.name === "alpha"
+            ? [binding("cb_a", "c:\\ws\\alpha")]
+            : e.name === "beta"
+              ? [binding("cb_b1", "c:\\ws\\beta"), binding("cb_b2", "c:\\ws\\beta")]
+              : [],
+        ),
+      interactive: true,
+      pickNumber: (bearing) => {
+        menu = bearing.map((d) => ({ name: d.entry.name, count: d.bindings.length }));
+        return Promise.resolve(2); // pick beta (sorted alpha[1], beta[2])
+      },
+    });
+    // the menu had ONLY the binding-bearing daemons (alpha, beta) — NOT gamma:
+    expect(menu.map((m) => m.name)).toEqual(["alpha", "beta"]);
+    expect(menu).toContainEqual({ name: "beta", count: 2 }); // count surfaced
+    expect(captured()).toContain("cb_b1"); // beta's bindings listed after the pick
+  });
+
+  it("AC-C5-5: SEVERAL binding-bearing daemons + non-interactive → AmbiguousBindingDaemonError (error-and-list, no hang)", async () => {
+    await makeDir("a".repeat(16), "alpha");
+    await makeDir("b".repeat(16), "beta");
+    await makeDir("c".repeat(16), "gamma"); // no bindings
+    const fetchFor = (e: ConfigDirEntry) =>
+      Promise.resolve(
+        e.name === "gamma" ? [] : [binding("cb_x", `c:\\ws\\${e.name ?? "x"}`)],
+      );
+    let thrown: unknown;
+    try {
+      await unbindCommand({
+        configRoot: root,
+        probe: live,
+        fetchBindingsFor: fetchFor,
+        interactive: false,
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(AmbiguousBindingDaemonError);
+    // the error message RENDERS only the binding-bearing daemons + counts, not gamma:
+    const msg = (thrown as Error).message;
+    expect(msg).toContain("alpha");
+    expect(msg).toContain("beta");
+    expect(msg).not.toContain("gamma");
+    expect(msg).toMatch(/1 binding/);
   });
 });

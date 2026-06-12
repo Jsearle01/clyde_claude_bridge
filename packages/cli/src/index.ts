@@ -28,6 +28,7 @@ import {
   UnbindTargetAndAllError,
   UnbindConnectionLostError,
   UnbindTimeoutError,
+  AmbiguousBindingDaemonError,
 } from "./commands/unbind.js";
 import {
   tunnelRestartCommand,
@@ -93,7 +94,8 @@ function reportErrorBody(err: unknown): void {
     err instanceof TunnelRestartFailedError ||
     err instanceof UnbindTargetAndAllError ||
     err instanceof UnbindConnectionLostError ||
-    err instanceof UnbindTimeoutError
+    err instanceof UnbindTimeoutError ||
+    err instanceof AmbiguousBindingDaemonError
   ) {
     process.stderr.write(`${err.message}\n`);
     return;

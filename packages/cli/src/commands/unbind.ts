@@ -13,6 +13,7 @@
 // mis-picked number revokes the wrong binding — mirrors delete-dir). The binding
 // data comes from the existing `status` IPC (oauth_bindings) — no daemon change.
 
+import { createInterface } from "node:readline";
 import type { OAuthBindingSummary } from "@claude-bridge/shared";
 import {
   sendIpc,
@@ -22,7 +23,13 @@ import {
 import {
   selectDaemonTarget,
   DaemonNotRunningError,
+  InvalidDaemonPickError,
 } from "../util/selector.js";
+import {
+  enumerateConfigDirs,
+  type ConfigDirEntry,
+} from "../util/config-dirs.js";
+import { ipcAddressForHash } from "../util/paths.js";
 import { checkStalePid } from "../util/pidfile.js";
 
 const UNBIND_TIMEOUT_MS = 10000;
@@ -31,6 +38,20 @@ export class UnbindTargetAndAllError extends Error {
   constructor() {
     super("unbind: pass either a target or --all, not both.");
     this.name = "UnbindTargetAndAllError";
+  }
+}
+
+// T-CLI-5: bare unbind, non-interactive, with several daemons carrying bindings —
+// error-and-list (no menu to read on a piped/CI stdin). Mirrors the selector's
+// AmbiguousDaemonError, but scoped to daemons that actually HAVE bindings.
+export class AmbiguousBindingDaemonError extends Error {
+  constructor(public readonly bearing: readonly DaemonBindings[]) {
+    super(
+      `${bearing.length} daemons have active bindings — name one with ` +
+        `--name <name> (or --workspace <path>):\n` +
+        renderBindingBearingDaemons(bearing, false),
+    );
+    this.name = "AmbiguousBindingDaemonError";
   }
 }
 
@@ -66,6 +87,18 @@ export interface UnbindOpts {
   /** Test-only overrides. */
   addressOverride?: string;
   pidPath?: string;
+  // T-CLI-5: the binding-presence-driven fan-out (bare invocation). Test-only
+  // injections; production uses the real enumeration + status IPC.
+  probe?: (entry: { hash: string; configDir: string }) => Promise<boolean>;
+  fetchBindingsFor?: (entry: ConfigDirEntry) => Promise<OAuthBindingSummary[]>;
+  interactive?: boolean;
+  pickNumber?: (bearing: readonly DaemonBindings[]) => Promise<number>;
+}
+
+// T-CLI-5: a live daemon paired with its active bindings (the fan-out unit).
+export interface DaemonBindings {
+  entry: ConfigDirEntry;
+  bindings: OAuthBindingSummary[];
 }
 
 /** The user-facing block. Empty `unbound` → a clear "no match" line so the
@@ -127,6 +160,21 @@ export async function unbindCommand(opts: UnbindOpts = {}): Promise<void> {
   // Arg validation BEFORE any IPC — a target AND --all is ambiguous.
   if (all && target !== undefined) {
     throw new UnbindTargetAndAllError();
+  }
+
+  const bare = !all && (target === undefined || target === "");
+  const explicitDaemon =
+    (opts.name !== undefined && opts.name !== "") ||
+    (opts.workspace !== undefined && opts.workspace !== "") ||
+    opts.addressOverride !== undefined ||
+    opts.pidPath !== undefined;
+
+  // T-CLI-5: a truly-bare `unbind` (no target, no --all, no explicit daemon) →
+  // binding-presence-driven fan-out: present by WHERE bindings are, not by how
+  // many daemons exist (fixes "pick a daemon → it's empty"). An explicit daemon
+  // (--name/--workspace/override) skips the fan-out and lists that daemon below.
+  if (bare && !explicitDaemon) {
+    return bareUnbindFanout(opts);
   }
 
   // T-CLI-1/4b: resolve WHICH daemon via the unified selector (picking the daemon
@@ -191,4 +239,90 @@ async function fetchBindings(
     throw new Error(`Unexpected IPC response kind: ${response.kind}`);
   }
   return response.payload.oauth_bindings ?? [];
+}
+
+// T-CLI-5: the binding-presence-driven bare flow. Fan the binding query out
+// across all live daemons UP FRONT (reusing the status IPC — no daemon change),
+// then present by WHERE bindings are rather than by how many daemons exist.
+async function bareUnbindFanout(opts: UnbindOpts): Promise<void> {
+  const all = await enumerateConfigDirs({
+    configRoot: opts.configRoot,
+    probe: opts.probe,
+  });
+  const live = all.filter((e) => e.live);
+  const fetchFor =
+    opts.fetchBindingsFor ??
+    ((e: ConfigDirEntry) => fetchBindings(ipcAddressForHash(e.hash, e.configDir)));
+
+  const bearing: DaemonBindings[] = [];
+  for (const e of live) {
+    let bindings: OAuthBindingSummary[] = [];
+    try {
+      bindings = await fetchFor(e);
+    } catch {
+      // A daemon that went unreachable mid-scan contributes no bindings.
+    }
+    if (bindings.length > 0) bearing.push({ entry: e, bindings });
+  }
+
+  // 0 bindings anywhere → say so, NO menu (the operator's reported bug fixed).
+  if (bearing.length === 0) {
+    process.stdout.write("No active bindings on any daemon.\n");
+    return;
+  }
+  // Exactly ONE daemon has bindings → skip the daemon-pick, list it directly.
+  if (bearing.length === 1) {
+    const only = bearing[0];
+    if (only !== undefined) process.stdout.write(formatBindingList(only.bindings));
+    return;
+  }
+  // SEVERAL daemons have bindings → pick among ONLY those (numbered pick is
+  // non-destructive); non-interactive → error-and-list (no menu to read).
+  const interactive = opts.interactive ?? Boolean(process.stdin.isTTY);
+  if (!interactive) {
+    throw new AmbiguousBindingDaemonError(bearing);
+  }
+  const pick = opts.pickNumber ?? defaultDaemonPick;
+  const choice = await pick(bearing);
+  const chosen = bearing[choice - 1];
+  if (chosen === undefined) {
+    throw new InvalidDaemonPickError(String(choice), bearing.length);
+  }
+  process.stdout.write(formatBindingList(chosen.bindings));
+}
+
+// T-CLI-5: render the binding-bearing daemons (name/workspace + binding COUNT).
+// `numbered` for the interactive pick; un-numbered for the non-TTY error list.
+function renderBindingBearingDaemons(
+  bearing: readonly DaemonBindings[],
+  numbered: boolean,
+): string {
+  const lines: string[] = [];
+  bearing.forEach((d, i) => {
+    const prefix = numbered ? `  [${i + 1}] ` : "  - ";
+    const name = d.entry.name ?? d.entry.hash;
+    const ws = d.entry.workspace ?? "(unknown workspace)";
+    const n = d.bindings.length;
+    lines.push(`${prefix}${name}  (${ws})  — ${n} binding${n === 1 ? "" : "s"}`);
+  });
+  return lines.join("\n") + "\n";
+}
+
+async function defaultDaemonPick(
+  bearing: readonly DaemonBindings[],
+): Promise<number> {
+  process.stdout.write(
+    `${bearing.length} daemons have active bindings — pick which to unbind from:\n`,
+  );
+  process.stdout.write(renderBindingBearingDaemons(bearing, true));
+  process.stdout.write(`Pick a number (1-${bearing.length}): `);
+  const rl = createInterface({ input: process.stdin });
+  try {
+    const line = await new Promise<string>((resolve) => {
+      rl.once("line", (l) => resolve(l));
+    });
+    return Number.parseInt(line.trim(), 10);
+  } finally {
+    rl.close();
+  }
 }
