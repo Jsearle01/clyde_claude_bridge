@@ -12,6 +12,9 @@ coverage/
 # OS
 .DS_Store
 
+# Editor / IDE (local settings — not shared)
+.vscode/
+
 # Runtime data (if anyone runs the daemon from the repo root)
 .claude-bridge/
 

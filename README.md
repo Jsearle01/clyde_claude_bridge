@@ -4,7 +4,7 @@
 
 claude-bridge connects a Claude.ai project chat to a local VS Code workspace. Each workspace runs its own **daemon** — an MCP server exposed over a Cloudflare tunnel, authenticated by a per-workspace OAuth binding — and a **VS Code extension** discovers, launches, and monitors it. From the project chat, Claude.ai delegates work to a headless Claude Code SDK sub-agent running against the bound workspace; delegations enqueue, run to completion (or cancel), and return a structured report (diff, files-changed, transcript URI, shell-command record).
 
-The architecture is **daemon-per-workspace** (ADR-001): one workspace = one daemon = one tunnel URL = one named connector in Claude.ai. Isolation is **physical** (separate processes), not logical.
+The architecture is **daemon-per-workspace** ([ADR-001](docs/design/ADR-001-connector-workspace-topology.md)): one workspace = one daemon = one tunnel URL = one named connector in Claude.ai. Isolation is **physical** (separate processes), not logical.
 
 ## What it is
 
@@ -133,7 +133,7 @@ Claude.ai project chat
 
 ## Design authority
 
-- [`docs/design/05-autonomous-collaboration-model.md`](docs/design/05-autonomous-collaboration-model.md) — **the current design authority**: the binding/isolation model (§3), per-operation granularity + the tighten-only clamp (§4), the autonomy floor and gate boundary (§5–6), and §9 reconciliation (what has shipped). The architectural decisions **ADR-001** (daemon-per-workspace) and **ADR-002** (stable-tunnel opt-in) are referenced throughout the design docs; daemon-per-workspace is implemented per the P3′ build sequence.
+- [`docs/design/05-autonomous-collaboration-model.md`](docs/design/05-autonomous-collaboration-model.md) — **the current design authority**: the binding/isolation model (§3), per-operation granularity + the tighten-only clamp (§4), the autonomy floor and gate boundary (§5–6), and §9 reconciliation (what has shipped). The architectural decisions **[ADR-001](docs/design/ADR-001-connector-workspace-topology.md)** (daemon-per-workspace) and **[ADR-002](docs/design/ADR-002-stable-tunnel-operator-optin.md)** (stable-tunnel opt-in) are the topology + tunnel decisions; daemon-per-workspace is implemented per the [P3′ build sequence](docs/design/P3PRIME-BUILD-SEQUENCE.md).
 - [`docs/design/04-p3-oauth.md`](docs/design/04-p3-oauth.md) — OAuth mechanics (DCR, consent, bound-token lookup); topology + Bearer-coexistence portions are superseded (stamped).
 - [`docs/design/00-overview.md`](docs/design/00-overview.md) – [`03-p2-extension.md`](docs/design/03-p2-extension.md) — phase build records (historically stamped; one-daemon-many-workspaces + static-Bearer portions superseded).
 
@@ -155,6 +155,9 @@ npm run lint         # eslint (flat config, recommendedTypeChecked)
 - [`docs/runbook.md`](docs/runbook.md) — operator reference: prerequisites, installation, configuration, lifecycle, operating delegations, troubleshooting (WSL pre-flight, undici warning, cloudflared per OS, Node engine matrix), AC verification, uninstallation
 - [`docs/walkthrough.md`](docs/walkthrough.md) — contributor narrative: steady-state UX, the delegation surface (job lifecycle, MCP tools, snapshot/diff, transcripts, report assembly), SDK integration with the read-only `disallowedTools` rationale, acceptance harnesses, cross-platform discipline
 - [`docs/design/05-autonomous-collaboration-model.md`](docs/design/05-autonomous-collaboration-model.md) — the current design authority (binding, granularity clamp, autonomy floor, shipped-reconciliation §9)
+- [`docs/design/ADR-001-connector-workspace-topology.md`](docs/design/ADR-001-connector-workspace-topology.md) — the daemon-per-workspace topology decision
+- [`docs/design/ADR-002-stable-tunnel-operator-optin.md`](docs/design/ADR-002-stable-tunnel-operator-optin.md) — the stable-tunnel operator opt-in decision
+- [`docs/design/07-forward-board.md`](docs/design/07-forward-board.md) — the forward board: master index of remaining work
 - [`docs/design/00-overview.md`](docs/design/00-overview.md) — architecture overview (historically stamped)
 - [`docs/design/02-p1-delegation.md`](docs/design/02-p1-delegation.md) — the delegation surface: tool schemas, modes, snapshot/diff, transcripts
 - [`docs/conventions.md`](docs/conventions.md) — TypeScript / ESM / cross-cutting concerns
