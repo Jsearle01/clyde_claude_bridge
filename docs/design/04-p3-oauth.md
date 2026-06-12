@@ -1,3 +1,5 @@
+> **⚠ SUPERSEDED (2026-06-10) — read with care.** This document predates **ADR-001** (daemon-per-workspace, physical isolation) and **T-BEARER-1** (the unconstrained Bearer auth path was removed — OAuth-bound is now the ONLY auth model). Where it describes (a) one daemon serving many bound workspaces, or (b) the static Bearer / `token rotate` / unconstrained auth as live, it is WRONG. Current model: `05-autonomous-collaboration-model.md` §3/§4/§9 + ADR-001/002. The OAuth *mechanics* (DCR, consent, bound-token lookup) here remain broadly accurate for the per-daemon case; the *topology* and *Bearer coexistence* do not.
+
 # Design — P3 OAuth (scope-lock)
 
 **Date:** 2026-05-31

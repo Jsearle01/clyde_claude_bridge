@@ -1,3 +1,5 @@
+> **⚠ HISTORICAL / partially SUPERSEDED.** This is a build record from its phase. Two things it describes are no longer current: **(1)** the **one-daemon-many-workspaces** model → superseded by **ADR-001** (daemon-per-workspace, physical isolation); **(2)** the **static Bearer auth** (`cb_live_`, `Authorization: Bearer`, `token rotate`, "two-layer coexistence") → REMOVED by **T-BEARER-1**; OAuth-bound is the only auth model. The phase work shipped as recorded; for the *current* model see `05-autonomous-collaboration-model.md` + ADR-001/002. Where this and those conflict, those win.
+
 # claude-bridge — Architecture Overview
 
 **Status:** Active
@@ -28,7 +30,7 @@ claude-bridge is an MCP bridge that connects MCP-client agents (project-Claude, 
   workspace: foo       workspace: bar       workspace: baz
 ```
 
-The **bridge daemon** is the system's center of gravity. It owns the MCP endpoint, the tunnel, the bearer token, the job queue, transcripts, and the audit log. It runs independently of any VS Code window.
+The **bridge daemon** is the system's center of gravity. It owns the MCP endpoint, the tunnel, the OAuth auth layer (per-workspace bound tokens), the job queue, transcripts, and the audit log. It runs independently of any VS Code window.
 
 **VS Code extensions** register as workspace providers by dialing out to the daemon over local WebSocket. Each extension instance corresponds to one workspace. Extensions are responsible for:
 
@@ -121,12 +123,11 @@ The **bridge daemon** is the system's center of gravity. It owns the MCP endpoin
 
 ### CLI surface (v1)
 ```
-claude-bridge start              # launch daemon + tunnel, print URL + token
+claude-bridge start              # launch daemon + tunnel, print URL
 claude-bridge stop
 claude-bridge status             # daemon, tunnel, workspaces, recent jobs
 claude-bridge list-workspaces
 claude-bridge tail-log [-f]
-claude-bridge token rotate
 claude-bridge tunnel restart
 ```
 

@@ -1,3 +1,5 @@
+> **⚠ SUPERSEDED — see `05-autonomous-collaboration-model.md` §9.** This plan predates ADR-001 and was written under the two-bindings-in-one-daemon test model (invalidated by physical isolation), and under the static-Bearer auth (removed by T-BEARER-1). It lists T-P3-006/007/008 as complete; in reality their per-transaction SPINE shipped but the autonomous-LOOP portions are ABSENT (restructure-reissue loop, N=3 retry, loop-event logging, general escape gate, `session_bypass` collapse). `05` §9 is the corrected build-plan map (spine-built / loop-absent). Use it, not this.
+
 # claude-bridge — P3′ (P3-prime) Build Plan: Bound Autonomous Collaboration
 
 **Status:** Active plan. Re-planning of P3 (OAuth) against the autonomous-collaboration model (`05-autonomous-collaboration-model.md`, agreed 2026-06-01). Supersedes the remaining-task portion of the original `p3-build-plan.md` (T-P3-003 onward); T-P3-001 and T-P3-002 already shipped (and T-P3-002 is revised here).

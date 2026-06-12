@@ -43,7 +43,7 @@ Each claude.ai instance is **bound** to exactly one workspace (Model 2 — struc
   - **per_call** — approve each gated step (watching closely).
   - **task** — approve once; the operation runs to completion (hands-off for this task). (Maps to the existing session-bypass mechanic, recon #4 item 2.)
   - **auto** — runs within bounds without prompting (most hands-off).
-- A **binding default** granularity exists; each operation may **override** it at launch. (Set-at-handoff, per-operation.)
+- **A binding default granularity exists; an operation may only TIGHTEN it, never loosen it (the clamp).** Stored on the **per-daemon** grant/token record (the same record carrying `bound_workspace`). The binding default is the operator-set *ceiling*; an operation may request a MORE cautious granularity (finer — e.g. per_call when the default is task), and `moreCautiousGranularity` takes the stricter of the two. It can never request a coarser/looser granularity than the ceiling — the gated party cannot widen its own gate. One binding per daemon means the resolved granularity is unambiguously this operation's, for this workspace.
 - **Fire-and-run:** once launched at a chosen granularity, the operation runs to completion at that granularity. To run finer, the operator launches the *next* operation finer (or cancels the current run — the existing AbortController, recon #4 item 4). The operator does **not** tighten a running operation.
 - Granularity is stored on the same per-binding grant/token record as the workspace binding (recon #4 items 5-6 — both absent today, both co-locate on the not-yet-built token). The approval gate, currently workspace-keyed (`gate.ts`), is **re-keyed to the token/binding** so it consults the operation's granularity.
 
@@ -164,6 +164,22 @@ The model reshapes the remaining P3 tasks. (Re-planning is a follow-up; this sec
 - **New work — gate categories:** wire the §6 always-gate categories (sandbox-escape detection, irreversible-op detection, the recursive auth-system floor) and the retry-limit counter.
 - **New work — end-of-automation report (§5.4):** the daemon-captured **mechanical interaction log** (every dispatch/result/abort/restructure/gate-event/capture/push in an autonomous operation) and the orchestrator-synthesized **narrative** delivered at operation end. The log is mechanical (daemon); the narrative + rigorous near-gate disclosure are methodology/prompt-enforced.
 - **Methodology (not code):** the pre-flight-review, abort-and-report, resolution-loop-boundary, and voluntary-escalation disciplines (§5, §6.4) are codified in how dispatches/orchestration are instructed — they belong in the methodology / orchestrator-and-executor prompting, layered on the mechanical model.
+
+### 9.1 Reconciliation — what has shipped since this design (2026-06)
+
+*(Added by the doc-hygiene pass. The §9 above is the re-plan map as written 2026-06-01; this subsection records what has since SHIPPED against it, so the design doc no longer reads as if the spine is unbuilt.)*
+
+**Auth model — OAuth-bound is now the ONLY path (T-BEARER-1, `839846e`):**
+- The unconstrained static Bearer (`{kind:"unconstrained"}`) is REMOVED. `authenticate()` accepts only OAuth bound tokens → `{kind:"bound", workspace}`; a non-bound credential is rejected (`invalid_token`).
+- This CLOSES the two isolation bypasses the Bearer carried: `extension-router` workspace-targeting enforcement and the `gate` operator clamp now apply to EVERY connection — no unconstrained exception. The §3 isolation model and the §4 clamp are now universal, not "primary path + a bypass."
+- `token rotate` is removed; the `Token:`/`Bearer:` surface is gone from `start`/`status`. `config.auth.token` is retained inert in the strict, un-migratable config schema (see the config-migration future-work item).
+- Any "manual/non-OAuth MCP client via Bearer" workflow text (README, `00-overview`) is SUPERSEDED — the daemon is reachable only via the OAuth binding flow.
+
+**CLI — now FULLY converted to per-daemon (T-CLI 1→4):** a complete display/enumeration surface: unified `selectDaemonTarget` (`--name`/`--workspace`/asymmetric default + numbered pick for non-destructive verbs); `list` + `directories` (daemon-layer sight); `delete-dir` (typed-name prune, live-target confirm, graceful-stop-then-delete, floor-deny, `--hash` for orphans); `unbind` binding-list (binding-layer sight, typed-target revoke); all through one shared surface-tested renderer.
+
+**Tunnel lifecycle (T-TUNNEL-1, `ae06c2b` + `f77a279`) — BUILT.** The daemon owns exactly one cloudflared for its life (kill-before-respawn, launch-hidden, reclaim-orphan-on-startup — the fix for the reopening-window repro). A dropped tunnel's rotated URL is an operator-confirmed adoption, never a silent strand (drop → respawn → IPC modal → confirm-adopts/deny-tears-down; no-extension fallback holds pending + re-fires on connect). The never-silent-adopt guarantee is structural (`url_pending` not `url_change`).
+
+**Operator cycle dashboard (`06`) — design done, build pending, CONSTRAINS the loop layer.** The loop's operator-facing companion: a separate aggregator app (NOT a VS Code panel — daemon-per-workspace topology means one panel can't collate cross-project; `06` §"separate app"), discovering all daemons via the advert system, per-cycle-spool→ingest acquisition, app-owned persistent store (outlives the daemon). It CONSTRAINS the loop's logging: the loop must emit conversation-keyed, cycle-paired records (daemon-owned conversation-id via continue-or-new + held-state; both-ends daemon timestamps) designed for dashboard consumption from the start (`06` §8). Downstream of / co-designed with the loop.
 
 ---
 

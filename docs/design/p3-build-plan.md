@@ -1,3 +1,5 @@
+> **⚠ SUPERSEDED — see `05-autonomous-collaboration-model.md` §9.** This plan predates ADR-001 and was written under the two-bindings-in-one-daemon test model (invalidated by physical isolation), and under the static-Bearer auth (removed by T-BEARER-1). It lists T-P3-006/007/008 as complete; in reality their per-transaction SPINE shipped but the autonomous-LOOP portions are ABSENT (restructure-reissue loop, N=3 retry, loop-event logging, general escape gate, `session_bypass` collapse). `05` §9 is the corrected build-plan map (spine-built / loop-absent). Use it, not this. *(Its remaining-task portion — T-P3-003 onward — was already superseded by `p3-prime-build-plan.md`.)*
+
 # P3 Build Plan
 
 **Phase:** P3 (OAuth resolution)

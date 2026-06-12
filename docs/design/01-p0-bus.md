@@ -1,3 +1,5 @@
+> **⚠ HISTORICAL / partially SUPERSEDED.** This is a build record from its phase. Two things it describes are no longer current: **(1)** the **one-daemon-many-workspaces** model → superseded by **ADR-001** (daemon-per-workspace, physical isolation); **(2)** the **static Bearer auth** (`cb_live_`, `Authorization: Bearer`, `token rotate`, "two-layer coexistence") → REMOVED by **T-BEARER-1**; OAuth-bound is the only auth model. The phase work shipped as recorded; for the *current* model see `05-autonomous-collaboration-model.md` + ADR-001/002. Where this and those conflict, those win.
+
 # P0 — Bus Validation
 
 **Status:** Design
